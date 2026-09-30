@@ -1,0 +1,16 @@
+.gradle/
+.gradle-user-home/
+.kotlin/
+**/build/
+local.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+keystore.properties
+*keystore*.properties
+*signing*.properties
+.idea/
+*.iml
+__pycache__/
+.test-tmp/

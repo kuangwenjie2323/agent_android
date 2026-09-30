@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.AgentWeb" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:colorAccent">#4e613c</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#f6f5f0</item>
+    </style>
+</resources>

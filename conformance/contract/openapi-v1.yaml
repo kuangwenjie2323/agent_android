@@ -1,0 +1,3011 @@
+openapi: 3.1.0
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+info:
+  title: AgentWeb Client API Contract
+  version: "1.0"
+  description: >-
+    Machine-readable AgentWeb client contract. Protocol 1.0 is the bounded
+    headerless legacy profile and the only server-supported version in this
+    revision. Unknown additive response fields remain forward-compatible.
+servers:
+  - url: /
+    description: The client-injected AgentWeb origin
+security:
+  - bearerAuth: []
+tags:
+  - name: Bootstrap
+  - name: Auth
+  - name: Catalog
+  - name: Projects
+  - name: Conversations
+  - name: Turns
+  - name: Files
+x-agentweb-contract-version: "1.0"
+x-agentweb-protocol:
+  min: "1.0"
+  max: "1.0"
+x-agentweb-server-protocol:
+  min: "1.0"
+  max: "1.0"
+x-agentweb-server-capabilities:
+  - attachments.v1
+x-agentweb-sse-schema: sse-events-v1.schema.json
+x-agentweb-observations-schema: observations-v1.schema.json
+x-agentweb-request-body-limits:
+  login: 16384
+  ordinaryJson: 65536
+  conversationFork: 524288
+  message: 50331648
+x-agentweb-negotiation:
+  requestHeaders:
+    min: AgentWeb-Protocol-Min
+    max: AgentWeb-Protocol-Max
+    client: AgentWeb-Client
+  selectedResponseHeader: X-AgentWeb-Protocol-Version
+  headerlessLegacyRange:
+    min: "1.0"
+    max: "1.0"
+  missingOneSideIsInvalid: true
+  reversedRangeIsInvalid: true
+  highestMutuallySupportedMinor: true
+  authBeforeProtocolGate: true
+  mutationBeforeProtocolGateProhibited: true
+  notes: >-
+    Login and meta are the stable bootstrap surface. Every other protected
+    endpoint authenticates before parsing or applying protocol-range headers.
+    Unsupported ranges are rejected before endpoint validation, persistence,
+    process launch, object storage, SSE headers, or any other side effect.
+
+paths:
+  /api/meta:
+    get:
+      operationId: getMeta
+      tags: [Bootstrap]
+      summary: Discover the bounded contract, protocol range, and capabilities
+      security: []
+      x-agentweb-bootstrap-legacy-fallback: >-
+        A pre-P0 auth-on server may answer 401 before routing; login and retry.
+        An authenticated 404, or an auth-off direct 404, selects legacy 1.0
+        with no optional capabilities.
+      responses:
+        "200":
+          description: Current protocol manifest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetaResponse"
+        "401":
+          description: Pre-P0 auth-on routing fallback; login and retry before selecting legacy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnauthorizedResponse"
+        "404":
+          description: >-
+            Pre-P0 endpoint absence. Authenticated 404, or auth-off direct 404,
+            selects bounded legacy 1.0 with no optional capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/health:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    get:
+      operationId: getHealth
+      tags: [Bootstrap]
+      summary: Minimal unauthenticated liveness and SQLite readiness probe
+      security: []
+      responses:
+        "200":
+          description: Ready
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "503":
+          description: Not ready
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /api/auth/login:
+    post:
+      operationId: login
+      tags: [Auth]
+      summary: Exchange local credentials for a seven-day bearer token
+      security: []
+      x-agentweb-max-request-bytes: 16384
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated, or auth is disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          $ref: "#/components/responses/PlainBadRequest"
+        "401":
+          description: Invalid credentials; clients keep this error inline
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          $ref: "#/components/responses/PlainTooLarge"
+        "429":
+          description: Per-IP login limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/agents:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    get:
+      operationId: listAgents
+      tags: [Catalog]
+      summary: List provider routes and client-visible model capabilities
+      responses:
+        "200":
+          description: Agent catalog
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentsResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+
+  /api/usage:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    get:
+      operationId: getUsage
+      tags: [Catalog]
+      summary: Return aggregate token and cost totals
+      responses:
+        "200":
+          description: Usage totals
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+
+  /api/integrations:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    get:
+      operationId: getIntegrations
+      tags: [Catalog]
+      summary: Read bounded provider/plugin presence facts
+      responses:
+        "200":
+          description: Path-free, credential-free integration facts
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntegrationsResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+
+  /api/claude-sessions:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+      - name: cursor
+        in: query
+        schema: {type: string, maxLength: 512}
+        description: Opaque cursor from the previous page; omit for the newest page.
+      - name: project
+        in: query
+        schema: {type: string}
+        description: Exact original cwd to filter by project.
+    get:
+      operationId: listClaudeSessions
+      tags: [Conversations]
+      summary: Owner-only local Claude Code discovery, newest first, 40 per page
+      description: Cached JSONL metadata. Managed sessions link to their existing conversation and never become duplicate external imports.
+      responses:
+        "200":
+          description: Bounded session page
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeSessionsResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NegotiatedError"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "503":
+          $ref: "#/components/responses/NegotiatedServiceUnavailable"
+  /api/claude-sessions/{sessionId}:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+      - name: sessionId
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+      - name: cursor
+        in: query
+        schema: {type: string, maxLength: 512}
+        description: Opaque cursor from the previous page; omit for the newest page.
+    get:
+      operationId: getClaudeSession
+      tags: [Conversations]
+      summary: Owner-only read-only local history, newest 40 messages in chronological order
+      responses:
+        "200":
+          description: Bounded projected history
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeSessionHistory"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NegotiatedError"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "503":
+          $ref: "#/components/responses/NegotiatedServiceUnavailable"
+  /api/claude-sessions/{sessionId}/adopt:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+      - name: sessionId
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    post:
+      operationId: adoptClaudeSession
+      tags: [Conversations]
+      summary: Idempotently bind an idle local Claude session to the authenticated owner
+      description: No model call. A new mapping is refused while maybe_active, outside allowed roots, or when history is incomplete. Exact existing mappings return without mutation. Subsequent normal chat turns resume in the original cwd.
+      x-agentweb-mutation-after-protocol-gate: true
+      responses:
+        "200":
+          description: Existing owner-bound mapping
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeAdoptResponse"
+        "201":
+          description: New owner-bound mapping
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeAdoptResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NegotiatedError"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "503":
+          $ref: "#/components/responses/NegotiatedServiceUnavailable"
+
+  /api/codex/threads:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    get:
+      operationId: listCodexThreads
+      tags: [Catalog]
+      summary: List importable native Codex threads under configured roots
+      responses:
+        "200":
+          description: Importable Codex threads
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexThreadsResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "503":
+          $ref: "#/components/responses/NegotiatedServiceUnavailable"
+
+  /api/codex/import:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    post:
+      operationId: importCodexThread
+      tags: [Conversations]
+      summary: Idempotently map and project one allowed Codex thread
+      x-agentweb-max-request-bytes: 65536
+      x-agentweb-mutation-after-protocol-gate: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CodexImportRequest"
+      responses:
+        "200":
+          description: Existing mapping
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexImportResponse"
+        "201":
+          description: New mapping
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexImportResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NegotiatedError"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "413":
+          $ref: "#/components/responses/NegotiatedTooLarge"
+        "500":
+          $ref: "#/components/responses/NegotiatedError"
+        "503":
+          $ref: "#/components/responses/NegotiatedServiceUnavailable"
+
+  /api/codex/adopt:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    post:
+      operationId: adoptCodexDesktopTurn
+      tags: [Turns]
+      summary: Idempotently adopt one allowed active Codex Desktop turn
+      x-agentweb-max-request-bytes: 65536
+      x-agentweb-mutation-after-protocol-gate: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CodexAdoptRequest"
+      responses:
+        "200":
+          description: Existing exact adoption
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAdoptResponse"
+        "201":
+          description: Newly adopted native run
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAdoptResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NegotiatedError"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "413":
+          $ref: "#/components/responses/NegotiatedTooLarge"
+        "500":
+          $ref: "#/components/responses/NegotiatedError"
+        "503":
+          $ref: "#/components/responses/NegotiatedServiceUnavailable"
+
+  /api/codex/steer:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    post:
+      operationId: steerCodexDesktopTurn
+      tags: [Turns]
+      summary: Deliver one receipt-backed text direction to an adopted turn
+      x-agentweb-max-request-bytes: 65536
+      x-agentweb-mutation-after-protocol-gate: true
+      x-agentweb-ambiguous-outcome:
+        automaticRetry: prohibited
+        receiptState: unknown
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NativeSteerRequest"
+      responses:
+        "202":
+          description: Durable dispatch receipt, including pending or ambiguous delivery truth
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NativeSteerResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NegotiatedError"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NativeSteerConflict"
+        "413":
+          $ref: "#/components/responses/NegotiatedTooLarge"
+        "500":
+          $ref: "#/components/responses/NegotiatedError"
+        "503":
+          $ref: "#/components/responses/NegotiatedServiceUnavailable"
+
+  /api/codex/stop:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    post:
+      operationId: stopCodexDesktopTurn
+      tags: [Turns]
+      summary: Request one receipt-backed interruption of an adopted turn
+      x-agentweb-max-request-bytes: 65536
+      x-agentweb-mutation-after-protocol-gate: true
+      x-agentweb-ambiguous-outcome:
+        automaticRetry: prohibited
+        receiptState: unknown
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NativeStopRequest"
+      responses:
+        "202":
+          description: Durable stop receipt; terminal state follows app-server observation
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NativeStopResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NegotiatedError"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NativeStopConflict"
+        "413":
+          $ref: "#/components/responses/NegotiatedTooLarge"
+        "500":
+          $ref: "#/components/responses/NegotiatedError"
+        "503":
+          $ref: "#/components/responses/NegotiatedServiceUnavailable"
+
+  /api/codex/queue:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    post:
+      operationId: enqueueCodexDesktopTurn
+      tags: [Turns]
+      summary: Idempotently queue one text follow-up for the same Desktop task
+      description: >-
+        Persists an AgentWeb-owned FIFO item. It does not call the experimental
+        app-server thread/queue API. Only a later exact-head handoff may issue
+        one turn/start mutation for this item.
+      x-agentweb-max-request-bytes: 65536
+      x-agentweb-mutation-after-protocol-gate: true
+      x-agentweb-idempotency:
+        key: queueId
+        format: 32 lowercase hexadecimal characters
+        sameCanonicalBody: replay the durable receipt without another row
+        changedCanonicalBody: native_queue_idempotency_conflict
+        receiptSurvives: [start, cancellation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NativeQueueRequest"
+      responses:
+        "202":
+          description: New durable FIFO admission or exact receipt replay
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NativeQueueResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NegotiatedError"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NativeQueueConflict"
+        "413":
+          $ref: "#/components/responses/NegotiatedTooLarge"
+        "500":
+          $ref: "#/components/responses/NegotiatedError"
+
+  /api/codex/queue/{queueId}:
+    parameters:
+      - $ref: "#/components/parameters/NativeQueueId"
+      - $ref: "#/components/parameters/NativeQueueConversationId"
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    delete:
+      operationId: cancelCodexDesktopQueuedTurn
+      tags: [Turns]
+      summary: Cancel one owner-bound Native Queue item before handoff
+      x-agentweb-mutation-after-protocol-gate: true
+      responses:
+        "200":
+          description: Durable cancellation or exact cancellation replay
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NativeQueueResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NegotiatedError"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NativeQueueConflict"
+        "500":
+          $ref: "#/components/responses/NegotiatedError"
+
+  /api/codex/queue/resume:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    post:
+      operationId: resumeCodexDesktopQueue
+      tags: [Turns]
+      summary: Start or reconcile only the exact paused Native Queue head
+      description: >-
+        Performs an idle/exact-predecessor preflight and sends one turn/start
+        with the queueId as clientUserMessageId. Ambiguous delivery is never
+        retried; replay of the same startId performs read-only reconciliation.
+      x-agentweb-max-request-bytes: 65536
+      x-agentweb-mutation-after-protocol-gate: true
+      x-agentweb-exact-identity:
+        field: expectedHeadQueueId
+        format: 32 lowercase hexadecimal characters
+        mutationOnMismatch: prohibited
+      x-agentweb-ambiguous-outcome:
+        automaticRetry: prohibited
+        receiptState: unknown
+        reconcileBy: exact clientUserMessageId and exact text
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NativeQueueResumeRequest"
+      responses:
+        "202":
+          description: Durable accepted or unknown one-shot start receipt
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NativeQueueStartResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NegotiatedError"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NativeQueueConflict"
+        "413":
+          $ref: "#/components/responses/NegotiatedTooLarge"
+        "500":
+          $ref: "#/components/responses/NegotiatedError"
+        "503":
+          $ref: "#/components/responses/NegotiatedServiceUnavailable"
+
+  /api/chat/projects:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    get:
+      operationId: listProjects
+      tags: [Projects]
+      summary: List path-redacted registered repositories
+      responses:
+        "200":
+          description: Registered projects
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectsResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "500":
+          $ref: "#/components/responses/NegotiatedError"
+    post:
+      operationId: createProject
+      tags: [Projects]
+      summary: Register an allowlisted top-level Git repository
+      x-agentweb-max-request-bytes: 65536
+      x-agentweb-mutation-after-protocol-gate: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectCreateRequest"
+      responses:
+        "201":
+          description: Registered project
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectCreateResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "413":
+          $ref: "#/components/responses/NegotiatedTooLarge"
+        "500":
+          $ref: "#/components/responses/NegotiatedError"
+        "503":
+          $ref: "#/components/responses/NegotiatedServiceUnavailable"
+
+  /api/chat/conversations:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    get:
+      operationId: listConversations
+      tags: [Conversations]
+      summary: List ready conversations, pinned first
+      responses:
+        "200":
+          description: Conversation summaries
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationsResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+    post:
+      operationId: createConversation
+      tags: [Conversations]
+      summary: Immediately persist one blank conversation
+      x-agentweb-max-request-bytes: 65536
+      x-agentweb-mutation-after-protocol-gate: true
+      x-agentweb-non-idempotent-create:
+        singleFlight: true
+        automaticRetry: prohibited
+        rationale: A successful request immediately persists a distinct blank conversation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationCreateRequest"
+      responses:
+        "201":
+          description: Persisted conversation
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conversation"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "413":
+          $ref: "#/components/responses/NegotiatedTooLarge"
+        "500":
+          $ref: "#/components/responses/NegotiatedError"
+
+  /api/chat/conversations/{conversationId}:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    get:
+      operationId: getConversation
+      tags: [Conversations]
+      summary: Reconcile one conversation, its messages, queue, and context
+      parameters:
+        - $ref: "#/components/parameters/MessageLimit"
+        - $ref: "#/components/parameters/MessageCursor"
+      description: >-
+        Without messageLimit this returns the exact legacy full-messages
+        payload. With messageLimit it returns a bounded newest-first keyset
+        page of at most that many messages strictly below messageCursor,
+        reversed to chronological order, plus a messagePage envelope carrying
+        the exact older-row count, the next exclusive cursor, and the
+        compaction count read from the bounded context snapshot metadata.
+        Malformed pagination input is a bounded 400 with
+        code invalid_message_pagination.
+      responses:
+        "200":
+          description: Durable conversation truth
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationDetailResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+    patch:
+      operationId: updateConversation
+      tags: [Conversations]
+      summary: Rename and/or pin a conversation
+      x-agentweb-max-request-bytes: 65536
+      x-agentweb-mutation-after-protocol-gate: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationPatchRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/NegotiatedOk"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "413":
+          $ref: "#/components/responses/NegotiatedTooLarge"
+    delete:
+      operationId: deleteConversation
+      tags: [Conversations]
+      summary: Delete a safe conversation mapping and its owned resources
+      x-agentweb-mutation-after-protocol-gate: true
+      responses:
+        "200":
+          $ref: "#/components/responses/NegotiatedOk"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "500":
+          $ref: "#/components/responses/NegotiatedError"
+
+  /api/chat/conversations/{sourceConversationId}/forks:
+    parameters:
+      - $ref: "#/components/parameters/SourceConversationId"
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    post:
+      operationId: createConversationFork
+      tags: [Conversations]
+      summary: Create an immutable Edit or Retry path from a clean checkpoint
+      x-agentweb-max-request-bytes: 524288
+      x-agentweb-mutation-after-protocol-gate: true
+      x-agentweb-idempotency:
+        key: requestId
+        identity: sourceConversationId
+        sameCanonicalBody: returns the same child and run with existing true
+        changedCanonicalBody: fork_idempotency_conflict
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForkRequest"
+      responses:
+        "202":
+          description: Child path and exact initial run accepted
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForkResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "413":
+          $ref: "#/components/responses/NegotiatedTooLarge"
+        "422":
+          $ref: "#/components/responses/NegotiatedUnprocessable"
+        "500":
+          $ref: "#/components/responses/NegotiatedError"
+
+  /api/chat/conversations/{conversationId}/workspace-state:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    get:
+      operationId: getWorkspaceState
+      tags: [Conversations]
+      summary: Read a bounded path-free workspace status snapshot
+      responses:
+        "200":
+          description: Git, directory, or sanitized error state
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceState"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+
+  /api/chat/message:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    post:
+      operationId: sendMessage
+      tags: [Turns]
+      summary: Durably start a turn and follow its journal over SSE
+      x-agentweb-max-request-bytes: 50331648
+      x-agentweb-mutation-after-protocol-gate: true
+      x-agentweb-exact-identity:
+        field: controlId
+        format: 32 lowercase hexadecimal characters
+        automaticReplacementOnRetry: prohibited
+      x-agentweb-stream-boundary:
+        terminalEvent: done
+        transportEofIsTerminal: false
+        non2xxBeforeSseParser: true
+      x-agentweb-legacy-fields-prohibited:
+        fields: [truncateFrom, regenerate]
+        responseCode: use_fork_endpoint
+      x-agentweb-interrupt:
+        activeTurn: stop the exact active owner before admitting this turn
+        queuedTurns: preserve pending FIFO items behind this priority turn
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MessageRequest"
+      responses:
+        "200":
+          description: Journal replay plus live SSE; done is the only turn boundary
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+            X-Conversation-Id:
+              $ref: "#/components/headers/ConversationId"
+            X-Stream-Id:
+              $ref: "#/components/headers/StreamId"
+            X-Resume-Mode:
+              $ref: "#/components/headers/ResumeMode"
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              x-agentweb-event-schema:
+                $ref: "#/components/schemas/SseEventReference"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "413":
+          $ref: "#/components/responses/NegotiatedTooLarge"
+        "422":
+          $ref: "#/components/responses/NegotiatedUnprocessable"
+        "500":
+          $ref: "#/components/responses/NegotiatedError"
+        "503":
+          $ref: "#/components/responses/NegotiatedServiceUnavailable"
+
+  /api/chat/stream/{conversationId}:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+      - $ref: "#/components/parameters/LastEventId"
+    get:
+      operationId: attachConversationStream
+      tags: [Turns]
+      summary: Re-attach an independent follower to the durable journal
+      x-agentweb-stream-boundary:
+        terminalEvent: done
+        transportEofIsTerminal: false
+        malformedWrongRunOrFutureOffset: full replay
+        strictSuffixOnValidOffset: true
+      responses:
+        "200":
+          description: Suffix or full replay followed by live SSE
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+            X-Stream-Id:
+              $ref: "#/components/headers/StreamId"
+            X-Conversation-Id:
+              $ref: "#/components/headers/ConversationId"
+            X-Resume-Mode:
+              $ref: "#/components/headers/ResumeMode"
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              x-agentweb-event-schema:
+                $ref: "#/components/schemas/SseEventReference"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "503":
+          $ref: "#/components/responses/NegotiatedServiceUnavailable"
+
+  /api/chat/stop:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    post:
+      operationId: stopTurn
+      tags: [Turns]
+      summary: Stop or tombstone only the exact control owner
+      x-agentweb-max-request-bytes: 65536
+      x-agentweb-mutation-after-protocol-gate: true
+      x-agentweb-exact-identity:
+        field: expectedControlId
+        format: 32 lowercase hexadecimal characters
+        changedOwnerMutation: prohibited
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StopRequest"
+      responses:
+        "200":
+          description: Exact current owner accepted Stop
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StopAcceptedResponse"
+        "202":
+          description: Exact pre-claim Stop intent recorded
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StopPendingResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Protocol mismatch or no-mutation owner conflict
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          x-agentweb-selected-header-variants:
+            protocolRejection: absent
+            endpointConflictAfterNegotiation: required
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StopConflictResponse"
+                  - $ref: "#/components/schemas/ProtocolMajorMismatch"
+                  - $ref: "#/components/schemas/ProtocolVersionMismatch"
+        "413":
+          $ref: "#/components/responses/NegotiatedTooLarge"
+
+  /api/chat/queue:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    post:
+      operationId: enqueueTurn
+      tags: [Turns]
+      summary: Idempotently admit one durable FIFO follow-up with optional attachments
+      x-agentweb-max-request-bytes: 50331648
+      x-agentweb-mutation-after-protocol-gate: true
+      x-agentweb-idempotency:
+        key: queueId
+        format: 32 lowercase hexadecimal characters
+        sameCanonicalBody: replay immutable receipt without another row
+        changedCanonicalBody: queue_idempotency_conflict
+        receiptSurvives: [dequeue, cancellation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueueRequest"
+      responses:
+        "202":
+          description: New admission or exact immutable-receipt replay
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "413":
+          $ref: "#/components/responses/NegotiatedTooLarge"
+
+  /api/chat/queue/{queueItemId}:
+    parameters:
+      - $ref: "#/components/parameters/QueueItemId"
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    delete:
+      operationId: cancelQueuedTurn
+      tags: [Turns]
+      summary: Cancel a queued item before it starts
+      x-agentweb-mutation-after-protocol-gate: true
+      responses:
+        "200":
+          $ref: "#/components/responses/NegotiatedOk"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+
+  /api/chat/queue/resume:
+    parameters:
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    post:
+      operationId: resumeQueue
+      tags: [Turns]
+      summary: Atomically start only the exact paused FIFO head
+      x-agentweb-max-request-bytes: 65536
+      x-agentweb-mutation-after-protocol-gate: true
+      x-agentweb-exact-identity:
+        field: expectedHeadItemId
+        format: 32 lowercase hexadecimal characters
+        mutationOnMismatch: prohibited
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueueResumeRequest"
+      responses:
+        "202":
+          description: Exact head converted to a durable run
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueResumeResponse"
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "413":
+          $ref: "#/components/responses/NegotiatedTooLarge"
+        "500":
+          $ref: "#/components/responses/NegotiatedError"
+
+  /api/files/{key}:
+    parameters:
+      - $ref: "#/components/parameters/FileKey"
+      - $ref: "#/components/parameters/ProtocolMin"
+      - $ref: "#/components/parameters/ProtocolMax"
+      - $ref: "#/components/parameters/ClientIdentity"
+    get:
+      operationId: getFile
+      tags: [Files]
+      summary: Proxy one authenticated object by its opaque storage key
+      responses:
+        "200":
+          description: Object bytes
+          headers:
+            X-AgentWeb-Protocol-Version:
+              $ref: "#/components/headers/SelectedProtocolVersion"
+            Cache-Control:
+              schema:
+                type: string
+                const: private, max-age=31536000, immutable
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                contentEncoding: binary
+        "400":
+          $ref: "#/components/responses/NegotiatedBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NegotiatedNotFound"
+        "409":
+          $ref: "#/components/responses/NegotiatedConflict"
+        "502":
+          $ref: "#/components/responses/NegotiatedError"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: AgentWeb-HMAC
+
+  parameters:
+    ProtocolMin:
+      name: AgentWeb-Protocol-Min
+      in: header
+      required: false
+      description: >-
+        Inclusive client minimum. It must be sent together with
+        AgentWeb-Protocol-Max; omitting both selects legacy range [1.0,1.0].
+      schema:
+        $ref: "#/components/schemas/CanonicalProtocolVersion"
+    ProtocolMax:
+      name: AgentWeb-Protocol-Max
+      in: header
+      required: false
+      description: >-
+        Inclusive client maximum. It must be sent together with
+        AgentWeb-Protocol-Min and must not be below it.
+      schema:
+        $ref: "#/components/schemas/CanonicalProtocolVersion"
+    ClientIdentity:
+      name: AgentWeb-Client
+      in: header
+      required: false
+      description: Observability-only client family and semantic version.
+      schema:
+        type: string
+        pattern: "^(web|pc|android|ios)/(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:[-+][0-9A-Za-z.-]+)?$"
+    ConversationId:
+      name: conversationId
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/ConversationId"
+    SourceConversationId:
+      name: sourceConversationId
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/ConversationId"
+    QueueItemId:
+      name: queueItemId
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/ControlId"
+    NativeQueueId:
+      name: queueId
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/ControlId"
+    NativeQueueConversationId:
+      name: conversationId
+      in: query
+      required: true
+      description: Owner-bound conversation containing the Native Queue item.
+      schema:
+        $ref: "#/components/schemas/ConversationId"
+    FileKey:
+      name: key
+      in: path
+      required: true
+      description: Opaque object key; dot-dot segments are rejected.
+      x-agentweb-greedy-path: true
+      schema:
+        type: string
+        pattern: "^[A-Za-z0-9._/-]+$"
+        minLength: 1
+    LastEventId:
+      name: Last-Event-ID
+      in: header
+      required: false
+      description: >-
+        Composite replay cursor `<run_id>:<nonnegative-seq>`. Offset zero is a
+        valid request for the complete one-based event stream.
+      schema:
+        type: string
+        maxLength: 256
+    MessageLimit:
+      name: messageLimit
+      in: query
+      required: false
+      description: >-
+        Optional bounded page size. When present, the messages payload holds at
+        most this many rows and a messagePage envelope is returned; when absent
+        the exact legacy full payload is returned. Strict ASCII decimal only;
+        signs, blanks, whitespace, unicode digits, duplicates, and out-of-range
+        values are rejected with invalid_message_pagination. messageCursor
+        requires messageLimit.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+    MessageCursor:
+      name: messageCursor
+      in: query
+      required: false
+      description: >-
+        Optional exclusive upper bound for a bounded page: a strict ASCII
+        positive signed-64-bit decimal message id. Only messages with a lower
+        id in the same conversation are returned. Requires messageLimit;
+        duplicates, blanks, signs, whitespace, unicode digits, and overflow are
+        rejected with invalid_message_pagination.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 9223372036854775807
+
+  headers:
+    SelectedProtocolVersion:
+      description: >-
+        Highest mutually supported version, always 1.0 in this contract. It is
+        required after successful authentication and negotiation, including
+        endpoint-level errors; it is absent on auth or negotiation rejection.
+      x-agentweb-required-after-negotiation: true
+      schema:
+        type: string
+        const: "1.0"
+    ConversationId:
+      description: Conversation created or selected for the streamed turn.
+      schema:
+        $ref: "#/components/schemas/ConversationId"
+    StreamId:
+      description: Exact journal run/control owner for this SSE stream.
+      schema:
+        $ref: "#/components/schemas/ControlId"
+    ResumeMode:
+      description: >-
+        Present as `full` for an initial replay or a malformed, foreign-run, or
+        future replay cursor; a valid same-run cursor consumes only the strict
+        suffix and omits this header.
+      schema:
+        type: string
+        enum: [full]
+
+  responses:
+    Unauthorized:
+      description: Authentication failed before protocol routing
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/UnauthorizedResponse"
+    NotFoundBootstrap:
+      description: Pre-P0 endpoint absence; clients select bounded legacy 1.0 only after the documented auth flow
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    PlainBadRequest:
+      description: Invalid bootstrap request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    PlainTooLarge:
+      description: Bootstrap request body is too large
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NegotiatedOk:
+      description: Mutation completed
+      headers:
+        X-AgentWeb-Protocol-Version:
+          $ref: "#/components/headers/SelectedProtocolVersion"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OkResponse"
+    NegotiatedBadRequest:
+      description: >-
+        Invalid protocol range before negotiation, or invalid endpoint request
+        after negotiation. The standard header declaration makes the possible
+        response header visible to generated clients; the variant extension
+        requires it only after successful negotiation and forbids it on the
+        protocol-rejection branch.
+      headers:
+        X-AgentWeb-Protocol-Version:
+          $ref: "#/components/headers/SelectedProtocolVersion"
+      x-agentweb-selected-header-variants:
+        protocolRejection: absent
+        endpointErrorAfterNegotiation: required
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/InvalidProtocolRange"
+              - $ref: "#/components/schemas/InvalidMessagePagination"
+              - $ref: "#/components/schemas/EndpointErrorResponse"
+    NegotiatedConflict:
+      description: >-
+        Unsupported protocol range before mutation, or endpoint-level conflict
+        after negotiation. The standard header declaration makes the possible
+        response header visible to generated clients; the variant extension
+        requires it only after successful negotiation and forbids it on the
+        protocol-rejection branch.
+      headers:
+        X-AgentWeb-Protocol-Version:
+          $ref: "#/components/headers/SelectedProtocolVersion"
+      x-agentweb-selected-header-variants:
+        protocolRejection: absent
+        endpointConflictAfterNegotiation: required
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/ProtocolMajorMismatch"
+              - $ref: "#/components/schemas/ProtocolVersionMismatch"
+              - $ref: "#/components/schemas/EndpointErrorResponse"
+    NativeSteerConflict:
+      description: >-
+        Unsupported protocol range before mutation, or a native steer conflict
+        after negotiation. Endpoint conflicts may include the durable receipt
+        created while rejecting that exact steer request.
+      headers:
+        X-AgentWeb-Protocol-Version:
+          $ref: "#/components/headers/SelectedProtocolVersion"
+      x-agentweb-selected-header-variants:
+        protocolRejection: absent
+        endpointConflictAfterNegotiation: required
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/ProtocolMajorMismatch"
+              - $ref: "#/components/schemas/ProtocolVersionMismatch"
+              - $ref: "#/components/schemas/NativeSteerConflictResponse"
+    NativeStopConflict:
+      description: >-
+        Unsupported protocol range before mutation, or a native stop conflict
+        after negotiation. Endpoint conflicts may include the durable receipt
+        created while rejecting that exact stop request.
+      headers:
+        X-AgentWeb-Protocol-Version:
+          $ref: "#/components/headers/SelectedProtocolVersion"
+      x-agentweb-selected-header-variants:
+        protocolRejection: absent
+        endpointConflictAfterNegotiation: required
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/ProtocolMajorMismatch"
+              - $ref: "#/components/schemas/ProtocolVersionMismatch"
+              - $ref: "#/components/schemas/NativeStopConflictResponse"
+    NativeQueueConflict:
+      description: >-
+        Unsupported protocol range before mutation, or an owner, FIFO,
+        predecessor, idempotency, cancellation, or handoff conflict after
+        negotiation. Endpoint conflicts may include the relevant durable
+        admission or start receipt.
+      headers:
+        X-AgentWeb-Protocol-Version:
+          $ref: "#/components/headers/SelectedProtocolVersion"
+      x-agentweb-selected-header-variants:
+        protocolRejection: absent
+        endpointConflictAfterNegotiation: required
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/ProtocolMajorMismatch"
+              - $ref: "#/components/schemas/ProtocolVersionMismatch"
+              - $ref: "#/components/schemas/NativeQueueConflictResponse"
+    NegotiatedNotFound:
+      description: Resource not found after successful negotiation
+      headers:
+        X-AgentWeb-Protocol-Version:
+          $ref: "#/components/headers/SelectedProtocolVersion"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NegotiatedError:
+      description: Endpoint error after successful negotiation
+      headers:
+        X-AgentWeb-Protocol-Version:
+          $ref: "#/components/headers/SelectedProtocolVersion"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NegotiatedServiceUnavailable:
+      description: Required local dependency is unavailable after successful negotiation
+      headers:
+        X-AgentWeb-Protocol-Version:
+          $ref: "#/components/headers/SelectedProtocolVersion"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NegotiatedTooLarge:
+      description: Endpoint request body is too large after successful negotiation
+      headers:
+        X-AgentWeb-Protocol-Version:
+          $ref: "#/components/headers/SelectedProtocolVersion"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NegotiatedUnprocessable:
+      description: Input cannot fit the selected model context
+      headers:
+        X-AgentWeb-Protocol-Version:
+          $ref: "#/components/headers/SelectedProtocolVersion"
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorResponse"
+              - type: object
+                required: [code, retryable]
+                properties:
+                  retryable:
+                    const: false
+
+  schemas:
+    CanonicalProtocolVersion:
+      type: string
+      pattern: "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+      maxLength: 21
+      description: >-
+        Canonical ASCII major.minor. Each decimal component is additionally
+        bounded by x-agentweb-max-component; adapters must enforce that
+        integer bound because JSON Schema cannot compare decimal substrings.
+      x-agentweb-max-component: 2147483647
+    ProtocolRange:
+      type: object
+      additionalProperties: false
+      required: [min, max]
+      properties:
+        min:
+          type: string
+          const: "1.0"
+        max:
+          type: string
+          const: "1.0"
+    ClientProtocolRange:
+      type: object
+      additionalProperties: false
+      required: [min, max]
+      properties:
+        min:
+          $ref: "#/components/schemas/CanonicalProtocolVersion"
+        max:
+          $ref: "#/components/schemas/CanonicalProtocolVersion"
+    InvalidProtocolRange:
+      type: object
+      additionalProperties: false
+      required: [error, code, retryable, serverProtocol]
+      properties:
+        error:
+          const: Invalid AgentWeb protocol range.
+        code:
+          const: invalid_protocol_range
+        retryable:
+          const: false
+        serverProtocol:
+          $ref: "#/components/schemas/ProtocolRange"
+    ProtocolMajorMismatch:
+      type: object
+      additionalProperties: false
+      required: [error, code, retryable, clientProtocol, serverProtocol]
+      properties:
+        error:
+          const: No compatible AgentWeb protocol major version.
+        code:
+          const: protocol_major_mismatch
+        retryable:
+          const: false
+        clientProtocol:
+          $ref: "#/components/schemas/ClientProtocolRange"
+        serverProtocol:
+          $ref: "#/components/schemas/ProtocolRange"
+    ProtocolVersionMismatch:
+      type: object
+      additionalProperties: false
+      required: [error, code, retryable, clientProtocol, serverProtocol]
+      properties:
+        error:
+          const: No compatible AgentWeb protocol version.
+        code:
+          const: protocol_version_mismatch
+        retryable:
+          const: false
+        clientProtocol:
+          $ref: "#/components/schemas/ClientProtocolRange"
+        serverProtocol:
+          $ref: "#/components/schemas/ProtocolRange"
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+          minLength: 1
+          maxLength: 80
+        retryable:
+          type: boolean
+        detail:
+          type: object
+      additionalProperties: true
+    EndpointErrorResponse:
+      allOf:
+        - $ref: "#/components/schemas/ErrorResponse"
+        - not:
+            required: [code]
+            properties:
+              code:
+                enum:
+                  - invalid_protocol_range
+                  - protocol_major_mismatch
+                  - protocol_version_mismatch
+                  - invalid_message_pagination
+    InvalidMessagePagination:
+      type: object
+      additionalProperties: false
+      required: [error, code, retryable]
+      properties:
+        error:
+          type: string
+          minLength: 1
+        code:
+          const: invalid_message_pagination
+        retryable:
+          const: false
+    UnauthorizedResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          const: unauthorized
+    OkResponse:
+      type: object
+      additionalProperties: false
+      required: [ok]
+      properties:
+        ok:
+          const: true
+    MetaResponse:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, protocol, serverCapabilities]
+      properties:
+        contractVersion:
+          type: string
+          const: "1.0"
+        protocol:
+          $ref: "#/components/schemas/ProtocolRange"
+        serverCapabilities:
+          type: array
+          const: [attachments.v1]
+          items:
+            type: string
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [ok, db]
+      properties:
+        ok:
+          type: boolean
+        db:
+          type: boolean
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [user, pass]
+      properties:
+        user:
+          type: string
+          maxLength: 4096
+        pass:
+          type: string
+          maxLength: 12288
+          writeOnly: true
+    LoginResponse:
+      type: object
+      additionalProperties: false
+      required: [token, expires, auth_required]
+      properties:
+        token:
+          type: string
+          readOnly: true
+          x-agentweb-sensitive: true
+        expires:
+          type: integer
+          minimum: 0
+        auth_required:
+          type: boolean
+    ConversationId:
+      type: string
+      format: uuid
+    ControlId:
+      type: string
+      pattern: "^[0-9a-f]{32}$"
+    NullableString:
+      type: [string, "null"]
+    Effort:
+      type: [string, "null"]
+      enum: [low, medium, high, xhigh, max, none, minimal, ultra, null]
+      description: Accepted only when supported by the selected model; otherwise cleared to Default.
+    PermissionMode:
+      type: string
+      enum: [auto, plan, full]
+    ExecutionMode:
+      type: string
+      enum: [standard, auto, teams]
+      description: >-
+        Provider-neutral execution preference. `teams` is a deprecated input
+        alias for `auto`; current responses use `auto`.
+    Agent:
+      type: object
+      required:
+        - id
+        - name
+        - models
+        - modelLabels
+        - contextWindows
+        - contextKinds
+        - model
+        - supportsImages
+        - supportsEffort
+        - supportsCoordination
+        - coordinationBackend
+        - coordinationMaxAgents
+        - coordinationMinMemoryMiB
+        - supportsTeams
+        - teamsMaxAgents
+        - teamsMinMemoryMiB
+        - available
+        - color
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        models:
+          type: array
+          items: {type: string}
+        modelLabels:
+          type: object
+          additionalProperties: {type: string}
+        modelEffortLevels:
+          type: object
+          description: Optional per-model effort choices; absent on older servers.
+          additionalProperties:
+            type: array
+            items: {type: string, enum: [none, minimal, low, medium, high, xhigh, max, ultra]}
+        modelDefaultEfforts:
+          type: object
+          description: Optional provider-recommended defaults; Default requests still send null.
+          additionalProperties: {$ref: '#/components/schemas/Effort'}
+        contextWindows:
+          type: object
+          additionalProperties: {type: [integer, "null"], minimum: 1}
+        contextKinds:
+          type: object
+          additionalProperties: {type: string}
+        model:
+          type: string
+        supportsImages:
+          type: boolean
+        supportsEffort:
+          type: boolean
+        supportsCoordination:
+          type: boolean
+        coordinationBackend:
+          type: [string, "null"]
+          enum: [claude_teams, codex_subagents, kimi_swarm, null]
+        coordinationMaxAgents:
+          type: [integer, "null"]
+          minimum: 2
+        coordinationMinMemoryMiB:
+          type: [integer, "null"]
+          minimum: 1
+        supportsTeams:
+          type: boolean
+        teamsMaxAgents:
+          type: [integer, "null"]
+          minimum: 2
+        teamsMinMemoryMiB:
+          type: [integer, "null"]
+          minimum: 1
+        available:
+          type: boolean
+          description: Local preflight only; not proof of remote model access or quota.
+        enabled:
+          type: boolean
+          description: False when the operator turned this provider off; clients hide it from pickers and new turns return 409 provider_disabled.
+        readiness:
+          $ref: "#/components/schemas/AgentReadiness"
+        color:
+          type: string
+      additionalProperties: true
+    AgentReadiness:
+      type: object
+      additionalProperties: false
+      required: [state, code, summary, verification, modelAccess]
+      description: >-
+        Additive authenticated catalog diagnostic. Checks existing CLI presence
+        or Codex Node/bridge/app-server readiness without starting a model turn.
+        DeepSeek additionally requires DEEPSEEK_API_KEY; api_key_missing marks
+        it unavailable without disclosing the credential. Claude subscription
+        readiness does not require an Anthropic API key.
+        No paths, credentials, raw errors or thread data are returned. This is
+        not an admission decision, a quota check, or a guarantee a turn will succeed.
+      properties:
+        state:
+          enum: [ready, unavailable]
+        code:
+          enum: [disabled, cli_found, cli_missing, api_key_missing, node_missing, bridge_missing,
+                 app_server_unavailable, app_server_ready, probe_failed]
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 300
+        verification:
+          const: local_preflight
+        modelAccess:
+          const: unchecked
+    AgentsResponse:
+      type: object
+      required: [agents]
+      properties:
+        agents:
+          type: array
+          items:
+            $ref: "#/components/schemas/Agent"
+        replayStorage:
+          $ref: "#/components/schemas/ReplayStorageBudget"
+      additionalProperties: true
+    ReplayStorageBudget:
+      type: object
+      additionalProperties: false
+      required: [limitBytes, reservedBytes, availableBytes, maxArchiveBytes, scope, accounting]
+      description: >-
+        Authenticated process-local reservation snapshot, including data and
+        index bytes. Not filesystem free space, block allocation, or a
+        multi-process/host-wide quota. Reservations may conservatively include
+        failed writes until the owning archive closes. No paths or content.
+      properties:
+        limitBytes: {type: integer, minimum: 1}
+        reservedBytes: {type: integer, minimum: 0}
+        availableBytes: {type: integer, minimum: 0}
+        maxArchiveBytes: {type: integer, minimum: 1}
+        scope: {const: process}
+        accounting: {const: reserved_data_and_index_bytes}
+    UsageTotals:
+      type: object
+      required: [messages, input_tokens, output_tokens, cost_usd]
+      properties:
+        messages: {type: integer, minimum: 0}
+        input_tokens: {type: integer, minimum: 0}
+        output_tokens: {type: integer, minimum: 0}
+        cost_usd: {type: number, minimum: 0}
+      additionalProperties: true
+    UsageResponse:
+      type: object
+      required: [total, by_agent]
+      properties:
+        total:
+          $ref: "#/components/schemas/UsageTotals"
+        by_agent:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/UsageTotals"
+      additionalProperties: true
+    IntegrationsResponse:
+      type: object
+      additionalProperties: false
+      required: [claudePluginRoots, crawlflare, grokAuto]
+      properties:
+        claudePluginRoots:
+          type: object
+          additionalProperties: false
+          required: [configured, count, state, crawlflareDetected]
+          properties:
+            configured: {type: boolean}
+            count: {type: integer, minimum: 0}
+            state: {enum: [unset, ok, invalid]}
+            crawlflareDetected: {type: [boolean, "null"]}
+        crawlflare:
+          type: object
+          additionalProperties: false
+          required: [mcpName, clients, liveChecksRequireFull]
+          properties:
+            mcpName: {const: crawlflare}
+            clients:
+              type: array
+              const: [codex, claude, grok]
+              items: {type: string}
+            liveChecksRequireFull: {const: true}
+        grokAuto:
+          type: object
+          additionalProperties: false
+          required: [webOnly, mcpBlocked]
+          properties:
+            webOnly: {const: true}
+            mcpBlocked: {const: true}
+    CodexThread:
+      type: object
+      required: [id, active]
+      properties:
+        id: {type: string, minLength: 1}
+        preview: {type: [string, "null"]}
+        cwd: {type: [string, "null"]}
+        source: {}
+        createdAt: {type: [integer, "null"], minimum: 0}
+        updatedAt: {type: [integer, "null"], minimum: 0}
+        recencyAt: {type: [integer, "null"], minimum: 0}
+        active: {type: boolean}
+      additionalProperties: true
+    CodexThreadsResponse:
+      type: object
+      required: [threads]
+      properties:
+        threads:
+          type: array
+          items:
+            $ref: "#/components/schemas/CodexThread"
+      additionalProperties: true
+    ClaudeSession:
+      type: object
+      required: [id, cwd, project, title, updatedAt, messageCount, model, provider, state, linkedConversationId, historyLimited]
+      properties:
+        id: {type: string, format: uuid}
+        cwd: {type: string}
+        project:
+          type: object
+          required: [cwd, name]
+          properties:
+            cwd: {type: string}
+            name: {type: string}
+        title: {type: string, maxLength: 100}
+        updatedAt: {type: integer}
+        messageCount: {type: integer, minimum: 0}
+        model: {type: string}
+        provider: {type: string, enum: [claude, deepseek]}
+        entrypoint: {type: [string, "null"]}
+        gitBranch: {type: [string, "null"]}
+        state:
+          type: string
+          enum: [idle, maybe_active]
+          description: Modified within 60 seconds or a live Claude process explicitly references the session. Advisory, not a cross-client lock.
+        linkedConversationId: {type: [string, "null"]}
+        historyLimited: {type: boolean}
+      additionalProperties: true
+    ClaudeSessionsResponse:
+      type: object
+      required: [sessions, nextCursor]
+      properties:
+        sessions:
+          type: array
+          maxItems: 40
+          items: {$ref: "#/components/schemas/ClaudeSession"}
+        nextCursor: {type: [string, "null"]}
+    ClaudeSessionHistory:
+      type: object
+      required: [session, messages, messagePage]
+      properties:
+        session: {$ref: "#/components/schemas/ClaudeSession"}
+        messages:
+          type: array
+          maxItems: 40
+          items:
+            type: object
+            required: [id, role, content, blocks, created_at]
+            properties:
+              id: {type: string}
+              role: {enum: [user, assistant]}
+              content: {type: string}
+              blocks:
+                type: array
+                items: {type: object}
+              created_at: {type: integer}
+        messagePage:
+          type: object
+          required: [olderCount, nextCursor]
+          properties:
+            olderCount: {type: integer, minimum: 0}
+            nextCursor: {type: [string, "null"]}
+    ClaudeAdoptResponse:
+      type: object
+      required: [conversationId, existing]
+      properties:
+        conversationId: {$ref: "#/components/schemas/ConversationId"}
+        existing: {type: boolean}
+    CodexImportRequest:
+      type: object
+      additionalProperties: false
+      required: [threadId]
+      properties:
+        threadId: {type: string, minLength: 1}
+    CodexImportResponse:
+      type: object
+      additionalProperties: false
+      required: [id, existing]
+      properties:
+        id:
+          $ref: "#/components/schemas/ConversationId"
+        existing: {type: boolean}
+    CodexAdoptRequest:
+      type: object
+      additionalProperties: false
+      required: [threadId, adoptId]
+      properties:
+        threadId: {type: string, minLength: 1}
+        adoptId:
+          $ref: "#/components/schemas/ControlId"
+    NativeSteerReceipt:
+      type: object
+      additionalProperties: false
+      required: [steerId, state, errorCode, createdAt, updatedAt, existing]
+      properties:
+        steerId:
+          $ref: "#/components/schemas/ControlId"
+        state: {enum: [dispatching, accepted, rejected, unknown]}
+        errorCode: {type: [string, "null"]}
+        createdAt: {type: integer, minimum: 0}
+        updatedAt: {type: integer, minimum: 0}
+        existing: {type: boolean}
+    NativeStopReceipt:
+      type: object
+      additionalProperties: false
+      required: [stopId, state, errorCode, createdAt, updatedAt, existing]
+      properties:
+        stopId:
+          $ref: "#/components/schemas/ControlId"
+        state: {enum: [dispatching, accepted, rejected, unknown]}
+        errorCode: {type: [string, "null"]}
+        createdAt: {type: integer, minimum: 0}
+        updatedAt: {type: integer, minimum: 0}
+        existing: {type: boolean}
+    NativeQueueReceipt:
+      type: object
+      additionalProperties: false
+      required:
+        [queueId, state, acceptedPosition, startedRunId, startedTurnId,
+         createdAt, updatedAt, existing]
+      properties:
+        queueId:
+          $ref: "#/components/schemas/ControlId"
+        state: {enum: [queued, starting, started, cancelled, unknown]}
+        acceptedPosition: {type: integer, minimum: 1}
+        startedRunId:
+          oneOf:
+            - $ref: "#/components/schemas/ControlId"
+            - type: "null"
+        startedTurnId: {type: [string, "null"], minLength: 1}
+        createdAt: {type: integer, minimum: 0}
+        updatedAt: {type: integer, minimum: 0}
+        existing: {type: boolean}
+    NativeQueueStartReceipt:
+      type: object
+      additionalProperties: false
+      required:
+        [startId, queueId, state, predecessorRunId, predecessorTurnId,
+         startedRunId, startedTurnId, errorCode, createdAt, updatedAt, existing]
+      properties:
+        startId:
+          $ref: "#/components/schemas/ControlId"
+        queueId:
+          $ref: "#/components/schemas/ControlId"
+        state: {enum: [dispatching, accepted, rejected, unknown]}
+        predecessorRunId:
+          $ref: "#/components/schemas/ControlId"
+        predecessorTurnId: {type: string, minLength: 1}
+        startedRunId:
+          oneOf:
+            - $ref: "#/components/schemas/ControlId"
+            - type: "null"
+        startedTurnId: {type: [string, "null"], minLength: 1}
+        errorCode: {type: [string, "null"]}
+        createdAt: {type: integer, minimum: 0}
+        updatedAt: {type: integer, minimum: 0}
+        existing: {type: boolean}
+    NativeQueueItem:
+      type: object
+      additionalProperties: false
+      required: [queueId, text, state, position, createdAt, updatedAt]
+      properties:
+        queueId:
+          $ref: "#/components/schemas/ControlId"
+        text: {type: string, minLength: 1, maxLength: 65536}
+        state: {enum: [queued, starting, unknown]}
+        position: {type: integer, minimum: 1}
+        createdAt: {type: integer, minimum: 0}
+        updatedAt: {type: integer, minimum: 0}
+    NativeQueue:
+      type: object
+      additionalProperties: false
+      required:
+        [items, paused, pauseReason, canEnqueue, canResume, headQueueId,
+         lastStartReceipt]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/NativeQueueItem"
+        paused: {type: boolean}
+        pauseReason: {type: [string, "null"]}
+        canEnqueue: {type: boolean}
+        canResume: {type: boolean}
+        headQueueId:
+          oneOf:
+            - $ref: "#/components/schemas/ControlId"
+            - type: "null"
+        lastStartReceipt:
+          oneOf:
+            - $ref: "#/components/schemas/NativeQueueStartReceipt"
+            - type: "null"
+    NativeRun:
+      type: object
+      additionalProperties: false
+      required:
+        [runId, turnId, state, canSteer, canStop, stopPending,
+         lastReceipt, lastStopReceipt, nativeQueue]
+      properties:
+        runId:
+          $ref: "#/components/schemas/ControlId"
+        turnId: {type: string, minLength: 1}
+        state: {enum: [inProgress, completed, interrupted, failed]}
+        canSteer: {type: boolean}
+        canStop: {type: boolean}
+        stopPending: {type: boolean}
+        lastReceipt:
+          oneOf:
+            - $ref: "#/components/schemas/NativeSteerReceipt"
+            - type: "null"
+        lastStopReceipt:
+          oneOf:
+            - $ref: "#/components/schemas/NativeStopReceipt"
+            - type: "null"
+        nativeQueue:
+          $ref: "#/components/schemas/NativeQueue"
+    CodexAdoptResponse:
+      type: object
+      additionalProperties: false
+      required: [conversationId, existing, nativeRun, streamUrl]
+      properties:
+        conversationId:
+          $ref: "#/components/schemas/ConversationId"
+        existing: {type: boolean}
+        nativeRun:
+          $ref: "#/components/schemas/NativeRun"
+        streamUrl: {type: string, pattern: "^/api/chat/stream/[^/]+$"}
+    NativeSteerRequest:
+      type: object
+      additionalProperties: false
+      required: [conversationId, runId, expectedTurnId, steerId, text]
+      properties:
+        conversationId:
+          $ref: "#/components/schemas/ConversationId"
+        runId:
+          $ref: "#/components/schemas/ControlId"
+        expectedTurnId: {type: string, minLength: 1}
+        steerId:
+          $ref: "#/components/schemas/ControlId"
+        text: {type: string, minLength: 1, maxLength: 65536}
+    NativeSteerResponse:
+      type: object
+      additionalProperties: false
+      required: [receipt]
+      properties:
+        receipt:
+          $ref: "#/components/schemas/NativeSteerReceipt"
+    NativeSteerConflictResponse:
+      type: object
+      additionalProperties: false
+      required: [error, code, retryable]
+      properties:
+        error:
+          type: string
+          minLength: 1
+        code:
+          enum:
+            - native_steer_idempotency_conflict
+            - native_turn_terminal
+            - native_turn_not_steerable
+            - native_turn_changed
+            - native_control_owner_changed
+            - native_steer_busy
+            - native_stop_pending
+            - native_steer_rejected
+        retryable:
+          type: boolean
+        receipt:
+          $ref: "#/components/schemas/NativeSteerReceipt"
+    NativeStopRequest:
+      type: object
+      additionalProperties: false
+      required: [conversationId, runId, expectedTurnId, stopId]
+      properties:
+        conversationId:
+          $ref: "#/components/schemas/ConversationId"
+        runId:
+          $ref: "#/components/schemas/ControlId"
+        expectedTurnId: {type: string, minLength: 1}
+        stopId:
+          $ref: "#/components/schemas/ControlId"
+    NativeStopResponse:
+      type: object
+      additionalProperties: false
+      required: [receipt]
+      properties:
+        receipt:
+          $ref: "#/components/schemas/NativeStopReceipt"
+    NativeStopConflictResponse:
+      type: object
+      additionalProperties: false
+      required: [error, code, retryable]
+      properties:
+        error:
+          type: string
+          minLength: 1
+        code:
+          enum:
+            - native_stop_idempotency_conflict
+            - native_turn_terminal
+            - native_turn_changed
+            - native_control_owner_changed
+            - native_stop_busy
+            - native_stop_rejected
+        retryable:
+          type: boolean
+        receipt:
+          $ref: "#/components/schemas/NativeStopReceipt"
+    NativeQueueRequest:
+      type: object
+      additionalProperties: false
+      required: [conversationId, runId, expectedTurnId, queueId, text]
+      properties:
+        conversationId:
+          $ref: "#/components/schemas/ConversationId"
+        runId:
+          $ref: "#/components/schemas/ControlId"
+        expectedTurnId: {type: string, minLength: 1}
+        queueId:
+          $ref: "#/components/schemas/ControlId"
+        text: {type: string, minLength: 1, maxLength: 65536}
+    NativeQueueResumeRequest:
+      type: object
+      additionalProperties: false
+      required: [conversationId, expectedHeadQueueId, startId]
+      properties:
+        conversationId:
+          $ref: "#/components/schemas/ConversationId"
+        expectedHeadQueueId:
+          $ref: "#/components/schemas/ControlId"
+        startId:
+          $ref: "#/components/schemas/ControlId"
+    NativeQueueResponse:
+      type: object
+      additionalProperties: false
+      required: [receipt]
+      properties:
+        receipt:
+          $ref: "#/components/schemas/NativeQueueReceipt"
+    NativeQueueStartResponse:
+      type: object
+      additionalProperties: false
+      required: [receipt]
+      properties:
+        receipt:
+          $ref: "#/components/schemas/NativeQueueStartReceipt"
+    NativeQueueConflictResponse:
+      type: object
+      additionalProperties: false
+      required: [error, code, retryable]
+      properties:
+        error: {type: string, minLength: 1}
+        code: {type: string, minLength: 1}
+        retryable: {type: boolean}
+        receipt:
+          oneOf:
+            - $ref: "#/components/schemas/NativeQueueReceipt"
+            - $ref: "#/components/schemas/NativeQueueStartReceipt"
+    Project:
+      type: object
+      additionalProperties: true
+      required: [id, name, rootLabel, defaultBranch, conversationCount]
+      properties:
+        id: {type: string, minLength: 1}
+        name: {type: string, minLength: 1}
+        rootLabel: {type: string, minLength: 1}
+        defaultBranch: {type: string, minLength: 1}
+        conversationCount: {type: integer, minimum: 0}
+    ProjectsResponse:
+      type: object
+      required: [projects]
+      properties:
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+      additionalProperties: true
+    ProjectCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [root]
+      properties:
+        root: {type: string, minLength: 1}
+        name: {type: [string, "null"], maxLength: 200}
+    ProjectCreateResponse:
+      type: object
+      required: [project]
+      properties:
+        project:
+          $ref: "#/components/schemas/Project"
+      additionalProperties: true
+    ProjectBinding:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: {type: string, minLength: 1}
+        name: {type: string, minLength: 1}
+    Lineage:
+      type: object
+      additionalProperties: false
+      required:
+        - parentConversationId
+        - sourceUserMessageId
+        - sourceAssistantMessageId
+        - forkKind
+      properties:
+        parentConversationId:
+          $ref: "#/components/schemas/ConversationId"
+        sourceUserMessageId: {type: integer, minimum: 1}
+        sourceAssistantMessageId: {type: [integer, "null"], minimum: 1}
+        forkKind: {enum: [edit, retry]}
+    Conversation:
+      type: object
+      required: [id, title, agent, model, pinned, active]
+      properties:
+        id:
+          $ref: "#/components/schemas/ConversationId"
+        title: {type: string, maxLength: 200}
+        agent: {type: string, minLength: 1}
+        model: {type: string, minLength: 1}
+        pinned: {type: [integer, boolean]}
+        effort:
+          $ref: "#/components/schemas/Effort"
+        perm_mode:
+          $ref: "#/components/schemas/PermissionMode"
+        execution_mode:
+          $ref: "#/components/schemas/ExecutionMode"
+        created_at: {type: integer, minimum: 0}
+        updated_at: {type: integer, minimum: 0}
+        active: {type: boolean}
+        starting: {type: boolean}
+        controlId:
+          oneOf:
+            - $ref: "#/components/schemas/ControlId"
+            - type: "null"
+        controlKind:
+          enum: [codexNative]
+        nativeRun:
+          $ref: "#/components/schemas/NativeRun"
+        project:
+          oneOf:
+            - $ref: "#/components/schemas/ProjectBinding"
+            - type: "null"
+        workspaceSource:
+          enum: [managed, project_worktree, codex_import, claude_import]
+        baseRef: {type: [string, "null"]}
+        worktreeBranch: {type: [string, "null"]}
+        lineage:
+          oneOf:
+            - $ref: "#/components/schemas/Lineage"
+            - type: "null"
+      additionalProperties: true
+    ConversationCreateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title: {type: string, maxLength: 200}
+        agent: {type: string, minLength: 1}
+        model: {type: string, minLength: 1}
+        projectId: {type: string, minLength: 1}
+    ConversationsResponse:
+      type: object
+      required: [conversations]
+      properties:
+        conversations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Conversation"
+      additionalProperties: true
+    ForkAction:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: {type: boolean}
+        code: {type: string}
+        reason: {type: string}
+      additionalProperties: false
+    MessagePage:
+      type: object
+      additionalProperties: false
+      required: [limit, olderCount, nextCursor, compactionCount]
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Echoed bounded page size; the messages payload never exceeds it.
+        olderCount:
+          type: integer
+          minimum: 0
+          description: Exact message rows strictly before the oldest returned message in the same conversation.
+        nextCursor:
+          description: >-
+            The oldest returned message id as a string when olderCount is
+            positive, else null. Clients pass it back as messageCursor for the
+            next older page.
+          oneOf:
+            - type: string
+              pattern: "^[0-9]+$"
+            - type: "null"
+        compactionCount:
+          type: integer
+          minimum: 0
+          description: >-
+            Compaction count from the bounded context snapshot metadata in the
+            same read snapshot, never derived from loading compacted history.
+    Message:
+      type: object
+      required: [id, role, content, created_at, forkActions]
+      properties:
+        id: {type: integer, minimum: 1}
+        role: {enum: [user, assistant]}
+        content: {type: [string, "null"]}
+        blocks:
+          type: [array, "null"]
+          items: {type: object}
+        usage:
+          type: [object, "null"]
+        status:
+          type: [string, "null"]
+          enum: [ok, interrupted, error, null]
+        images:
+          type: [array, "null"]
+          items:
+            $ref: "#/components/schemas/Artifact"
+        created_at: {type: integer, minimum: 0}
+        forkActions:
+          type: object
+          properties:
+            edit:
+              $ref: "#/components/schemas/ForkAction"
+            retry:
+              $ref: "#/components/schemas/ForkAction"
+          additionalProperties: false
+      additionalProperties: true
+    QueueItem:
+      type: object
+      additionalProperties: true
+      required:
+        - id
+        - conversationId
+        - message
+        - agent
+        - model
+        - effort
+        - permissionMode
+        - executionMode
+        - attachments
+        - createdAt
+        - position
+      properties:
+        id:
+          $ref: "#/components/schemas/ControlId"
+        conversationId:
+          $ref: "#/components/schemas/ConversationId"
+        message: {type: string}
+        agent: {type: string}
+        model: {type: string}
+        effort:
+          $ref: "#/components/schemas/Effort"
+        permissionMode:
+          $ref: "#/components/schemas/PermissionMode"
+        executionMode:
+          $ref: "#/components/schemas/ExecutionMode"
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/QueuedAttachment"
+        createdAt: {type: integer, minimum: 0}
+        position: {type: integer, minimum: 1}
+    QueuedAttachment:
+      type: object
+      additionalProperties: false
+      required: [kind, name, mime, size]
+      properties:
+        kind: {enum: [image, file]}
+        name: {type: string}
+        mime: {type: string}
+        size: {type: integer, minimum: 0, maximum: 8388608}
+    ContextState:
+      type: object
+      additionalProperties: true
+      required: [activeTokens, contextWindow, ratio, estimated]
+      properties:
+        activeTokens: {type: integer, minimum: 0}
+        contextWindow: {type: integer, minimum: 1}
+        ratio: {type: number, minimum: 0}
+        estimated: {type: boolean}
+        compactedAt: {type: integer, minimum: 0}
+        compactionCount: {type: integer, minimum: 1}
+    ConversationDetailResponse:
+      type: object
+      additionalProperties: true
+      required: [conversation, messages, queued, queuePaused, context]
+      properties:
+        conversation:
+          $ref: "#/components/schemas/Conversation"
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+        queued:
+          type: array
+          items:
+            $ref: "#/components/schemas/QueueItem"
+        queuePaused: {type: boolean}
+        context:
+          oneOf:
+            - $ref: "#/components/schemas/ContextState"
+            - type: "null"
+        messagePage:
+          $ref: "#/components/schemas/MessagePage"
+          description: Present only when messageLimit was supplied.
+    ConversationPatchRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200}
+        pinned: {type: boolean}
+    ForkRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, mode, messageId]
+      properties:
+        requestId: {type: string, format: uuid}
+        mode: {enum: [edit, retry]}
+        messageId: {type: integer, minimum: 1, maximum: 9223372036854775807}
+        message: {type: string, minLength: 1, maxLength: 65536}
+        agent: {type: string, minLength: 1}
+        model: {type: string, minLength: 1, maxLength: 200}
+        effort:
+          $ref: "#/components/schemas/Effort"
+        permMode:
+          $ref: "#/components/schemas/PermissionMode"
+        executionMode:
+          $ref: "#/components/schemas/ExecutionMode"
+      allOf:
+        - if:
+            properties:
+              mode: {const: edit}
+          then:
+            required: [message]
+        - if:
+            properties:
+              mode: {const: retry}
+          then:
+            not:
+              required: [message]
+    Run:
+      type: object
+      additionalProperties: false
+      required: [id, status, agent, model, effort, permissionMode, executionMode]
+      properties:
+        id:
+          $ref: "#/components/schemas/ControlId"
+        status: {enum: [running, ok, error, interrupted]}
+        agent: {type: string}
+        model: {type: string}
+        effort:
+          $ref: "#/components/schemas/Effort"
+        permissionMode:
+          $ref: "#/components/schemas/PermissionMode"
+        executionMode:
+          $ref: "#/components/schemas/ExecutionMode"
+    ForkVariant:
+      type: object
+      additionalProperties: false
+      required:
+        - kind
+        - parentConversation
+        - sourceUserMessageId
+        - sourceAssistantMessageId
+      properties:
+        kind: {enum: [edit, retry]}
+        parentConversation:
+          type: object
+          additionalProperties: false
+          required: [id, title]
+          properties:
+            id:
+              $ref: "#/components/schemas/ConversationId"
+            title: {type: string}
+        sourceUserMessageId: {type: integer, minimum: 1}
+        sourceAssistantMessageId: {type: [integer, "null"], minimum: 1}
+    ForkResponse:
+      type: object
+      additionalProperties: false
+      required: [conversation, variant, run, streamUrl, existing]
+      properties:
+        conversation:
+          $ref: "#/components/schemas/Conversation"
+        variant:
+          $ref: "#/components/schemas/ForkVariant"
+        run:
+          $ref: "#/components/schemas/Run"
+        streamUrl: {type: string, pattern: "^/api/chat/stream/"}
+        existing: {type: boolean}
+    WorkspaceState:
+      oneOf:
+        - $ref: "#/components/schemas/GitWorkspaceState"
+        - $ref: "#/components/schemas/DirectoryWorkspaceState"
+        - $ref: "#/components/schemas/ErrorWorkspaceState"
+    GitWorkspaceState:
+      type: object
+      additionalProperties: false
+      required: [kind, ts, dirty, branch, counts, entries, truncated]
+      properties:
+        kind: {const: git}
+        ts: {type: integer, minimum: 0}
+        dirty: {type: boolean}
+        branch:
+          type: object
+          additionalProperties: false
+          required: [name, head, upstream, ahead, behind, detached]
+          properties:
+            name: {type: [string, "null"]}
+            head: {type: [string, "null"]}
+            upstream: {type: [string, "null"]}
+            ahead: {type: integer, minimum: 0}
+            behind: {type: integer, minimum: 0}
+            detached: {type: boolean}
+        counts:
+          type: object
+          additionalProperties: false
+          required: [total, staged, unstaged, untracked, renamed, conflicts]
+          properties:
+            total: {type: integer, minimum: 0}
+            staged: {type: integer, minimum: 0}
+            unstaged: {type: integer, minimum: 0}
+            untracked: {type: integer, minimum: 0}
+            renamed: {type: integer, minimum: 0}
+            conflicts: {type: integer, minimum: 0}
+        entries:
+          type: [array, "null"]
+          items:
+            $ref: "#/components/schemas/WorkspaceEntry"
+        truncated: {type: boolean}
+    WorkspaceEntry:
+      type: object
+      additionalProperties: false
+      required: [kind, path, staged, unstaged, untracked]
+      properties:
+        kind: {enum: [changed, renamed, conflict, untracked, ignored]}
+        path: {type: string}
+        original: {type: string}
+        staged: {type: boolean}
+        unstaged: {type: boolean}
+        untracked: {type: boolean}
+    DirectoryWorkspaceState:
+      type: object
+      additionalProperties: false
+      required: [kind, ts]
+      properties:
+        kind: {const: directory}
+        ts: {type: integer, minimum: 0}
+    ErrorWorkspaceState:
+      type: object
+      additionalProperties: false
+      required: [kind, reason, ts]
+      properties:
+        kind: {const: error}
+        reason: {type: string}
+        ts: {type: integer, minimum: 0}
+    AttachmentInput:
+      type: object
+      additionalProperties: false
+      required: [name, data_url]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 255}
+        data_url:
+          type: string
+          pattern: "^data:[^;]+;base64,"
+    MessageRequest:
+      type: object
+      additionalProperties: false
+      required: [message, controlId]
+      properties:
+        conversationId:
+          $ref: "#/components/schemas/ConversationId"
+        controlId:
+          $ref: "#/components/schemas/ControlId"
+        message: {type: string}
+        agent: {type: string, minLength: 1}
+        model: {type: string, minLength: 1}
+        images:
+          type: array
+          maxItems: 4
+          items:
+            $ref: "#/components/schemas/AttachmentInput"
+        files:
+          type: array
+          maxItems: 4
+          items:
+            $ref: "#/components/schemas/AttachmentInput"
+        interrupt: {type: boolean}
+        effort:
+          $ref: "#/components/schemas/Effort"
+        permMode:
+          $ref: "#/components/schemas/PermissionMode"
+        executionMode:
+          $ref: "#/components/schemas/ExecutionMode"
+      x-agentweb-combined-attachment-limit: 4
+      x-agentweb-decoded-bytes-per-attachment: 8388608
+      x-agentweb-decoded-bytes-total: 33554432
+    StopRequest:
+      type: object
+      additionalProperties: false
+      required: [conversationId, expectedControlId]
+      properties:
+        conversationId:
+          $ref: "#/components/schemas/ConversationId"
+        expectedControlId:
+          $ref: "#/components/schemas/ControlId"
+    StopTruth:
+      type: object
+      required: [committed, status]
+      properties:
+        committed: {type: boolean}
+        status:
+          type: [string, "null"]
+          enum: [running, ok, error, interrupted, null]
+    StopAcceptedResponse:
+      allOf:
+        - $ref: "#/components/schemas/StopTruth"
+        - type: object
+          additionalProperties: true
+          required: [ok, starting, controlId]
+          properties:
+            ok: {const: true}
+            starting: {type: boolean}
+            controlId:
+              $ref: "#/components/schemas/ControlId"
+    StopPendingResponse:
+      allOf:
+        - $ref: "#/components/schemas/StopTruth"
+        - type: object
+          additionalProperties: true
+          required: [ok, pending, controlId]
+          properties:
+            ok: {const: true}
+            pending: {const: true}
+            controlId:
+              $ref: "#/components/schemas/ControlId"
+    StopConflictResponse:
+      allOf:
+        - $ref: "#/components/schemas/ErrorResponse"
+        - $ref: "#/components/schemas/StopTruth"
+        - type: object
+          required: [code]
+          properties:
+            code:
+              enum: [control_owner_changed, control_owner_terminal]
+    QueueRequest:
+      type: object
+      additionalProperties: false
+      required: [conversationId, queueId, message]
+      properties:
+        conversationId:
+          $ref: "#/components/schemas/ConversationId"
+        queueId:
+          $ref: "#/components/schemas/ControlId"
+        message: {type: string, minLength: 1}
+        agent: {type: string, minLength: 1}
+        model: {type: string, minLength: 1}
+        images:
+          type: array
+          maxItems: 4
+          items:
+            $ref: "#/components/schemas/AttachmentInput"
+        files:
+          type: array
+          maxItems: 4
+          items:
+            $ref: "#/components/schemas/AttachmentInput"
+        effort:
+          $ref: "#/components/schemas/Effort"
+        permMode:
+          $ref: "#/components/schemas/PermissionMode"
+        executionMode:
+          $ref: "#/components/schemas/ExecutionMode"
+      x-agentweb-combined-attachment-limit: 4
+      x-agentweb-decoded-bytes-per-attachment: 8388608
+      x-agentweb-decoded-bytes-total: 33554432
+      x-agentweb-pending-attachment-bytes-per-conversation: 67108864
+    QueueResponse:
+      type: object
+      additionalProperties: false
+      required: [item, position, existing, pending]
+      properties:
+        item:
+          $ref: "#/components/schemas/QueueItem"
+        position: {type: integer, minimum: 1}
+        existing: {type: boolean}
+        pending: {type: boolean}
+    QueueResumeRequest:
+      type: object
+      additionalProperties: false
+      required: [conversationId, expectedHeadItemId]
+      properties:
+        conversationId:
+          $ref: "#/components/schemas/ConversationId"
+        expectedHeadItemId:
+          $ref: "#/components/schemas/ControlId"
+    QueueResumeResponse:
+      type: object
+      additionalProperties: true
+      required: [item, started, active, starting, controlId]
+      properties:
+        item:
+          $ref: "#/components/schemas/QueueItem"
+        started: {const: true}
+        active: {type: boolean}
+        starting: {type: boolean}
+        controlId:
+          oneOf:
+            - $ref: "#/components/schemas/ControlId"
+            - type: "null"
+    Artifact:
+      type: object
+      required: [key, name, mime, size]
+      properties:
+        key: {type: string, minLength: 1}
+        name: {type: string}
+        mime: {type: string, minLength: 1}
+        size: {type: integer, minimum: 0}
+        generated: {type: boolean}
+      additionalProperties: true
+    SseEventReference:
+      type: object
+      description: >-
+        Logical reference to conformance/contract/sse-events-v1.schema.json.
+        Kept local/internal because OpenAPI contract references may not depend
+        on a network URL.
+      required: [type, seq]
+      properties:
+        type: {type: string}
+        seq: {type: integer, minimum: 1}
+      additionalProperties: true

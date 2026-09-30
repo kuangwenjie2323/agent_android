@@ -1,0 +1,6 @@
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="comfy-output" path="comfy-output/" />
+    <cache-path name="chat-media" path="chat-media/" />
+    <cache-path name="chat-input" path="chat-input/" />
+    <cache-path name="chat-camera" path="chat-camera/" />
+</paths>

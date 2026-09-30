@@ -1,0 +1,8 @@
+: ping
+
+id: run-fixture-f05:1
+data: {"type": "text", "content": "heartbeat preserved connection state", "seq": 1}
+
+id: run-fixture-f05:2
+data: {"type": "done", "conversationId": "conversation-fixture-f05", "seq": 2}
+

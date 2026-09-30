@@ -1,0 +1,15 @@
+id: run-fixture-f20:1
+data: {"type": "error", "content": "legacy content-only error", "seq": 1}
+
+id: run-fixture-f20:2
+data: {"type": "error", "content": "additive structured error", "code": "future_retry_boundary", "retryable": false, "detail": {"additiveField": "ignored by older clients"}, "seq": 2}
+
+id: run-fixture-f20:3
+data: {"type": "future_progress", "payload": {"phase": "future", "percent": 50}, "seq": 3}
+
+id: run-fixture-f20:4
+data: {"type": "text", "content": "known event after unknown sequence", "seq": 4}
+
+id: run-fixture-f20:5
+data: {"type": "done", "conversationId": "conversation-fixture-f20", "seq": 5}
+
