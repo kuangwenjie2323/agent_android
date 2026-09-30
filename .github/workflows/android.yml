@@ -34,7 +34,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Test, build and lint
-        run: ./gradlew :native:testDebugUnitTest :native:assembleDebug :native:lintDebug --stacktrace
+        run: ./gradlew :native:testDebugUnitTest :native:assembleDebug :native:lintDebug
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4

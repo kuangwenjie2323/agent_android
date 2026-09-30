@@ -33,7 +33,7 @@ if (signingPath != null) {
         throw GradleException("The external signing storeFile must identify a readable keystore.")
     }
 }
-val verifyReleaseSigningEnvironment by tasks.registering {
+val verifyReleaseSigningEnvironment = tasks.register("verifyReleaseSigningEnvironment") {
     group = "verification"
     doLast {
         if (signingPath == null) throw GradleException(
@@ -107,4 +107,11 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.coroutines.test)
+}
+
+tasks.withType<Test>().configureEach {
+    testLogging {
+        events("failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
 }
