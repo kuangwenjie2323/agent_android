@@ -114,7 +114,7 @@ class MainActivity : ComponentActivity() {
             }
         } catch (_: Exception) { /* Try the default browser below. */ }
         try {
-            startActivity(Intent(Intent.ACTION_VIEW, uri))
+            startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
         } catch (_: Exception) { settings.browserUnavailable() }
     }
 }
