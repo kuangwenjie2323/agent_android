@@ -238,7 +238,7 @@
     <string name="auth_unlocked">Saved sign-in could not be unlocked. Sign in again.</string>
     <string name="auth_save">Sign-in could not be saved securely. Sign in again.</string>
     <string name="auth_failed">Could not complete sign-in. Start again.</string>
-    <string name="auth_browser">A browser with Custom Tabs is required. Install or enable Chrome and try again.</string>
+    <string name="auth_browser">Could not open a browser. Install or enable a browser and try again.</string>
     <string name="auth_pending_revoke">Signed out on this phone. Remote revocation is pending.</string>
     <string name="auth_revocation_failed">Signed out on this phone. Remote revocation could not be confirmed; use Account security to revoke this device.</string>
     <string name="auth_signed_out">Signed out.</string>

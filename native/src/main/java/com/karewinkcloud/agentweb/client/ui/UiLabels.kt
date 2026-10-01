@@ -87,7 +87,7 @@ import com.karewinkcloud.agentweb.client.core.*
         "Your session has expired. Sign in again." -> S.auth_expired
         "Saved sign-in could not be unlocked. Sign in again." -> S.auth_unlocked
         "Sign-in could not be saved securely. Sign in again." -> S.auth_save
-        "A browser with Custom Tabs is required. Install or enable Chrome and try again." -> S.auth_browser
+        "Could not open a browser. Install or enable a browser and try again." -> S.auth_browser
         "Signed out on this phone. Remote revocation is pending." -> S.auth_pending_revoke
         "Signed out on this phone. Remote revocation could not be confirmed; use Account security to revoke this device." -> S.auth_revocation_failed
         "Signed out." -> S.auth_signed_out

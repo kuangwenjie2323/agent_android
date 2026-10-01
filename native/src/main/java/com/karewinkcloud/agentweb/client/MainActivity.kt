@@ -103,11 +103,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openBrowser(url: String) {
+        val uri = Uri.parse(url)
         try {
             val browser = CustomTabsClient.getPackageName(this, listOf("com.android.chrome"))
-                ?: return settings.browserUnavailable()
-            CustomTabsIntent.Builder().setShowTitle(true).build().apply { intent.setPackage(browser) }
-                .launchUrl(this, Uri.parse(url))
+            if (browser != null) {
+                CustomTabsIntent.Builder().setShowTitle(true).build().apply { intent.setPackage(browser) }
+                    .launchUrl(this, uri)
+                return
+            }
+        } catch (_: Exception) { /* Try the default browser below. */ }
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri))
         } catch (_: Exception) { settings.browserUnavailable() }
     }
 }
