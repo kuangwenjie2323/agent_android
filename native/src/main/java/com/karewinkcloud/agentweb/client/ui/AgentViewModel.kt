@@ -279,7 +279,9 @@ class AgentViewModel(
             connection = if (conversation.running) Connection.CONNECTING else null,
             attachments = attachmentDrafts[conversation.id].orEmpty(),
             pendingQueue = unresolvedQueues[conversation.id], queueUncertain = unresolvedQueues.containsKey(conversation.id), loading = !fresh)) }
-        sessionJob = viewModelScope.launch { loadAndFollow(owner, applyChoice = true) }
+        // Creation only stores agent/model; its empty detail has default effort and
+        // permissions. Keep the user's selection for the first send in a fresh chat.
+        sessionJob = viewModelScope.launch { loadAndFollow(owner, applyChoice = !fresh) }
     }
     fun back() {
         saveDraft(); generation++; attachmentScope = newControlId(); sessionJob?.cancel()

@@ -121,6 +121,19 @@ class AgentViewModelTest {
         vm.reload(); runCurrent(); vm.selectProject(null); runCurrent()
         assertEquals(1, repo.createCalls)
     }
+    @Test fun newChatKeepsSelectedEffortAndPermissionsForFirstSend() = modelTest {
+        repo.models = listOf("model", "next")
+        val choice = ModelChoice("a", "next", "high", "plan")
+        val blank = conversation("new").copy(choice = ModelChoice("a", "next"))
+        repo.create = { blank }
+        repo.getDetail = { _, _ -> detail("new").copy(conversation = blank) }
+        runCurrent()
+        vm.choose(choice)
+        vm.newChat(); runCurrent()
+        assertEquals(choice, vm.state.value.choice)
+        vm.draft("hello"); vm.send(); runCurrent()
+        assertEquals(choice, repo.followCalls.last { it.third != null }.third!!.choice)
+    }
     @Test fun newChatIsSingleFlightAndCannotHijackLaterNavigation() = modelTest {
         runCurrent()
         val pending = CompletableDeferred<Conversation>()
