@@ -1,8 +1,10 @@
 package com.karewinkcloud.agentweb.client.ui
 
+import android.content.res.Resources
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -12,8 +14,17 @@ import com.karewinkcloud.agentweb.client.R
 import com.karewinkcloud.agentweb.client.R.string as S
 import com.karewinkcloud.agentweb.client.core.*
 
-@Composable internal fun tr(id: Int, vararg args: Any): String = stringResource(id, *args)
-@Composable internal fun countLabel(id: Int, count: Int): String = pluralStringResource(id, count, count)
+// Dialog windows supply their own Android resource locals. This app local keeps
+// the selected language available in their child compositions too.
+internal val LocalAppResources = staticCompositionLocalOf<Resources?> { null }
+
+@Composable internal fun tr(id: Int, vararg args: Any): String {
+    val resources = LocalAppResources.current
+    return if (args.isEmpty()) resources?.getString(id) ?: stringResource(id)
+        else resources?.getString(id, *args) ?: stringResource(id, *args)
+}
+@Composable internal fun countLabel(id: Int, count: Int): String =
+    LocalAppResources.current?.getQuantityString(id, count, count) ?: pluralStringResource(id, count, count)
 @Composable internal fun AppIcon(icon: Int, description: String? = null) {
     Icon(painterResource(icon), description, Modifier.size(20.dp))
 }
@@ -65,7 +76,7 @@ import com.karewinkcloud.agentweb.client.core.*
     return id?.let { tr(it) } ?: input.title
 }
 
-/** Transport text remains data; local status/error copy follows the system locale. */
+/** Transport text remains data; local status/error copy follows the selected app locale. */
 @Composable internal fun localMessage(message: String): String {
     val resource = when (message) {
         "passkey_none" -> S.passkey_none

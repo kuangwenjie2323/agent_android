@@ -79,7 +79,8 @@ class MainActivity : ComponentActivity() {
             }
             val passkey = remember(this) { AndroidPasskeyProvider(this) }
             val chatMedia = remember(connection) { ChatMediaStore(HttpAgentRepository(connection.origin, settings.store), cacheDir) }
-            CompositionLocalProvider(LocalContext provides localized, LocalConfiguration provides localized.resources.configuration, LocalActivity provides this,
+            CompositionLocalProvider(LocalContext provides localized, LocalConfiguration provides localized.resources.configuration,
+                LocalAppResources provides localized.resources, LocalActivity provides this,
                 // The localized context no longer resolves to this Activity, so the owners that
                 // Compose would otherwise find through LocalContext must be provided explicitly.
                 LocalActivityResultRegistryOwner provides this, LocalOnBackPressedDispatcherOwner provides this) {

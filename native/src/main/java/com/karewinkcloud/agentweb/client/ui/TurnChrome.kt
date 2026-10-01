@@ -9,7 +9,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
@@ -86,7 +85,7 @@ fun traceDurationMs(blocks: List<ChatBlock>): Long? {
 internal fun TurnFooter(message: ChatMessage) {
     val steps = message.blocks.count { it is ChatBlock.Tool || it is ChatBlock.Thought }
     val footer = turnFooter(message.usage, traceDurationMs(message.blocks), steps,
-        FooterLabels(stringResource(S.turn_input), stringResource(S.turn_output), stringResource(if (steps == 1) S.turn_one_step else S.turn_steps)))
+        FooterLabels(tr(S.turn_input), tr(S.turn_output), tr(if (steps == 1) S.turn_one_step else S.turn_steps)))
     if (footer.isNotEmpty()) Text(footer, style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
