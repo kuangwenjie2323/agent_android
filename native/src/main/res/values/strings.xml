@@ -56,6 +56,7 @@
     <string name="route_api">API</string>
     <string name="context_hint">%1$s · %2$s context</string>
     <string name="effort">Reasoning effort</string>
+    <string name="effort_value">Effort: %1$s</string>
     <string name="effort_default">Default</string>
     <string name="effort_none">None</string>
     <string name="effort_minimal">Minimal</string>
@@ -66,6 +67,7 @@
     <string name="effort_max">Maximum</string>
     <string name="effort_ultra">Ultra</string>
     <string name="permission">Permissions</string>
+    <string name="permission_value">Permission: %1$s</string>
     <string name="permission_auto">Auto</string>
     <string name="permission_plan">Plan</string>
     <string name="permission_full">Full access</string>
@@ -238,7 +240,7 @@
     <string name="auth_unlocked">Saved sign-in could not be unlocked. Sign in again.</string>
     <string name="auth_save">Sign-in could not be saved securely. Sign in again.</string>
     <string name="auth_failed">Could not complete sign-in. Start again.</string>
-    <string name="auth_browser">A browser with Custom Tabs is required. Install or enable Chrome and try again.</string>
+    <string name="auth_browser">Could not open a browser. Install or enable a browser and try again.</string>
     <string name="auth_pending_revoke">Signed out on this phone. Remote revocation is pending.</string>
     <string name="auth_revocation_failed">Signed out on this phone. Remote revocation could not be confirmed; use Account security to revoke this device.</string>
     <string name="auth_signed_out">Signed out.</string>

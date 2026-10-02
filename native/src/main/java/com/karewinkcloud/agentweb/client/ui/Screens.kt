@@ -15,6 +15,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -206,6 +207,11 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
             }
         }
     }
+    chat.browserError?.let { error ->
+        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            ErrorBlock(error, vm::dismissBrowserError, tr(S.close))
+        }
+    }
     chat.conversation.lineage?.let { lineage ->
         val parentTitle = lineage.parentTitle?.takeIf { it.isNotBlank() }
             ?: state.conversations.find { it.id == lineage.parentConversationId }?.let { conversationTitle(it) }
@@ -327,53 +333,84 @@ private fun Composer(chat: ChatState, state: ClientState, vm: AgentViewModel, ma
                 AppIcon(if (chat.running) R.drawable.aw_stop else R.drawable.aw_send, tr(if (chat.running) S.stop else S.send))
             }
         }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (agent?.supportsEffort == true) ComposerChip(tr(S.effort_value, effortLabel(state.choice.effort)),
+                onModels, Modifier.weight(1f))
+            ComposerChip(tr(S.permission_value, permissionLabel(state.choice.permission)), onModels, Modifier.weight(1f))
+        }
     }
 }
 
 @Composable
 internal fun ModelSheet(agents: List<Agent>, choice: ModelChoice, onChoice: (ModelChoice) -> Unit, onRefresh: () -> Unit, onClose: () -> Unit) {
-    ModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.fillMaxWidth().fillMaxHeight(.88f)) {
-            Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(tr(S.model_settings), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                ActionIcon(R.drawable.aw_check, tr(S.done), onClick = onClose)
-            }
-            LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                item("controls") {
-                    val agent = agents.find { it.id == choice.agent }
-                    if (agent?.supportsEffort == true) {
-                        Text(tr(S.effort), style = MaterialTheme.typography.labelMedium)
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(listOf("default") + (agent.effortLevels[choice.model] ?: listOf("low", "medium", "high", "xhigh", "max"))) { value ->
-                                FilterChip((choice.effort ?: "default") == value, { onChoice(choice.copy(effort = value.takeUnless { it == "default" })) },
-                                    label = { Text(effortLabel(value)) }, modifier = Modifier.heightIn(min = 48.dp))
-                            }
-                        }
+    AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
+        BoxWithConstraints(Modifier.fillMaxWidth().fillMaxHeight(.88f)) {
+            val pinControls = maxHeight >= 480.dp * LocalDensity.current.fontScale
+            val visibleAgents = agents.filter { it.enabled }
+            val modelListState = rememberLazyListState()
+            var positioned by rememberSaveable { mutableStateOf(false) }
+            LaunchedEffect(visibleAgents, pinControls) {
+                if (!positioned && visibleAgents.isNotEmpty()) {
+                    // Keep compact layouts at the controls; otherwise reveal the current
+                    // model once, without moving the list again when a choice changes.
+                    val selectedAgent = visibleAgents.indexOfFirst { it.id == choice.agent }
+                    if (pinControls && selectedAgent >= 0) {
+                        val modelIndex = visibleAgents[selectedAgent].models.indexOf(choice.model)
+                        val groupStart = visibleAgents.take(selectedAgent).sumOf { 1 + it.models.size }
+                        modelListState.scrollToItem(groupStart + if (modelIndex > 0) 1 + modelIndex else 0)
                     }
-                    Text(tr(S.permission), style = MaterialTheme.typography.labelMedium)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(listOf("auto", "plan", "full")) { permission -> FilterChip(choice.permission == permission,
-                            { onChoice(choice.copy(permission = permission)) }, label = { Text(permissionLabel(permission)) }, modifier = Modifier.heightIn(min = 48.dp)) }
-                    }
-                    Text(tr(when { choice.permission == "full" -> S.permission_full_hint; choice.permission == "plan" -> S.permission_plan_hint
-                        choice.agent == "grok" -> S.permission_grok_hint; else -> S.permission_auto_hint }), style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    HorizontalDivider(Modifier.padding(vertical = 12.dp))
+                    positioned = true
                 }
-                if (agents.isEmpty()) item { TextButton(onRefresh, Modifier.heightIn(min = 48.dp)) { Text(tr(S.refresh)) } }
-                agents.filter { it.enabled }.forEach { agent ->
-                    item("agent-${agent.id}") { Text(agent.name, Modifier.padding(top = 12.dp).semantics { heading() },
-                        style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    items(agent.models, key = { "${agent.id}-$it" }) { model ->
-                        ChoiceRow(agent.label(model), choice.agent == agent.id && choice.model == model, agent.available,
-                            if (!agent.available) tr(S.model_unavailable) else modelHint(agent, model)) {
-                            val efforts = agent.effortLevels[model]
-                            onChoice(choice.copy(agent = agent.id, model = model, effort = choice.effort.takeIf { agent.supportsEffort && (efforts == null || it in efforts) }))
+            }
+            Column(Modifier.fillMaxSize()) {
+                Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(tr(S.model_settings), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                    ActionIcon(R.drawable.aw_check, tr(S.done), onClick = onClose)
+                }
+                val agent = agents.find { it.id == choice.agent }
+                if (pinControls) ModelChoiceControls(agent, choice, onChoice)
+                LazyColumn(state = modelListState, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (!pinControls) item("controls") { ModelChoiceControls(agent, choice, onChoice) }
+                    if (agents.isEmpty()) item { TextButton(onRefresh, Modifier.heightIn(min = 48.dp)) { Text(tr(S.refresh)) } }
+                    visibleAgents.forEach { agent ->
+                        item("agent-${agent.id}") { Text(agent.name, Modifier.padding(top = 12.dp).semantics { heading() },
+                            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        items(agent.models, key = { "${agent.id}-$it" }) { model ->
+                            ChoiceRow(agent.label(model), choice.agent == agent.id && choice.model == model, agent.available,
+                                if (!agent.available) tr(S.model_unavailable) else modelHint(agent, model)) {
+                                val efforts = agent.effortLevels[model]
+                                onChoice(choice.copy(agent = agent.id, model = model, effort = choice.effort.takeIf { agent.supportsEffort && (efforts == null || it in efforts) }))
+                            }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ModelChoiceControls(agent: Agent?, choice: ModelChoice, onChoice: (ModelChoice) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        if (agent?.supportsEffort == true) {
+            Text(tr(S.effort), style = MaterialTheme.typography.labelMedium)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(listOf("default") + (agent.effortLevels[choice.model] ?: listOf("low", "medium", "high", "xhigh", "max"))) { value ->
+                    FilterChip((choice.effort ?: "default") == value, { onChoice(choice.copy(effort = value.takeUnless { it == "default" })) },
+                        label = { Text(effortLabel(value)) }, modifier = Modifier.heightIn(min = 48.dp))
+                }
+            }
+        }
+        Text(tr(S.permission), style = MaterialTheme.typography.labelMedium)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(listOf("auto", "plan", "full")) { permission -> FilterChip(choice.permission == permission,
+                { onChoice(choice.copy(permission = permission)) }, label = { Text(permissionLabel(permission)) }, modifier = Modifier.heightIn(min = 48.dp)) }
+        }
+        Text(tr(when { choice.permission == "full" -> S.permission_full_hint; choice.permission == "plan" -> S.permission_plan_hint
+            choice.agent == "grok" -> S.permission_grok_hint; else -> S.permission_auto_hint }), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        HorizontalDivider(Modifier.padding(vertical = 12.dp))
     }
 }
 

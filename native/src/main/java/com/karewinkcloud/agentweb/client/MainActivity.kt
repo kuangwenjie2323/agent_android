@@ -79,11 +79,16 @@ class MainActivity : ComponentActivity() {
             }
             val passkey = remember(this) { AndroidPasskeyProvider(this) }
             val chatMedia = remember(connection) { ChatMediaStore(HttpAgentRepository(connection.origin, settings.store), cacheDir) }
-            CompositionLocalProvider(LocalContext provides localized, LocalConfiguration provides localized.resources.configuration, LocalActivity provides this,
+            CompositionLocalProvider(LocalContext provides localized, LocalConfiguration provides localized.resources.configuration,
+                LocalAppResources provides localized.resources, LocalActivity provides this,
                 // The localized context no longer resolves to this Activity, so the owners that
                 // Compose would otherwise find through LocalContext must be provided explicitly.
                 LocalActivityResultRegistryOwner provides this, LocalOnBackPressedDispatcherOwner provides this) {
-                AgentWebTheme(preferences.theme) { ChatMediaHost(chatMedia, ::openBrowser) { AgentWebApp(chat, settings, studio, ::openBrowser, passkey) } }
+                AgentWebTheme(preferences.theme) {
+                    ChatMediaHost(chatMedia, { url -> openBrowser(url, chat::browserUnavailable) }) {
+                        AgentWebApp(chat, settings, studio, { url -> openBrowser(url, settings::browserUnavailable) }, passkey)
+                    }
+                }
             }
         }
     }
@@ -102,13 +107,19 @@ class MainActivity : ComponentActivity() {
         if (callback != null) settings.callback(callback)
     }
 
-    private fun openBrowser(url: String) {
+    private fun openBrowser(url: String, onUnavailable: () -> Unit) {
+        val uri = Uri.parse(url)
         try {
             val browser = CustomTabsClient.getPackageName(this, listOf("com.android.chrome"))
-                ?: return settings.browserUnavailable()
-            CustomTabsIntent.Builder().setShowTitle(true).build().apply { intent.setPackage(browser) }
-                .launchUrl(this, Uri.parse(url))
-        } catch (_: Exception) { settings.browserUnavailable() }
+            if (browser != null) {
+                CustomTabsIntent.Builder().setShowTitle(true).build().apply { intent.setPackage(browser) }
+                    .launchUrl(this, uri)
+                return
+            }
+        } catch (_: Exception) { /* Try the default browser below. */ }
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
+        } catch (_: Exception) { onUnavailable() }
     }
 }
 
