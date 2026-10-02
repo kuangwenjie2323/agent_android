@@ -346,6 +346,22 @@ internal fun ModelSheet(agents: List<Agent>, choice: ModelChoice, onChoice: (Mod
     AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
         BoxWithConstraints(Modifier.fillMaxWidth().fillMaxHeight(.88f)) {
             val pinControls = maxHeight >= 480.dp * LocalDensity.current.fontScale
+            val visibleAgents = agents.filter { it.enabled }
+            val modelListState = rememberLazyListState()
+            var positioned by rememberSaveable { mutableStateOf(false) }
+            LaunchedEffect(visibleAgents, pinControls) {
+                if (!positioned && visibleAgents.isNotEmpty()) {
+                    // Keep compact layouts at the controls; otherwise reveal the current
+                    // model once, without moving the list again when a choice changes.
+                    val selectedAgent = visibleAgents.indexOfFirst { it.id == choice.agent }
+                    if (pinControls && selectedAgent >= 0) {
+                        val modelIndex = visibleAgents[selectedAgent].models.indexOf(choice.model)
+                        val groupStart = visibleAgents.take(selectedAgent).sumOf { 1 + it.models.size }
+                        modelListState.scrollToItem(groupStart + if (modelIndex > 0) 1 + modelIndex else 0)
+                    }
+                    positioned = true
+                }
+            }
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(tr(S.model_settings), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
@@ -353,11 +369,11 @@ internal fun ModelSheet(agents: List<Agent>, choice: ModelChoice, onChoice: (Mod
                 }
                 val agent = agents.find { it.id == choice.agent }
                 if (pinControls) ModelChoiceControls(agent, choice, onChoice)
-                LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                LazyColumn(state = modelListState, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (!pinControls) item("controls") { ModelChoiceControls(agent, choice, onChoice) }
                     if (agents.isEmpty()) item { TextButton(onRefresh, Modifier.heightIn(min = 48.dp)) { Text(tr(S.refresh)) } }
-                    agents.filter { it.enabled }.forEach { agent ->
+                    visibleAgents.forEach { agent ->
                         item("agent-${agent.id}") { Text(agent.name, Modifier.padding(top = 12.dp).semantics { heading() },
                             style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         items(agent.models, key = { "${agent.id}-$it" }) { model ->
