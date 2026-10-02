@@ -95,7 +95,7 @@ private fun CreationTile(job: ComfyJob, title: String, vm: ComfyViewModel, onCli
 @Composable
 private fun CreationDetail(state: ComfyState, vm: ComfyViewModel, onClose: () -> Unit) {
     val job = state.selected ?: return
-    ModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+    AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item("title") { Text(state.workflows.find { it.id == job.workflowId }?.title ?: tr(S.job_detail), style = MaterialTheme.typography.titleLarge) }
             item("status") {
@@ -168,7 +168,7 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
 private fun CreationSettings(state: ComfyState, vm: ComfyViewModel, onClose: () -> Unit) {
     var choosingWorkflow by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
-    ModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
+    AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.9f)) {
             Row(Modifier.padding(start = 24.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(tr(S.creation_settings), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)

@@ -19,6 +19,7 @@ data class ChatState(
     val loading: Boolean = true, val loadingOlder: Boolean = false,
     val draft: String = "", val live: TurnState? = null,
     val connection: Connection? = null, val error: ClientError? = null,
+    val browserError: ClientError? = null,
     val controlBusy: Boolean = false, val stopRequested: Boolean = false,
     val pendingQueue: QueueRequest? = null, val queueUncertain: Boolean = false,
     val liveModel: String? = null, val beforeSendId: Long = 0, val revealing: Boolean = false,
@@ -292,6 +293,11 @@ class AgentViewModel(
         if (state.value.claudeVisible) refreshClaudeSessions() else refresh()
     }
     private fun saveDraft() { state.value.chat?.let { drafts[it.conversation.id] = it.draft; attachmentDrafts[it.conversation.id] = it.attachments } }
+    fun browserUnavailable() {
+        mutable.update { it.copy(chat = it.chat?.copy(browserError =
+            ClientError("Could not open a browser. Install or enable a browser and try again."))) }
+    }
+    fun dismissBrowserError() { mutable.update { it.copy(chat = it.chat?.copy(browserError = null)) } }
     fun draft(text: String) { mutable.update { it.copy(chat = it.chat?.copy(draft = text)) }; saveDraft() }
     fun attachmentOwner() = attachmentScope
     private fun ownsAttachments(owner: String) = owner == attachmentScope && state.value.chat != null

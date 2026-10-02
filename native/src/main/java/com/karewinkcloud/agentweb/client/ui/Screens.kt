@@ -207,6 +207,11 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
             }
         }
     }
+    chat.browserError?.let { error ->
+        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            ErrorBlock(error, vm::dismissBrowserError, tr(S.close))
+        }
+    }
     chat.conversation.lineage?.let { lineage ->
         val parentTitle = lineage.parentTitle?.takeIf { it.isNotBlank() }
             ?: state.conversations.find { it.id == lineage.parentConversationId }?.let { conversationTitle(it) }
@@ -338,7 +343,7 @@ private fun Composer(chat: ChatState, state: ClientState, vm: AgentViewModel, ma
 
 @Composable
 internal fun ModelSheet(agents: List<Agent>, choice: ModelChoice, onChoice: (ModelChoice) -> Unit, onRefresh: () -> Unit, onClose: () -> Unit) {
-    ModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
+    AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
         BoxWithConstraints(Modifier.fillMaxWidth().fillMaxHeight(.88f)) {
             val pinControls = maxHeight >= 480.dp * LocalDensity.current.fontScale
             Column(Modifier.fillMaxSize()) {

@@ -45,6 +45,29 @@ class AgentViewModelTest {
         vm.open(conversation("one")); runCurrent()
         assertEquals("first draft", vm.state.value.chat!!.draft)
     }
+    @Test fun browserFailureKeepsChatDraftAndRequestErrorAndCanBeDismissed() = modelTest {
+        vm.open(conversation("one")); runCurrent(); vm.draft("unsent draft")
+        vm.attachmentFailure(vm.attachmentOwner(), "Attachment could not be read")
+        val before = vm.state.value.chat!!
+        vm.browserUnavailable()
+        val failed = vm.state.value.chat!!
+        assertEquals("Could not open a browser. Install or enable a browser and try again.", failed.browserError!!.message)
+        assertEquals(before.error, failed.error)
+        assertEquals(before.draft, failed.draft)
+        assertEquals(before.messages, failed.messages)
+        assertEquals(0, repo.sendCalls)
+        vm.dismissBrowserError()
+        assertNull(vm.state.value.chat!!.browserError)
+        assertEquals(before, vm.state.value.chat)
+    }
+    @Test fun browserFailureDoesNotFollowNavigationToAnotherChat() = modelTest {
+        vm.open(conversation("one")); runCurrent(); vm.browserUnavailable()
+        vm.open(conversation("two")); runCurrent()
+        assertNull(vm.state.value.chat!!.browserError)
+        vm.back(); runCurrent(); vm.browserUnavailable()
+        assertNull(vm.state.value.chat)
+        assertNull(vm.state.value.error)
+    }
     @Test fun attachmentsKeepDraftOwnershipAndStalePickerCannotCrossNavigation() = modelTest {
         vm.open(conversation("one")); runCurrent()
         val file = encodeAttachment("a.txt", "text/plain", byteArrayOf(1), AttachmentKind.FILE)
