@@ -26,7 +26,9 @@ import kotlinx.coroutines.delay
 fun ErrorBlock(error: ClientError, onRetry: (() -> Unit)? = null, action: String? = null) {
     Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.errorContainer,
         contentColor = MaterialTheme.colorScheme.onErrorContainer) {
-        Column(Modifier.fillMaxWidth().padding(12.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
+        Column(Modifier.fillMaxWidth().padding(16.dp).semantics { liveRegion = LiveRegionMode.Polite },
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(tr(S.error_title), style = MaterialTheme.typography.titleSmall)
             Text(when (error.code) {
                 "stream_mismatch" -> tr(S.chat_stream_error)
                 "fork_project_required", "project_not_found" -> tr(S.fork_project_required)
@@ -39,9 +41,9 @@ fun ErrorBlock(error: ClientError, onRetry: (() -> Unit)? = null, action: String
                 "invalid_protocol_range", "protocol_major_mismatch", "protocol_version_mismatch" -> tr(S.chat_protocol_error)
                 else -> localMessage(error.message)
             }, style = MaterialTheme.typography.bodyMedium)
-            if (error.code != null) Text(error.code, style = MaterialTheme.typography.bodySmall)
             if (error.retryable == false) Text(tr(S.not_retried), style = MaterialTheme.typography.bodySmall)
-            if (onRetry != null) TextButton(onClick = onRetry, modifier = Modifier.heightIn(min = 48.dp)) { Text(action ?: tr(S.reconnect)) }
+            if (onRetry != null) TextButton(onClick = onRetry, modifier = Modifier.heightIn(min = 48.dp),
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onErrorContainer)) { Text(action ?: tr(S.reconnect)) }
         }
     }
 }

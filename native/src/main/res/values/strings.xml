@@ -320,4 +320,14 @@
     <string name="fork_idempotency_conflict">This request conflicts with an earlier variant. Reload to check the conversation.</string>
     <string name="fork_request_failed">The variant could not be confirmed. Reload to check before trying again.</string>
     <string name="turn_one_step">%1$d step</string>
+
+    <string name="conversations_subtitle">Continue an idea. Start something new.</string>
+    <string name="studio_subtitle">Turn ideas into images, video and audio.</string>
+    <string name="settings_subtitle">Account, appearance and connection</string>
+    <string name="search_hint">Try a different keyword or clear your search.</string>
+    <string name="clear_search">Clear search</string>
+    <string name="creation_empty_hint">Describe your idea below, then choose a format to create your first work.</string>
+    <string name="creation_prompt">Your idea</string>
+    <string name="claude_empty_hint">Your desktop sessions will appear here when they are available. Refresh to check again.</string>
+    <string name="error_title">Unable to complete this action</string>
 </resources>

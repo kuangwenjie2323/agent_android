@@ -6,17 +6,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// Use only stable Credential Manager artifacts already verified in this Gradle cache.
-// An offline build without them retains explicit browser fallback; no guessed version.
-val credentialCache = File(gradle.gradleUserHomeDir, "caches/modules-2/files-2.1/androidx.credentials")
-val credentialVersion = listOf("credentials", "credentials-play-services-auth").map { artifact ->
-    File(credentialCache, artifact).listFiles().orEmpty().filter { version ->
-        version.name.matches(Regex("[0-9]+\\.[0-9]+\\.[0-9]+")) &&
-            version.walkTopDown().any { it.name == "$artifact-${version.name}.aar" }
-    }.map { it.name }.toSet()
-}.reduce { a, b -> a.intersect(b) }.maxWithOrNull(compareBy<String>(
-    { it.substringBefore('.').toInt() }, { it.split('.')[1].toInt() }, { it.substringAfterLast('.').toInt() }))
-if (credentialVersion == null) logger.warn("Native passkeys unavailable: cache androidx.credentials:credentials and credentials-play-services-auth (same stable version) before building. Browser sign-in remains available.")
+// Pin both artifacts so native passkey support does not depend on local cache contents.
+val credentialVersion = "1.6.0"
 
 // The same external-only mechanism as :app. Debug uses Android's default key.
 val signingVariable = "AGENTWEB_ANDROID_KEYSTORE_PROPERTIES"
@@ -93,7 +84,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
     }
-    sourceSets.getByName("main").kotlin.srcDir(if (credentialVersion != null) "src/passkey/java" else "src/passkeyUnavailable/java")
+    sourceSets.getByName("main").kotlin.srcDir("src/passkey/java")
     sourceSets.getByName("test").resources.srcDir("../conformance/fixtures")
     testOptions.unitTests.isReturnDefaultValues = true
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -101,10 +92,8 @@ android {
 
 
 dependencies {
-    credentialVersion?.let { version ->
-        implementation("androidx.credentials:credentials:$version")
-        implementation("androidx.credentials:credentials-play-services-auth:$version")
-    }
+    implementation("androidx.credentials:credentials:$credentialVersion")
+    implementation("androidx.credentials:credentials-play-services-auth:$credentialVersion")
     val composeBom = platform("androidx.compose:compose-bom:2025.08.01")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")

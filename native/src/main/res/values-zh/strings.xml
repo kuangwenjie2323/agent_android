@@ -316,4 +316,14 @@
     <string name="fork_idempotency_conflict">此请求与之前的变体冲突，请重新加载并检查对话。</string>
     <string name="fork_request_failed">暂时无法确认变体结果，请重新加载并检查后再试。</string>
     <string name="turn_one_step">%1$d 步</string>
+
+    <string name="conversations_subtitle">继续上次的灵感，或开始新的对话。</string>
+    <string name="studio_subtitle">把灵感变成图像、视频和音频。</string>
+    <string name="settings_subtitle">账户、外观与连接</string>
+    <string name="search_hint">试试其他关键词，或清除搜索。</string>
+    <string name="clear_search">清除搜索</string>
+    <string name="creation_empty_hint">在下方描述你的想法，选择类型后开始第一次创作。</string>
+    <string name="creation_prompt">创作描述</string>
+    <string name="claude_empty_hint">桌面端的会话可用后会显示在这里，你可以刷新查看。</string>
+    <string name="error_title">暂时无法完成操作</string>
 </resources>

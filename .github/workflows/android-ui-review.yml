@@ -1,0 +1,47 @@
+name: Android UI review
+
+on:
+  push:
+    branches: ["review/android-ui-*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gradle/actions/wrapper-validation@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-36 build-tools;36.1.0"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test, assemble and lint
+        run: ./gradlew --no-daemon :native:testDebugUnitTest :native:assembleDebug :native:lintDebug
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-android-ui-debug
+          path: native/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-verification-reports
+          path: |
+            native/build/reports/
+            native/build/test-results/
+          if-no-files-found: ignore
