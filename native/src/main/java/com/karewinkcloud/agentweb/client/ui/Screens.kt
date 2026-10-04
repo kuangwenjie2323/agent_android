@@ -56,6 +56,12 @@ fun AgentWebApp(vm: AgentViewModel, settings: SettingsViewModel, studio: ComfyVi
         BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).imePadding()) {
             val availableHeight = maxHeight
             val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+            // Landscape phones are short: move navigation to a side rail so content keeps the height.
+            val sideNavigation = maxWidth > maxHeight && maxHeight < 480.dp
+            val showNavigation = !keyboardVisible && state.chat == null && state.claudePreview == null
+            Row(Modifier.fillMaxSize()) {
+            if (sideNavigation && showNavigation) AppNavigationRail(state.tab, vm::selectTab)
+            Box(Modifier.weight(1f).fillMaxHeight()) {
             Column(Modifier.widthIn(max = 840.dp).fillMaxSize().align(Alignment.TopCenter)) {
                 Column(Modifier.weight(1f)) {
                     when {
@@ -73,11 +79,13 @@ fun AgentWebApp(vm: AgentViewModel, settings: SettingsViewModel, studio: ComfyVi
                         state.claudePreview != null -> ClaudeHistoryScreen(state.claudePreview!!, vm)
                         state.tab == AppTab.CLAUDE -> ClaudeSessionsScreen(state.claude, vm)
                         // Reserve input space as well as the fixed 48dp action row when the IME is open.
-                        state.tab == AppTab.CREATE -> ComfyScreen(studio, (availableHeight - 176.dp).coerceIn(160.dp, 320.dp))
+                        state.tab == AppTab.CREATE -> ComfyScreen(studio, (availableHeight * .45f).coerceIn(150.dp, 320.dp))
                         else -> ConversationList(state, vm)
                     }
                 }
-                if (!keyboardVisible && state.chat == null && state.claudePreview == null) AppNavigation(state.tab, vm::selectTab)
+                if (showNavigation && !sideNavigation) AppNavigation(state.tab, vm::selectTab)
+            }
+            }
             }
         }
     }
@@ -90,16 +98,33 @@ internal fun AppNavigation(selected: AppTab, onSelect: (AppTab) -> Unit) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp, windowInsets = WindowInsets(0, 0, 0, 0)) {
             AppTab.entries.forEach { tab ->
-                val label = when (tab) { AppTab.CONVERSATIONS -> tr(S.conversations); AppTab.CREATE -> tr(S.studio)
-                    AppTab.CLAUDE -> "Claude Code"; AppTab.SETTINGS -> tr(S.settings) }
-                NavigationBarItem(selected == tab, { onSelect(tab) }, icon = {
-                    AppIcon(when (tab) { AppTab.CONVERSATIONS -> R.drawable.aw_chat; AppTab.CREATE -> R.drawable.aw_create
-                        AppTab.CLAUDE -> R.drawable.aw_terminal; AppTab.SETTINGS -> R.drawable.aw_settings })
-                }, label = { Text(label, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium) })
+                NavigationBarItem(selected == tab, { onSelect(tab) }, icon = { AppIcon(tabIcon(tab)) },
+                    label = { Text(tabLabel(tab), maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium) })
             }
         }
     }
 }
+
+@Composable
+internal fun AppNavigationRail(selected: AppTab, onSelect: (AppTab) -> Unit) {
+    Row {
+        NavigationRail(containerColor = MaterialTheme.colorScheme.surface, windowInsets = WindowInsets(0, 0, 0, 0)) {
+            Spacer(Modifier.weight(1f))
+            AppTab.entries.forEach { tab ->
+                NavigationRailItem(selected == tab, { onSelect(tab) }, icon = { AppIcon(tabIcon(tab)) },
+                    label = { Text(tabLabel(tab), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium) })
+            }
+            Spacer(Modifier.weight(1f))
+        }
+        VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    }
+}
+
+@Composable
+private fun tabLabel(tab: AppTab) = when (tab) { AppTab.CONVERSATIONS -> tr(S.conversations); AppTab.CREATE -> tr(S.studio)
+    AppTab.CLAUDE -> "Claude Code"; AppTab.SETTINGS -> tr(S.settings) }
+private fun tabIcon(tab: AppTab) = when (tab) { AppTab.CONVERSATIONS -> R.drawable.aw_chat; AppTab.CREATE -> R.drawable.aw_create
+    AppTab.CLAUDE -> R.drawable.aw_terminal; AppTab.SETTINGS -> R.drawable.aw_settings }
 
 @Composable
 internal fun Toolbar(title: String, subtitle: String? = null, onBack: (() -> Unit)? = null, onSettings: (() -> Unit)? = null,
