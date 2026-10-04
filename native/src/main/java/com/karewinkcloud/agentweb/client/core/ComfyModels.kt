@@ -109,7 +109,15 @@ data class ComfyResources(val items: List<ComfyResource>, val ready: Boolean, va
     }
 }
 data class ComfySuggestion(val workflowId: String, val probability: Double)
-data class ComfyOutput(val index: Int, val mime: String, val bytes: Long, val durationSeconds: Double? = null, val publicUrl: String? = null)
+data class ComfyOutput(val index: Int, val mime: String, val bytes: Long, val durationSeconds: Double? = null, val publicUrl: String? = null,
+    /** Cloud-storage (R2) links for the original, the 1280 preview and the 512 tile. */
+    val originalUrl: String? = null, val previewUrl: String? = null, val thumbUrl: String? = null)
+/** HTTPS links without embedded credentials; they are fetched without any of ours. */
+fun storageUrl(value: String?): String? = value?.takeIf {
+    it.length <= 2048 && runCatching { java.net.URI(it) }.getOrNull()?.let { uri ->
+        uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null
+    } == true
+}
 data class ComfyJob(val requestId: String, val workflowId: String, val status: String,
     val parameters: JsonObject = JsonObject(emptyMap()), val outputs: List<ComfyOutput> = emptyList(), val errorCode: String? = null, val jobId: String? = null, val progress: Double? = null,
     val billingChannel: String? = null, val workerState: String? = null, val queuePosition: Int? = null,
@@ -120,7 +128,8 @@ data class ComfyJob(val requestId: String, val workflowId: String, val status: S
             val id = requireNotNull(j.string("request_id")); require(validComfyId(id))
             return ComfyJob(id, j.string("workflow_id").orEmpty(), requireNotNull(j.string("status")), j.obj("parameters") ?: JsonObject(emptyMap()),
                 j.objects("outputs").map { ComfyOutput(requireNotNull(it.long("index")).toInt(), requireNotNull(it.string("mime")), it.long("bytes") ?: 0, (it["duration"] as? JsonPrimitive)?.doubleOrNull?.takeIf { d -> d.isFinite() && d >= 0 },
-                    it.string("public_url")?.takeIf { url -> url.startsWith("https://") && url.length <= 512 }) },
+                    it.string("public_url")?.takeIf { url -> url.startsWith("https://") && url.length <= 512 },
+                    storageUrl(it.string("original_url")), storageUrl(it.string("preview_url")), storageUrl(it.string("thumb_url"))) },
                 j.obj("error")?.string("code"), j.string("job_id"), (j["progress"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it in 0.0..1.0 },
                 j.string("billing_channel"), j.string("worker_state"),
                 (j["queue_position"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull?.takeIf { it in 1..Int.MAX_VALUE.toLong() }?.toInt(),

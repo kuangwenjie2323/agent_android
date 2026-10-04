@@ -141,12 +141,20 @@ class HttpAgentRepository(
     }
     /** Stream authenticated output to private disk; never load an unbounded byte array. */
     internal suspend fun download(path: String, destination: java.io.File, mime: String, maxBytes: Long,
-        onProgress: (Long, Long) -> Unit = { _, _ -> }): Unit = withContext(Dispatchers.IO) {
+        onProgress: (Long, Long) -> Unit = { _, _ -> }): Unit = fetch(request(path), destination, mime, maxBytes, onProgress)
+
+    /** Fetch a presigned cloud-storage link: no Authorization, no cookies, no redirects. */
+    internal suspend fun downloadStorage(url: String, destination: java.io.File, mime: String, maxBytes: Long,
+        onProgress: (Long, Long) -> Unit = { _, _ -> }): Unit =
+        fetch(Request.Builder().url(url).header("Connection", "close").build(), destination, mime, maxBytes, onProgress)
+
+    private suspend fun fetch(request: Request, destination: java.io.File, mime: String, maxBytes: Long,
+        onProgress: (Long, Long) -> Unit): Unit = withContext(Dispatchers.IO) {
         val owner = currentCoroutineContext()
         try {
             // Slow links (a 4K original at tens of KB/s) need minutes: bound the whole call
             // generously and fail fast only when bytes stop arriving.
-            execute(request(path), 1800, 60) { response ->
+            execute(request, 1800, 60) { response ->
                 validate(response)
                 val body = response.body ?: throw IOException("Empty media response")
                 if (body.contentType()?.toString()?.substringBefore(';') != mime || body.contentLength() > maxBytes)

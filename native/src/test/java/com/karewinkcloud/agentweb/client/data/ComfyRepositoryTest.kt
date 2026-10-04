@@ -124,6 +124,13 @@ class ComfyRepositoryTest {
         server.enqueue(MockResponse().setHeader("Content-Type", "text/html").setBody("html"))
         fails("network") { repo.download(id, ComfyOutput(0, "image/png", 4), file) }; assertFalse(file.exists())
     }
+    @Test fun cloudStorageLinksMustBePlainHttps() {
+        assertEquals("https://kaggle.karewinkcloud.com/outputs/k.png", storageUrl("https://kaggle.karewinkcloud.com/outputs/k.png"))
+        assertNull(storageUrl("http://kaggle.karewinkcloud.com/outputs/k.png"))
+        assertNull(storageUrl("https://user:secret@kaggle.karewinkcloud.com/k.png"))
+        assertNull(storageUrl("not a url"))
+        assertNull(storageUrl(null))
+    }
     @Test fun oversizedOutputRejectedBeforeDownload() = runBlocking {
         fails("too_large") { repo.download(id, ComfyOutput(0, "image/png", 65L * 1024 * 1024), temporary.newFile()) }
         assertEquals(0, server.requestCount)

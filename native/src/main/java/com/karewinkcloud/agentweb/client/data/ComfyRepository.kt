@@ -70,11 +70,18 @@ class HttpComfyRepository(private val http: HttpAgentRepository) : ComfyReposito
         require(output.mime in mediaExtensions)
         val limit = if (output.mime.startsWith("image/")) 64L * 1024 * 1024 else 256L * 1024 * 1024
         if (output.bytes > limit) throw ComfyFailure("too_large")
-        // Derive a same-origin endpoint: never forward the bearer to an output URL.
+        // Cloud-stored outputs come straight from R2; otherwise derive a same-origin endpoint
+        // (never forward the bearer to an output URL).
+        output.originalUrl?.let { return@operation http.downloadStorage(it, destination, output.mime, limit, onProgress) }
         http.download("/api/comfy/jobs/$requestId/outputs/${output.index}", destination, output.mime, limit, onProgress)
     }
     override suspend fun thumbnail(requestId: String, output: ComfyOutput, destination: File, edge: Int) = operation {
         require(validComfyId(requestId) && output.index in 0..63 && output.mime.startsWith("image/") && edge in setOf(512, 1280))
+        if (output.originalUrl != null) {
+            // Cloud-stored: previews made on the GPU live beside the original; without one, use the original.
+            val link = (if (edge == 512) output.thumbUrl ?: output.previewUrl else output.previewUrl) ?: throw ComfyFailure("unavailable")
+            return@operation http.downloadStorage(link, destination, "image/jpeg", 8L * 1024 * 1024)
+        }
         http.download("/api/comfy/jobs/$requestId/outputs/${output.index}?preview=$edge", destination, "image/jpeg", 8L * 1024 * 1024)
     }
     override suspend fun publish(requestId: String, output: ComfyOutput) = operation {
