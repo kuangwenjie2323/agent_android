@@ -47,9 +47,10 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
     LaunchedEffect(state.promptRevision) {
         if (prompt.text != state.prompt) prompt = TextFieldValue(state.prompt, androidx.compose.ui.text.TextRange(state.prompt.length))
     }
-    ScreenTitle(tr(S.studio), tr(S.studio_subtitle)) { ActionIcon(R.drawable.aw_refresh, tr(S.refresh), !state.loading && !state.submitting, vm::refresh) }
+    ScreenTitle(tr(S.studio)) { ActionIcon(R.drawable.aw_refresh, tr(S.refresh), !state.loading && !state.submitting, vm::refresh) }
     if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-    val tileWidth = 156.dp * LocalDensity.current.fontScale.coerceIn(1f, 1.5f)
+    // Two columns even on narrow (~340dp) phones; larger text or wider screens adapt.
+    val tileWidth = 136.dp * LocalDensity.current.fontScale.coerceIn(1f, 1.5f)
     LazyVerticalGrid(GridCells.Adaptive(tileWidth), Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item("recent-title", span = { GridItemSpan(maxLineSpan) }) { SectionLabel(tr(S.recent_works), Modifier.padding(bottom = 4.dp)) }
@@ -206,38 +207,11 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
     onFilter: (String, String) -> Unit, onSettings: () -> Unit, onSubmit: () -> Unit,
     onSuggestion: (String) -> Unit = {}, onSize: (ComfySize) -> Unit = {}, maxHeight: Dp = 320.dp, onGallery: () -> Unit = onSettings) {
     var kindMenu by remember { mutableStateOf(false) }
-    var channelMenu by remember { mutableStateOf(false) }
     var sizeMenu by remember { mutableStateOf(false) }
-    ComposerSurface(maxHeight) {
-        TextField(prompt, onPrompt, Modifier.fillMaxWidth(), placeholder = { Text(tr(S.creation_hint)) }, minLines = 2, maxLines = 4,
-            colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
-                focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
-        ComposerChip(state.workflow?.title ?: tr(S.workflow), onGallery,
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp), selected = true)
-        Box(Modifier.padding(horizontal = 8.dp)) {
-            ComposerChip(tr(comfyChannelResource(state.channel)), { channelMenu = true })
-            DropdownMenu(channelMenu, { channelMenu = false }) {
-                listOf("kaggle_gpu", "cloud_gpu", "partner_api").filter { channel -> state.workflows.any { it.channel == channel } }.forEach { channel ->
-                    DropdownMenuItem(text = { Text(tr(comfyChannelResource(channel))) },
-                        onClick = { onFilter(state.kind, channel); channelMenu = false })
-                }
-            }
-        }
-        if (state.channel == "kaggle_gpu") Text(tr(S.channel_kaggle_terms), Modifier.padding(horizontal = 16.dp),
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (state.suggestions.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(state.suggestions, key = { it.workflowId }) { suggestion ->
-                ComposerChip(tr(S.recommendation, state.workflows.find { it.id == suggestion.workflowId }?.title ?: suggestion.workflowId),
-                    { onSuggestion(suggestion.workflowId) }, Modifier.widthIn(max = 240.dp), selected = suggestion.workflowId == state.workflowId)
-            }
-        }
-        if (state.initialized && state.choices.isEmpty()) Text(tr(S.no_workflows), Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
-        state.workflow?.availability(state.resources)?.takeIf { it.kind != ComfyAvailabilityKind.AVAILABLE }?.let {
-            Text(availabilityLabel(it), Modifier.padding(8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        }
-        if (state.needsResources && state.resources?.ready != true) Text(tr(if (state.resourcesError) S.resources_failed else S.resources_loading),
-            Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    // The prompt scrolls; the workflow and action rows stay pinned (the channel lives in the gallery and settings).
+    ComposerSurface(maxHeight, actions = {
+        ComposerChip(state.workflow?.title ?: tr(S.workflow), onGallery, Modifier.fillMaxWidth(), selected = true)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Box {
                 ComposerChip(kindLabel(state.kind), { kindMenu = true })
                 DropdownMenu(kindMenu, { kindMenu = false }) { listOf("image", "video", "audio").forEach { kind ->
@@ -254,9 +228,27 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
                 } }
             }
             ActionIcon(R.drawable.aw_settings, tr(S.creation_settings), onClick = onSettings)
-            FilledIconButton(onSubmit, enabled = state.canSubmit, modifier = Modifier.size(48.dp)) {
-                AppIcon(R.drawable.aw_create, tr(if (state.submitting) S.submitting else S.generate))
+            val submitDescription = tr(if (state.submitting) S.submitting else S.generate)
+            FilledIconButton(onSubmit, enabled = state.canSubmit, modifier = Modifier.size(48.dp).semantics { contentDescription = submitDescription }) {
+                if (state.submitting) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                else AppIcon(R.drawable.aw_create)
             }
         }
+    }) {
+        TextField(prompt, onPrompt, Modifier.fillMaxWidth(), placeholder = { Text(tr(S.creation_hint)) }, minLines = 2, maxLines = 4,
+            colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
+                focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
+        if (state.suggestions.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(state.suggestions, key = { it.workflowId }) { suggestion ->
+                ComposerChip(tr(S.recommendation, state.workflows.find { it.id == suggestion.workflowId }?.title ?: suggestion.workflowId),
+                    { onSuggestion(suggestion.workflowId) }, Modifier.widthIn(max = 240.dp), selected = suggestion.workflowId == state.workflowId)
+            }
+        }
+        if (state.initialized && state.choices.isEmpty()) Text(tr(S.no_workflows), Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
+        state.workflow?.availability(state.resources)?.takeIf { it.kind != ComfyAvailabilityKind.AVAILABLE }?.let {
+            Text(availabilityLabel(it), Modifier.padding(8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+        if (state.needsResources && state.resources?.ready != true) Text(tr(if (state.resourcesError) S.resources_failed else S.resources_loading),
+            Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
     }
 }

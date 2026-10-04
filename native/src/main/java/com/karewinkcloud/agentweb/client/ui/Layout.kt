@@ -18,10 +18,10 @@ import com.karewinkcloud.agentweb.client.R
 
 @Composable
 internal fun ScreenTitle(title: String, subtitle: String? = null, actions: @Composable RowScope.() -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 80.dp).padding(start = 20.dp, end = 8.dp, top = 16.dp, bottom = 12.dp),
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(title, style = MaterialTheme.typography.headlineLarge, modifier = Modifier.semantics { heading() })
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
             if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -79,23 +79,20 @@ internal fun ComposerSurface(maxHeight: Dp = 320.dp, actions: (@Composable () ->
     Surface(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
         shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surface,
         shadowElevation = 2.dp, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
-        Column(Modifier.heightIn(max = maxHeight).padding(8.dp)) {
+        Column(Modifier.heightIn(max = maxHeight).padding(horizontal = 8.dp, vertical = 4.dp)) {
             Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()), content = content)
             // Keep send/stop and creation controls reachable when text, attachments or the IME grow.
-            if (actions != null) {
-                HorizontalDivider(Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                actions()
-            }
+            if (actions != null) Column(Modifier.padding(bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { actions() }
         }
     }
 }
 
 @Composable
 internal fun ComposerChip(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false) {
-    Surface(onClick, modifier = modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(16.dp),
+    Surface(onClick, modifier = modifier.heightIn(min = 40.dp), shape = RoundedCornerShape(12.dp),
         color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
         contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant) {
-        Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.weight(1f, false))

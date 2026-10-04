@@ -30,7 +30,7 @@ internal fun ColumnScope.SettingsScreen(vm: SettingsViewModel, openBrowser: (Str
     var editor by rememberSaveable { mutableStateOf<String?>(null) }
     var origin by rememberSaveable(prefs.origin) { mutableStateOf(prefs.origin) }
     val busy = saving || phase != SignInPhase.IDLE
-    ScreenTitle(tr(S.settings), tr(S.settings_subtitle))
+    ScreenTitle(tr(S.settings))
     Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
         SettingsGroup(tr(S.account)) {
             SettingsRow(auth.accountName ?: tr(S.signed_out_row),

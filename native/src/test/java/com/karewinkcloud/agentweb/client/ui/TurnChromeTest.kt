@@ -17,6 +17,10 @@ class TurnChromeTest {
         return FooterLabels(value("turn_input"), value("turn_output"), value("turn_steps"))
     }
 
+    @Test fun composerModelChipListsOnlyNonDefaultSettings() {
+        assertEquals("DS V4.1 Flash", composerModelLabel("DS V4.1 Flash", null, null))
+        assertEquals("Opus 5.5 · 高 · 只读规划", composerModelLabel("Opus 5.5", "高", "只读规划"))
+    }
     @Test fun footerUsesRealChineseResourcesAndUsageDuration() {
         assertEquals("18s · 输入 19.5k · 输出 752 · 3 步", turnFooter(TurnUsage(inputTokens = 19524, outputTokens = 752, durationMs = 18000), 5000, 3, labels("zh")))
     }

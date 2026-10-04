@@ -107,7 +107,7 @@ internal fun Toolbar(title: String, subtitle: String? = null, onBack: (() -> Uni
     Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         if (onBack != null) ActionIcon(R.drawable.aw_back, tr(S.back), onClick = onBack)
         Column(Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
+            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
             if (!subtitle.isNullOrBlank()) Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -123,7 +123,7 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
     var menu by remember { mutableStateOf(false) }
     val visibleIds by remember { derivedStateOf { list.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String } } }
     LaunchedEffect(visibleIds, state.conversations) { vm.loadPreviews(visibleIds) }
-    ScreenTitle(tr(S.conversations), tr(S.conversations_subtitle)) {
+    ScreenTitle(tr(S.conversations)) {
         Box {
             ActionIcon(R.drawable.aw_more, tr(S.more)) { menu = true }
             DropdownMenu(menu, { menu = false }) {
@@ -133,7 +133,7 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
             }
         }
     }
-    TextField(state.search, vm::search, Modifier.fillMaxWidth().padding(horizontal = 20.dp), singleLine = true,
+    TextField(state.search, vm::search, Modifier.fillMaxWidth().padding(horizontal = 16.dp), singleLine = true,
         shape = RoundedCornerShape(24.dp), placeholder = { Text(tr(S.search_conversations), style = MaterialTheme.typography.bodyMedium) },
         leadingIcon = { AppIcon(R.drawable.aw_search) },
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -143,8 +143,8 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
         trailingIcon = { if (state.search.isNotEmpty()) ActionIcon(R.drawable.aw_close, tr(S.clear_search)) { vm.search("") } })
     Box(Modifier.weight(1f)) {
         PullToRefreshBox(state.refreshing, vm::refresh) {
-            LazyColumn(state = list, contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 96.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
+            LazyColumn(state = list, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 96.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.fillMaxSize()) {
                 if (state.error != null) item("error") { ErrorBlock(state.error, vm::refresh, tr(S.refresh)) }
                 if (state.sections.isEmpty() && state.refreshing) item("loading") { LoadingState(tr(S.loading)) }
                 if (state.sections.isEmpty() && !state.refreshing && state.error == null) item("empty") {
@@ -157,7 +157,7 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
                 state.sections.forEach { section ->
                     item("group-${section.group}") { Text(tr(when(section.group) {
                         ConversationGroup.TODAY -> S.today; ConversationGroup.YESTERDAY -> S.yesterday; else -> S.older
-                    }), Modifier.padding(top = 16.dp, bottom = 4.dp).semantics { heading() },
+                    }), Modifier.padding(start = 4.dp, top = 12.dp, bottom = 4.dp).semantics { heading() },
                         style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     items(section.conversations, key = { it.id }) { conversation -> ConversationRow(conversation, state.agents) { vm.open(conversation) } }
                 }
@@ -173,14 +173,14 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
 internal fun ConversationRow(conversation: Conversation, agents: List<Agent>, onOpen: () -> Unit) {
     val model = agents.find { it.id == conversation.choice.agent }?.label(conversation.choice.model)
         ?: conversation.choice.model.ifBlank { tr(S.assistant) }
-    Surface(onClick = onOpen, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 88.dp)) {
-        Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.primaryContainer) {
-                Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { Text(modelBadge(conversation.choice), style = MaterialTheme.typography.labelMedium) }
+    Surface(onClick = onOpen, shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.background,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
+        Row(Modifier.padding(horizontal = 4.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.primaryContainer) {
+                Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { Text(modelBadge(conversation.choice), style = MaterialTheme.typography.labelSmall) }
             }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(conversationTitle(conversation), style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(conversationTitle(conversation), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("${compactModelLabel(model)}: ${plainPreview(conversation.preview).ifBlank { if (conversation.messageCount == null) "…" else tr(S.unused_chat) }}", maxLines = 1, overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 conversation.project?.takeIf { it.isNotBlank() }?.let { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -192,6 +192,10 @@ internal fun ConversationRow(conversation: Conversation, agents: List<Agent>, on
         }
     }
 }
+
+/** "Model · effort · permission", listing only non-default settings so the chip stays short. */
+internal fun composerModelLabel(model: String, effort: String?, permission: String?): String =
+    listOfNotNull(model, effort, permission).joinToString(" · ")
 
 internal fun modelBadge(choice: ModelChoice): String = when {
     choice.agent == "deepseek" || choice.model.contains("deepseek", true) -> "DS"
@@ -310,7 +314,10 @@ private fun Composer(chat: ChatState, state: ClientState, vm: AgentViewModel, ma
         if (!chat.conversation.nativeControl) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 AttachmentPicker(chat, agent?.supportsImages == true, vm)
-                ComposerChip(agent?.label(state.choice.model)?.let(::compactModelLabel) ?: tr(S.choose_model), onModels, Modifier.weight(1f), selected = true)
+                ComposerChip(agent?.label(state.choice.model)?.let { label -> composerModelLabel(compactModelLabel(label),
+                    state.choice.effort?.takeIf { agent.supportsEffort }?.let { effortLabel(it) },
+                    state.choice.permission.takeIf { it != "auto" }?.let { permissionLabel(it) }) } ?: tr(S.choose_model),
+                    onModels, Modifier.weight(1f), selected = true)
                 if (chat.queueUncertain || (chat.running && chat.hasDraft)) ActionIcon(
                     if (chat.queueUncertain) R.drawable.aw_refresh else R.drawable.aw_queue,
                     tr(if (chat.queueUncertain) S.check_queue else S.queue), !chat.controlBusy && !chat.attachmentLoading, vm::queue)
@@ -319,11 +326,6 @@ private fun Composer(chat: ChatState, state: ClientState, vm: AgentViewModel, ma
                         else chat.canSend && chat.hasDraft && agent?.available == true && !state.creating, modifier = Modifier.size(48.dp)) {
                     AppIcon(if (chat.running) R.drawable.aw_stop else R.drawable.aw_send, tr(if (chat.running) S.stop else S.send))
                 }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (agent?.supportsEffort == true) ComposerChip(tr(S.effort_value, effortLabel(state.choice.effort)),
-                    onModels, Modifier.weight(1f))
-                ComposerChip(tr(S.permission_value, permissionLabel(state.choice.permission)), onModels, Modifier.weight(1f))
             }
         }
     }) {
@@ -348,7 +350,7 @@ private fun Composer(chat: ChatState, state: ClientState, vm: AgentViewModel, ma
         if (state.creating) LoadingState(tr(S.loading))
         AttachmentChips(chat, vm)
         val messageDescription = tr(S.message)
-        TextField(chat.draft, vm::draft, Modifier.fillMaxWidth().heightIn(min = 56.dp, max = 140.dp).semantics { contentDescription = messageDescription },
+        TextField(chat.draft, vm::draft, Modifier.fillMaxWidth().heightIn(min = 48.dp, max = 140.dp).semantics { contentDescription = messageDescription },
             placeholder = { Text(tr(if (chat.running) S.followup_hint else S.message_hint)) }, maxLines = 5,
             colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
                 focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))

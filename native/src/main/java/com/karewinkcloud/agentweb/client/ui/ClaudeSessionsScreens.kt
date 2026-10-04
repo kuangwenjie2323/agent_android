@@ -5,6 +5,7 @@ import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.style.TextOverflow
@@ -23,11 +24,11 @@ private fun sessionTime(seconds: Long): String = runCatching {
 
 @Composable
 internal fun ColumnScope.ClaudeSessionsScreen(state: ClaudeListState, vm: AgentViewModel) {
-    ScreenTitle("Claude Code", tr(S.claude_subtitle)) {
+    ScreenTitle("Claude Code") {
         ActionIcon(R.drawable.aw_refresh, tr(S.refresh), !state.loading) { vm.refreshClaudeSessions() }
     }
-    LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (state.loading) item("loading") { LoadingState(tr(S.loading)) }
         if (state.error != null) item("error") { ErrorBlock(state.error, { vm.refreshClaudeSessions() }, tr(S.retry)) }
         if (!state.loading && state.error == null && state.sessions.isEmpty()) item("empty") {
@@ -35,19 +36,24 @@ internal fun ColumnScope.ClaudeSessionsScreen(state: ClaudeListState, vm: AgentV
         }
         state.sessions.groupBy { it.cwd }.forEach { (cwd, sessions) ->
             item("project-$cwd") {
-                Column(Modifier.padding(top = 16.dp, bottom = 4.dp)) {
-                    Text(sessions.first().projectName, style = MaterialTheme.typography.titleMedium)
-                    Text(cwd, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Column(Modifier.padding(start = 4.dp, top = 12.dp, bottom = 2.dp)) {
+                    Text(sessions.first().projectName, Modifier.semantics { heading() }, style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(cwd, maxLines = 1, overflow = TextOverflow.StartEllipsis, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             items(sessions, key = { it.id }) { session ->
-                Surface(onClick = { vm.openClaudeSession(session) }, shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth().heightIn(min = 76.dp)) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(session.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
-                        Text("${sessionTime(session.updatedAt)} · ${session.model}", style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (session.maybeActive) ActiveBadge()
+                Surface(onClick = { vm.openClaudeSession(session) }, shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
+                    Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(session.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("${sessionTime(session.updatedAt)} · ${readableModelId(session.model)}", Modifier.weight(1f, false),
+                                maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (session.maybeActive) ActiveBadge()
+                        }
                         if (session.linkedConversationId != null) Text(tr(S.linked_chat), style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary)
                     }
@@ -64,8 +70,8 @@ internal fun ColumnScope.ClaudeSessionsScreen(state: ClaudeListState, vm: AgentV
 @Composable
 private fun ActiveBadge() {
     Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(8.dp)) {
-        Text(tr(S.pc_active), Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+        Text(tr(S.pc_active), Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
     }
 }
 
