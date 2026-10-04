@@ -404,4 +404,10 @@
     <string name="size_native">原生尺寸</string>
     <string name="size_upscaled">AI 放大（1080p · 2K · 4K）</string>
     <string name="size_upscaled_hint">先按原生尺寸生成，再用 AI 放大，耗时更长</string>
+    <string name="error_insufficient_credits">Comfy Cloud 额度不足，请充值或换一个通道。</string>
+    <string name="channel_runpod">RunPod GPU</string>
+    <string name="channel_runpod_hint">RunPod 按秒计费，有任务才启动显卡、空闲自动关机；首个任务需要等待启动。</string>
+    <string name="error_runpod_unavailable">RunPod GPU 通道未配置或暂时连不上，请稍后再试。</string>
+    <string name="error_runpod_rejected">RunPod 拒绝了任务，请检查 endpoint 和账户余额。</string>
+    <string name="error_runpod_failed">RunPod GPU 任务失败，请重试或换一个工作流。</string>
 </resources>

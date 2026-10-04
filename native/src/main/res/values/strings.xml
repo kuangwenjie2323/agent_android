@@ -408,4 +408,10 @@
     <string name="size_native">Native sizes</string>
     <string name="size_upscaled">AI upscaled (1080p · 2K · 4K)</string>
     <string name="size_upscaled_hint">Rendered natively, then upscaled. Takes longer.</string>
+    <string name="error_insufficient_credits">Comfy Cloud credits are insufficient. Top up the account or choose another channel.</string>
+    <string name="channel_runpod">RunPod GPU</string>
+    <string name="channel_runpod_hint">Pay per second on RunPod; the GPU starts on demand and shuts down when idle. The first job waits for it to start.</string>
+    <string name="error_runpod_unavailable">The RunPod GPU channel is not configured or not reachable. Try again later.</string>
+    <string name="error_runpod_rejected">RunPod refused the job. Check the endpoint and the account balance.</string>
+    <string name="error_runpod_failed">The RunPod GPU job failed. Try again or choose another workflow.</string>
 </resources>

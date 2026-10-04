@@ -161,7 +161,7 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
         if (!composing) scheduleRecommendations()
     }
     fun filter(kind: String = state.value.kind, channel: String = state.value.channel) {
-        if (kind !in setOf("image", "video", "audio") || channel !in setOf("cloud_gpu", "partner_api", "kaggle_gpu")) return
+        if (kind !in setOf("image", "video", "audio") || channel !in setOf("cloud_gpu", "partner_api", "kaggle_gpu", "runpod_gpu")) return
         manualChannel = true
         val next = state.value.workflows.firstOrNull { it.kind == kind && it.channel == channel && it.unavailable == null }
             ?: state.value.workflows.firstOrNull { it.kind == kind && it.channel == channel }

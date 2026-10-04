@@ -51,10 +51,12 @@ internal val LocalAppResources = staticCompositionLocalOf<Resources?> { null }
     "expired" -> S.status_expired; "query_failed" -> S.status_query_failed; else -> S.status_unknown
 })
 internal fun comfyChannelResource(channel: String) = when (channel) {
-    "kaggle_gpu" -> S.channel_kaggle; "cloud_gpu" -> S.channel_gpu; "partner_api" -> S.channel_api; else -> S.channel_unknown
+    "kaggle_gpu" -> S.channel_kaggle; "cloud_gpu" -> S.channel_gpu; "partner_api" -> S.channel_api
+    "runpod_gpu" -> S.channel_runpod; else -> S.channel_unknown
 }
 internal fun comfyChannelHintResource(channel: String) = when (channel) {
-    "kaggle_gpu" -> S.channel_kaggle_hint; "cloud_gpu" -> S.channel_gpu_hint; "partner_api" -> S.channel_api_hint; else -> S.channel_unknown
+    "kaggle_gpu" -> S.channel_kaggle_hint; "cloud_gpu" -> S.channel_gpu_hint; "partner_api" -> S.channel_api_hint
+    "runpod_gpu" -> S.channel_runpod_hint; else -> S.channel_unknown
 }
 internal fun comfyProgressResource(job: ComfyJob) = if (job.status == "canceling") S.status_canceling else when (job.phase()) {
     ComfyJobPhase.STARTING -> when (job.workerStage) {
@@ -70,6 +72,8 @@ internal fun comfyProgressResource(job: ComfyJob) = if (job.status == "canceling
 internal fun comfyErrorResource(code: String) = when(code) {
     "auth", "sign_in_required" -> S.error_auth; "forbidden" -> S.error_forbidden
     "job_active" -> S.error_job_active; "unpublish_failed" -> S.error_unpublish_failed
+    "insufficient_credits" -> S.error_insufficient_credits
+    "runpod_unavailable" -> S.error_runpod_unavailable; "runpod_rejected" -> S.error_runpod_rejected; "runpod_failed" -> S.error_runpod_failed
     "network", "timeout" -> S.error_network; "invalid_parameters", "invalid_request", "validation_error" -> S.error_invalid_parameters
     "invalid_workflow", "workflow_not_found" -> S.workflow_unavailable; "storage" -> S.error_storage
     "busy", "capacity", "rate_limited" -> S.error_busy; "configuration_required", "client_setup_failed" -> S.error_config

@@ -32,7 +32,7 @@ fun comfyGalleryGroups(workflows: List<ComfyWorkflow>, kind: String, query: Stri
     return workflows.filter { it.kind == kind && (needle.isEmpty() ||
         listOf(it.id, it.title, it.description, it.modelFamily()).any { text -> text.lowercase().contains(needle) }) }
         .groupBy { it.channel to it.modelFamily() }.map { (key, entries) -> ComfyGalleryGroup(key.first, key.second, entries) }
-        .sortedWith(compareBy<ComfyGalleryGroup> { when (it.channel) { "kaggle_gpu" -> 0; "cloud_gpu" -> 1; "partner_api" -> 2; else -> 3 } }
+        .sortedWith(compareBy<ComfyGalleryGroup> { when (it.channel) { "kaggle_gpu" -> 0; "runpod_gpu" -> 1; "cloud_gpu" -> 2; "partner_api" -> 3; else -> 4 } }
             .thenBy { it.channel }.thenBy { it.family.ifEmpty { "\uffff" } })
 }
 
@@ -94,7 +94,7 @@ fun ComfyJob.needsPolling() = phase() in setOf(ComfyJobPhase.STARTING, ComfyJobP
 fun ComfyJob.waitingQueuePosition() = queuePosition?.takeIf { it > 0 && status == "queued" && billingChannel == "kaggle_gpu" }
 // Kaggle IDs refer to AgentWeb-local output; Cloud asset inputs require a Cloud receipt.
 fun ComfyJob.canReferenceInCloud(workflows: List<ComfyWorkflow>) = status == "succeeded" && jobId != null &&
-    billingChannel != "kaggle_gpu" && workflows.find { it.id == workflowId }?.channel != "kaggle_gpu"
+    billingChannel !in setOf("kaggle_gpu", "runpod_gpu") && workflows.find { it.id == workflowId }?.channel !in setOf("kaggle_gpu", "runpod_gpu")
 
 data class ComfyDraft(val workflowId: String, val kind: String, val channel: String, val prompt: String, val values: Map<String, String>)
 fun ComfyWorkflow.prefill(job: ComfyJob): ComfyDraft {

@@ -119,7 +119,7 @@ internal fun CreationSettings(state: ComfyState, vm: ComfyViewModel, onGallery: 
                 item("channel") {
                     Text(tr(S.creation_channel), style = MaterialTheme.typography.labelMedium)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("kaggle_gpu", "cloud_gpu", "partner_api").forEach { channel ->
+                        listOf("kaggle_gpu", "runpod_gpu", "cloud_gpu", "partner_api").forEach { channel ->
                             FilterChip(state.channel == channel, { vm.filter(channel = channel) },
                                 enabled = state.workflows.any { it.channel == channel }, label = { Text(tr(comfyChannelResource(channel))) })
                         }
