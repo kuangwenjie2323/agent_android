@@ -142,8 +142,10 @@ internal fun CreationSettings(state: ComfyState, vm: ComfyViewModel, onGallery: 
                     }
                 }
                 if (sizes.isNotEmpty()) item("size") {
-                    ValuePicker(tr(S.size), sizes.firstOrNull { size -> size.parameters.all { state.values[it.key] == it.value } }?.label.orEmpty(),
-                        sizes.map { it.label to it.label }) { label -> sizes.find { it.label == label }?.let(vm::size) }
+                    var sizeSheet by remember { mutableStateOf(false) }
+                    val current = sizes.firstOrNull { size -> size.parameters.all { state.values[it.key] == it.value } }?.label
+                    PickerButton(tr(S.size), current ?: tr(S.select_value)) { sizeSheet = true }
+                    if (sizeSheet) SizeSheet(sizes, current, vm::size) { sizeSheet = false }
                 }
                 items(groups?.basic.orEmpty().filter { it.key !in sizeKeys }, key = { "basic-${workflow?.id}-${it.key}" }) { input ->
                     SchemaField(input, state.values[input.key] ?: input.default, state, vm) { vm.parameter(input.key, it) }
@@ -253,17 +255,60 @@ private fun ReferenceImagePicker(input: ComfyInput, value: String, state: ComfyS
     }
 }
 
+private val SizeLabel = Regex("""^(\d+:\d+)(?: (1080p|2K|4K))? · (\d+)×(\d+)$""")
+/** Short chip text: "4K · 16:9" for upscaled presets, "1:1 · 1024" for native ones; other labels unchanged. */
+internal fun sizeChipLabel(label: String): String {
+    val match = SizeLabel.matchEntire(label) ?: return label
+    val (ratio, tier, width, height) = match.destructured
+    return if (tier.isNotEmpty()) "$tier · $ratio" else "$ratio · ${maxOf(width.toInt(), height.toInt())}"
+}
+internal fun sizeIsUpscaled(label: String) = SizeLabel.matchEntire(label)?.groupValues?.get(2)?.isNotEmpty() == true
+
+/** Size and aspect choice, styled like the model sheet: native and AI-upscaled groups of radio rows. */
+@Composable
+internal fun SizeSheet(sizes: List<ComfySize>, selected: String?, onPick: (ComfySize) -> Unit, onClose: () -> Unit) {
+    AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(tr(S.size), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                ActionIcon(R.drawable.aw_check, tr(S.done), onClick = onClose)
+            }
+            val (upscaled, native) = sizes.partition { sizeIsUpscaled(it.label) }
+            LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(S.size_native to native, S.size_upscaled to upscaled).filter { it.second.isNotEmpty() }.forEach { (title, group) ->
+                    if (upscaled.isNotEmpty()) item("title-$title") {
+                        Text(tr(title), Modifier.padding(top = 12.dp, start = 4.dp).semantics { heading() },
+                            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    items(group, key = { it.label }) { size ->
+                        ChoiceRow(size.label, size.label == selected, subtitle = if (title == S.size_upscaled) tr(S.size_upscaled_hint) else null) {
+                            onPick(size); onClose()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The tonal field button used for every setting in the creation sheet. */
+@Composable
+internal fun PickerButton(title: String, value: String, enabled: Boolean = true, onClick: () -> Unit) {
+    FilledTonalButton(onClick, Modifier.fillMaxWidth().heightIn(min = 56.dp), enabled = enabled, shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.labelMedium)
+            Text(value, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+        }
+        AppIcon(R.drawable.aw_down)
+    }
+}
+
 @Composable
 private fun ValuePicker(title: String, value: String, options: List<Pair<String, String>>, enabled: Boolean = true, onChange: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf("") }
-    FilledTonalButton({ open = true; search = "" }, Modifier.fillMaxWidth().heightIn(min = 56.dp), enabled = enabled, shape = RoundedCornerShape(16.dp)) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.labelMedium)
-            Text(options.find { it.first == value }?.second?.substringBefore('\n') ?: value.ifBlank { tr(S.select_value) },
-                maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
-        }
-        AppIcon(R.drawable.aw_down)
+    PickerButton(title, options.find { it.first == value }?.second?.substringBefore('\n') ?: value.ifBlank { tr(S.select_value) }, enabled) {
+        open = true; search = ""
     }
     if (open) AlertDialog(onDismissRequest = { open = false }, title = { Text(title, style = MaterialTheme.typography.titleLarge) },
         text = {

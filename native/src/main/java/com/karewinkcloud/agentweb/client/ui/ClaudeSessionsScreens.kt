@@ -27,37 +27,23 @@ internal fun ColumnScope.ClaudeSessionsScreen(state: ClaudeListState, vm: AgentV
     ScreenTitle("Claude Code") {
         ActionIcon(R.drawable.aw_refresh, tr(S.refresh), !state.loading) { vm.refreshClaudeSessions() }
     }
-    LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(start = PageGutter, end = PageGutter, bottom = 24.dp)) {
         if (state.loading) item("loading") { LoadingState(tr(S.loading)) }
         if (state.error != null) item("error") { ErrorBlock(state.error, { vm.refreshClaudeSessions() }, tr(S.retry)) }
         if (!state.loading && state.error == null && state.sessions.isEmpty()) item("empty") {
             EmptyState(R.drawable.aw_terminal, tr(S.claude_empty), tr(S.claude_empty_hint))
         }
         state.sessions.groupBy { it.cwd }.forEach { (cwd, sessions) ->
-            item("project-$cwd") {
-                Column(Modifier.padding(start = 4.dp, top = 12.dp, bottom = 2.dp)) {
-                    Text(sessions.first().projectName, Modifier.semantics { heading() }, style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(cwd, maxLines = 1, overflow = TextOverflow.StartEllipsis, style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            items(sessions, key = { it.id }) { session ->
-                Surface(onClick = { vm.openClaudeSession(session) }, shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
-                    Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(session.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("${sessionTime(session.updatedAt)} · ${readableModelId(session.model)}", Modifier.weight(1f, false),
-                                maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            item("project-$cwd") { GroupLabel(sessions.first().projectName, cwd) }
+            itemsIndexed(sessions, key = { _, it -> it.id }) { index, session ->
+                ListRow(session.title, "${sessionTime(session.updatedAt)} · ${readableModelId(session.model)}", rowPosition(index, sessions.size),
+                    titleLines = 2, extra = if (session.maybeActive || session.linkedConversationId != null) ({
+                        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             if (session.maybeActive) ActiveBadge()
+                            if (session.linkedConversationId != null) Text(tr(S.linked_chat), style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary)
                         }
-                        if (session.linkedConversationId != null) Text(tr(S.linked_chat), style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary)
-                    }
-                }
+                    }) else null, trailing = { AppIcon(R.drawable.aw_chevron) }) { vm.openClaudeSession(session) }
             }
         }
         if (state.nextCursor != null) item("more") {

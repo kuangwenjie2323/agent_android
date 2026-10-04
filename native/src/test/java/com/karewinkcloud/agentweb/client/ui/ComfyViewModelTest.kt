@@ -345,7 +345,7 @@ class ComfyViewModelTest {
         override suspend fun jobs() = onHistory?.invoke() ?: history
         override suspend fun job(requestId: String): ComfyJob { reads += requestId; return onJob(requestId) }
         override suspend fun resources(refresh: Boolean): ComfyResources { resourceCalls++; return inventory }
-        override suspend fun download(requestId: String, output: ComfyOutput, destination: File) { downloads++; destination.writeText("test") }
+        override suspend fun download(requestId: String, output: ComfyOutput, destination: File, onProgress: (Long, Long) -> Unit) { downloads++; destination.writeText("test") }
         val deletions = mutableListOf<String>(); var deleteFails: String? = null
         override suspend fun delete(requestId: String) { deleteFails?.let { throw ComfyFailure(it) }; deletions += requestId }
     }

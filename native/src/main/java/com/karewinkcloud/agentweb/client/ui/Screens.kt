@@ -133,7 +133,7 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
             }
         }
     }
-    TextField(state.search, vm::search, Modifier.fillMaxWidth().padding(horizontal = 16.dp), singleLine = true,
+    TextField(state.search, vm::search, Modifier.fillMaxWidth().padding(horizontal = PageGutter), singleLine = true,
         shape = RoundedCornerShape(24.dp), placeholder = { Text(tr(S.search_conversations), style = MaterialTheme.typography.bodyMedium) },
         leadingIcon = { AppIcon(R.drawable.aw_search) },
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -143,8 +143,8 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
         trailingIcon = { if (state.search.isNotEmpty()) ActionIcon(R.drawable.aw_close, tr(S.clear_search)) { vm.search("") } })
     Box(Modifier.weight(1f)) {
         PullToRefreshBox(state.refreshing, vm::refresh) {
-            LazyColumn(state = list, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 96.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.fillMaxSize()) {
+            LazyColumn(state = list, contentPadding = PaddingValues(start = PageGutter, end = PageGutter, bottom = 96.dp),
+                modifier = Modifier.fillMaxSize()) {
                 if (state.error != null) item("error") { ErrorBlock(state.error, vm::refresh, tr(S.refresh)) }
                 if (state.sections.isEmpty() && state.refreshing) item("loading") { LoadingState(tr(S.loading)) }
                 if (state.sections.isEmpty() && !state.refreshing && state.error == null) item("empty") {
@@ -155,11 +155,12 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
                         if (state.search.isNotEmpty()) ({ vm.search("") }) else null)
                 }
                 state.sections.forEach { section ->
-                    item("group-${section.group}") { Text(tr(when(section.group) {
+                    item("group-${section.group}") { GroupLabel(tr(when(section.group) {
                         ConversationGroup.TODAY -> S.today; ConversationGroup.YESTERDAY -> S.yesterday; else -> S.older
-                    }), Modifier.padding(start = 4.dp, top = 12.dp, bottom = 4.dp).semantics { heading() },
-                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    items(section.conversations, key = { it.id }) { conversation -> ConversationRow(conversation, state.agents) { vm.open(conversation) } }
+                    })) }
+                    itemsIndexed(section.conversations, key = { _, it -> it.id }) { index, conversation ->
+                        ConversationRow(conversation, state.agents, rowPosition(index, section.conversations.size)) { vm.open(conversation) }
+                    }
                 }
             }
         }
@@ -170,27 +171,19 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
 }
 
 @Composable
-internal fun ConversationRow(conversation: Conversation, agents: List<Agent>, onOpen: () -> Unit) {
+internal fun ConversationRow(conversation: Conversation, agents: List<Agent>, position: RowPosition = RowPosition.ONLY, onOpen: () -> Unit) {
     val model = agents.find { it.id == conversation.choice.agent }?.label(conversation.choice.model)
         ?: conversation.choice.model.ifBlank { tr(S.assistant) }
-    Surface(onClick = onOpen, shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.background,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
-        Row(Modifier.padding(horizontal = 4.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.primaryContainer) {
-                Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { Text(modelBadge(conversation.choice), style = MaterialTheme.typography.labelSmall) }
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(conversationTitle(conversation), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${compactModelLabel(model)}: ${plainPreview(conversation.preview).ifBlank { if (conversation.messageCount == null) "…" else tr(S.unused_chat) }}", maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                conversation.project?.takeIf { it.isNotBlank() }?.let { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary) }
-            }
+    val preview = "${compactModelLabel(model)}: ${plainPreview(conversation.preview).ifBlank { if (conversation.messageCount == null) "…" else tr(S.unused_chat) }}"
+    ListRow(conversationTitle(conversation), preview, position, leading = { Avatar(modelBadge(conversation.choice)) },
+        extra = conversation.project?.takeIf { it.isNotBlank() }?.let { project -> {
+            Text(project, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+        } },
+        trailing = {
             if (conversation.running) Text("● ${tr(S.running)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             else if (conversation.updatedAt > 0) Text(conversationTime(conversation.updatedAt), style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
+        }, onClick = onOpen)
 }
 
 /** "Model · effort · permission", listing only non-default settings so the chip stays short. */

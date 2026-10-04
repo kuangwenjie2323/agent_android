@@ -30,6 +30,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.LifecycleStartEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.karewinkcloud.agentweb.client.R
 import com.karewinkcloud.agentweb.client.R.string as S
@@ -79,6 +80,8 @@ internal fun ComfyThumbnail(job: ComfyJob, vm: ComfyViewModel, modifier: Modifie
     }
 }
 
+private const val PREFETCH_BYTES = 10L * 1024 * 1024
+
 @Composable
 internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewModel) {
     var revision by remember(job.requestId, output.index) { mutableIntStateOf(0) }
@@ -87,6 +90,8 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
     // Images display a preview; the original is downloaded only when an action needs it.
     var original by remember(job.requestId, output.index) { mutableStateOf<File?>(null) }
     var fetching by remember(job.requestId, output.index) { mutableStateOf(false) }
+    val downloads by vm.downloadProgress.collectAsStateWithLifecycle()
+    val percent = downloads["${job.requestId}-${output.index}"]?.let { (it * 100).toInt() }
     val context = LocalContext.current
     val activity = LocalActivity.current
     val scope = rememberCoroutineScope()
@@ -105,6 +110,11 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
         fetching = true
         val source = try { originalFile() } catch (e: CancellationException) { throw e } catch (_: Exception) { null } finally { fetching = false }
         if (source == null) actionMessage = S.output_failed else block(source)
+    }
+    // Once the preview shows, fetch a modest original in the background so Save/Share feel instant.
+    LaunchedEffect(job.requestId, output.index, media.file != null) {
+        if (image && media.file != null && original == null && output.bytes in 1..PREFETCH_BYTES)
+            try { originalFile() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
     }
     val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(output.mime)) { uri ->
         val file = original
@@ -152,8 +162,11 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
             }
             else -> AudioOutput(file)
         }
-        if (fetching) Text(tr(S.output_fetching_original), style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (percent != null || fetching) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(if (percent != null) tr(S.output_fetching_original_percent, percent) else tr(S.output_fetching_original),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (percent != null) LinearProgressIndicator(progress = { percent / 100f }, modifier = Modifier.weight(1f))
+        }
         if (file != null) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
             FilledTonalButton(onClick = {
                 if (Build.VERSION.SDK_INT < 29) withOriginal { file ->

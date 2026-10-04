@@ -17,6 +17,14 @@ class TurnChromeTest {
         return FooterLabels(value("turn_input"), value("turn_output"), value("turn_steps"))
     }
 
+    @Test fun sizeChipsAreShortAndUpscaledSizesAreGrouped() {
+        assertEquals("4K · 16:9", sizeChipLabel("16:9 4K · 3840×2160"))
+        assertEquals("1:1 · 1024", sizeChipLabel("1:1 · 1024×1024"))
+        assertEquals("9:16 · 1664", sizeChipLabel("9:16 · 928×1664"))
+        assertEquals("1024x1024", sizeChipLabel("1024x1024"))
+        assertTrue(sizeIsUpscaled("9:16 1080p · 1080×1920"))
+        assertFalse(sizeIsUpscaled("4:3 · 1472×1104"))
+    }
     @Test fun composerModelChipListsOnlyNonDefaultSettings() {
         assertEquals("DS V4.1 Flash", composerModelLabel("DS V4.1 Flash", null, null))
         assertEquals("Opus 5.5 · 高 · 只读规划", composerModelLabel("Opus 5.5", "高", "只读规划"))

@@ -14,7 +14,7 @@ interface ComfyRepository {
     suspend fun jobs(): List<ComfyJob>
     suspend fun job(requestId: String): ComfyJob
     suspend fun resources(refresh: Boolean = false): ComfyResources
-    suspend fun download(requestId: String, output: ComfyOutput, destination: File)
+    suspend fun download(requestId: String, output: ComfyOutput, destination: File, onProgress: (Long, Long) -> Unit = { _, _ -> })
     /** Uploads one finished output to the server's public R2 storage; returns its stable https link. */
     suspend fun publish(requestId: String, output: ComfyOutput): String = throw ComfyFailure("publish_unavailable")
     /** A server-made JPEG preview of an image output, at most [edge] px (512 tiles, 1280 detail). */
@@ -65,13 +65,13 @@ class HttpComfyRepository(private val http: HttpAgentRepository) : ComfyReposito
         require(data["categories"] is JsonArray)
         ComfyResources.from(data)
     }
-    override suspend fun download(requestId: String, output: ComfyOutput, destination: File) = operation {
+    override suspend fun download(requestId: String, output: ComfyOutput, destination: File, onProgress: (Long, Long) -> Unit) = operation {
         require(validComfyId(requestId) && output.index in 0..63)
         require(output.mime in mediaExtensions)
-        val limit = if (output.mime.startsWith("image/")) 32L * 1024 * 1024 else 256L * 1024 * 1024
+        val limit = if (output.mime.startsWith("image/")) 64L * 1024 * 1024 else 256L * 1024 * 1024
         if (output.bytes > limit) throw ComfyFailure("too_large")
         // Derive a same-origin endpoint: never forward the bearer to an output URL.
-        http.download("/api/comfy/jobs/$requestId/outputs/${output.index}", destination, output.mime, limit)
+        http.download("/api/comfy/jobs/$requestId/outputs/${output.index}", destination, output.mime, limit, onProgress)
     }
     override suspend fun thumbnail(requestId: String, output: ComfyOutput, destination: File, edge: Int) = operation {
         require(validComfyId(requestId) && output.index in 0..63 && output.mime.startsWith("image/") && edge in setOf(512, 1280))

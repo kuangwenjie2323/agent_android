@@ -3,6 +3,7 @@ package com.karewinkcloud.agentweb.client.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -18,7 +19,7 @@ import com.karewinkcloud.agentweb.client.R
 
 @Composable
 internal fun ScreenTitle(title: String, subtitle: String? = null, actions: @Composable RowScope.() -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = PageGutter + 4.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
@@ -26,6 +27,60 @@ internal fun ScreenTitle(title: String, subtitle: String? = null, actions: @Comp
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         actions()
+    }
+}
+
+/** Page side margin shared by every tab. */
+internal val PageGutter = 16.dp
+
+/** Position of a row inside a grouped card, so stacked lazy items read as one rounded card. */
+enum class RowPosition { ONLY, FIRST, MIDDLE, LAST }
+internal fun rowPosition(index: Int, count: Int) = when {
+    count <= 1 -> RowPosition.ONLY; index == 0 -> RowPosition.FIRST; index == count - 1 -> RowPosition.LAST; else -> RowPosition.MIDDLE
+}
+
+/** Section heading above a grouped card (conversations by day, sessions by project, settings groups). */
+@Composable
+internal fun GroupLabel(title: String, detail: String? = null) {
+    Column(Modifier.fillMaxWidth().padding(start = 4.dp, top = 16.dp, bottom = 8.dp)) {
+        SectionLabel(title)
+        if (detail != null) Text(detail, maxLines = 1, overflow = TextOverflow.StartEllipsis, style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** Circular initials badge used for models and accounts. */
+@Composable
+internal fun Avatar(text: String) {
+    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer) {
+        Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { Text(text, style = MaterialTheme.typography.labelMedium) }
+    }
+}
+
+/** One row of a grouped list card: the single list style for conversations, sessions and settings. */
+@Composable
+internal fun ListRow(title: String, subtitle: String? = null, position: RowPosition = RowPosition.ONLY, enabled: Boolean = true,
+    titleLines: Int = 1, leading: (@Composable () -> Unit)? = null, trailing: (@Composable () -> Unit)? = null,
+    extra: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
+    val radius = 16.dp
+    val top = if (position == RowPosition.ONLY || position == RowPosition.FIRST) radius else 0.dp
+    val bottom = if (position == RowPosition.ONLY || position == RowPosition.LAST) radius else 0.dp
+    Surface(onClick, enabled = enabled, shape = RoundedCornerShape(top, top, bottom, bottom), color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth()) {
+        Column {
+            if (top == 0.dp) HorizontalDivider(Modifier.padding(start = if (leading != null) 68.dp else 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                leading?.invoke()
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(title, maxLines = titleLines, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
+                    if (!subtitle.isNullOrBlank()) Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    extra?.invoke()
+                }
+                trailing?.invoke()
+            }
+        }
     }
 }
 

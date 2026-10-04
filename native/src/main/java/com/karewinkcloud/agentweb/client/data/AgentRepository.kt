@@ -106,9 +106,10 @@ class HttpAgentRepository(
 
     private fun clientFor(request: Request) = if (request.method == "GET") readClient else client
 
-    private suspend fun <T> execute(request: Request, timeoutSeconds: Long? = null, read: (Response) -> T): T = suspendCancellableCoroutine { continuation ->
+    private suspend fun <T> execute(request: Request, timeoutSeconds: Long? = null, readTimeoutSeconds: Long? = null,
+        read: (Response) -> T): T = suspendCancellableCoroutine { continuation ->
         val transport = clientFor(request).let { if (timeoutSeconds == null) it else it.newBuilder()
-            .readTimeout(timeoutSeconds, TimeUnit.SECONDS).callTimeout(timeoutSeconds, TimeUnit.SECONDS).build() }
+            .readTimeout(readTimeoutSeconds ?: timeoutSeconds, TimeUnit.SECONDS).callTimeout(timeoutSeconds, TimeUnit.SECONDS).build() }
         val call = transport.newCall(request)
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
@@ -139,10 +140,13 @@ class HttpAgentRepository(
         }
     }
     /** Stream authenticated output to private disk; never load an unbounded byte array. */
-    internal suspend fun download(path: String, destination: java.io.File, mime: String, maxBytes: Long): Unit = withContext(Dispatchers.IO) {
+    internal suspend fun download(path: String, destination: java.io.File, mime: String, maxBytes: Long,
+        onProgress: (Long, Long) -> Unit = { _, _ -> }): Unit = withContext(Dispatchers.IO) {
         val owner = currentCoroutineContext()
         try {
-            execute(request(path), 120) { response ->
+            // Slow links (a 4K original at tens of KB/s) need minutes: bound the whole call
+            // generously and fail fast only when bytes stop arriving.
+            execute(request(path), 1800, 60) { response ->
                 validate(response)
                 val body = response.body ?: throw IOException("Empty media response")
                 if (body.contentType()?.toString()?.substringBefore(';') != mime || body.contentLength() > maxBytes)
@@ -157,6 +161,7 @@ class HttpAgentRepository(
                         total += count
                         if (total > maxBytes) throw IOException("Media exceeds download limit")
                         output.write(buffer, 0, count)
+                        onProgress(total, body.contentLength())
                     }
                     if (total == 0L || (body.contentLength() >= 0 && total != body.contentLength())) throw IOException("Incomplete media response")
                 } }

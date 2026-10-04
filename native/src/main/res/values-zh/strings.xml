@@ -400,4 +400,8 @@
     <string name="error_job_active">作品还在生成中，完成后才能删除。</string>
     <string name="error_unpublish_failed">公开链接删除失败，请重试。</string>
     <string name="output_fetching_original">正在下载原图…</string>
+    <string name="output_fetching_original_percent">正在下载原图 %1$d%%</string>
+    <string name="size_native">原生尺寸</string>
+    <string name="size_upscaled">AI 放大（1080p · 2K · 4K）</string>
+    <string name="size_upscaled_hint">先按原生尺寸生成，再用 AI 放大，耗时更长</string>
 </resources>

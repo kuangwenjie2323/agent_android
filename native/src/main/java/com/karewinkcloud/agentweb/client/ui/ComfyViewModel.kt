@@ -59,6 +59,9 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
     // three downloads at once so a slow upstream output cannot stall the whole gallery.
     private val mediaLocks = mutableMapOf<String, Mutex>()
     private val downloadSlots = Semaphore(3)
+    private val progress = MutableStateFlow<Map<String, Float>>(emptyMap())
+    /** Fraction downloaded per original ("requestId-index"), while it downloads. */
+    val downloadProgress: StateFlow<Map<String, Float>> = progress.asStateFlow()
     private val evictionLock = Mutex()
     private fun observe(job: ComfyJob) { observed.putIfAbsent(job.requestId, System.nanoTime()) }
     fun observedMillis(requestId: String): Long = ((System.nanoTime() - observed.getOrPut(requestId) { System.nanoTime() }) / 1_000_000).coerceAtLeast(0)
@@ -388,7 +391,17 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
                 }
                 val temporary = File.createTempFile("download-", ".part", mediaDirectory)
                 try {
-                    if (thumbnail) source.thumbnail(job.requestId, output, temporary, edge) else source.download(job.requestId, output, temporary)
+                    if (thumbnail) source.thumbnail(job.requestId, output, temporary, edge)
+                    else {
+                        val key = "${job.requestId}-${output.index}"
+                        var reported = -1
+                        try {
+                            source.download(job.requestId, output, temporary) { done, total ->
+                                val percent = if (total > 0) (done * 100 / total).toInt() else -1
+                                if (percent >= 0 && percent != reported) { reported = percent; progress.update { it + (key to percent / 100f) } }
+                            }
+                        } finally { progress.update { it - key } }
+                    }
                     if (owner != epoch) throw CancellationException("Connection changed")
                     if (!temporary.renameTo(file)) throw ComfyFailure("storage")
                 } finally { temporary.delete() }

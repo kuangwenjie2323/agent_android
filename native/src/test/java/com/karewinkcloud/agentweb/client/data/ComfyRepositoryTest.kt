@@ -125,7 +125,7 @@ class ComfyRepositoryTest {
         fails("network") { repo.download(id, ComfyOutput(0, "image/png", 4), file) }; assertFalse(file.exists())
     }
     @Test fun oversizedOutputRejectedBeforeDownload() = runBlocking {
-        fails("too_large") { repo.download(id, ComfyOutput(0, "image/png", 33L * 1024 * 1024), temporary.newFile()) }
+        fails("too_large") { repo.download(id, ComfyOutput(0, "image/png", 65L * 1024 * 1024), temporary.newFile()) }
         assertEquals(0, server.requestCount)
     }
     @Test fun authenticationLossUsesSharedTokenProviderAndBlocksLaterRequests() = runBlocking {

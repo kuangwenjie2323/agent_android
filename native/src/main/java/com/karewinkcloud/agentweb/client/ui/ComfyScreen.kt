@@ -275,11 +275,9 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
             Box(Modifier.weight(1f)) {
                 val sizes = state.workflow?.sizes().orEmpty()
                 val size = sizes.firstOrNull { it.parameters.all { (key, value) -> state.values[key] == value } }
-                val label = size?.label ?: listOfNotNull(state.values["size"], state.values["aspect_ratio"], state.values["resolution"]).joinToString(" · ").ifBlank { tr(S.size) }
+                val label = size?.label?.let(::sizeChipLabel) ?: listOfNotNull(state.values["size"], state.values["aspect_ratio"], state.values["resolution"]).joinToString(" · ").ifBlank { tr(S.size) }
                 ComposerChip(label, { if (sizes.isEmpty()) onSettings() else sizeMenu = true })
-                DropdownMenu(sizeMenu, { sizeMenu = false }) { sizes.forEach { value ->
-                    DropdownMenuItem(text = { Text(value.label) }, onClick = { onSize(value); sizeMenu = false })
-                } }
+                if (sizeMenu) SizeSheet(sizes, size?.label, onSize) { sizeMenu = false }
             }
             ActionIcon(R.drawable.aw_settings, tr(S.creation_settings), onClick = onSettings)
             val submitDescription = tr(if (state.submitting) S.submitting else S.generate)

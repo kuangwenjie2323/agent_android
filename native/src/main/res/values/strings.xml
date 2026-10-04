@@ -404,4 +404,8 @@
     <string name="error_job_active">This task is still running. Delete it after it finishes.</string>
     <string name="error_unpublish_failed">The public copy could not be removed. Try again.</string>
     <string name="output_fetching_original">Downloading the original…</string>
+    <string name="output_fetching_original_percent">Downloading the original %1$d%%</string>
+    <string name="size_native">Native sizes</string>
+    <string name="size_upscaled">AI upscaled (1080p · 2K · 4K)</string>
+    <string name="size_upscaled_hint">Rendered natively, then upscaled. Takes longer.</string>
 </resources>
