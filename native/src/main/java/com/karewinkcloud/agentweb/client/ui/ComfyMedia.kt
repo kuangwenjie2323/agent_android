@@ -13,6 +13,10 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -80,8 +84,6 @@ internal fun ComfyThumbnail(job: ComfyJob, vm: ComfyViewModel, modifier: Modifie
     }
 }
 
-private const val PREFETCH_BYTES = 10L * 1024 * 1024
-
 @Composable
 internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewModel) {
     var revision by remember(job.requestId, output.index) { mutableIntStateOf(0) }
@@ -111,11 +113,7 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
         val source = try { originalFile() } catch (e: CancellationException) { throw e } catch (_: Exception) { null } finally { fetching = false }
         if (source == null) actionMessage = S.output_failed else block(source)
     }
-    // Once the preview shows, fetch a modest original in the background so Save/Share feel instant.
-    LaunchedEffect(job.requestId, output.index, media.file != null) {
-        if (image && media.file != null && original == null && output.bytes in 1..PREFETCH_BYTES)
-            try { originalFile() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
-    }
+    var viewing by remember(job.requestId, output.index) { mutableStateOf(false) }
     val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(output.mime)) { uri ->
         val file = original
         if (uri != null && file != null) scope.launch {
@@ -142,6 +140,7 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
             (activity ?: context).startActivity(launch)
         } catch (_: Exception) { actionMessage = S.output_open_failed }
     }
+    if (viewing) media.bitmap?.let { ZoomViewer(it.asImageBitmap()) { viewing = false } }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         when {
             media.failed -> TextButton({ revision++ }, Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(tr(S.output_failed)) }
@@ -156,7 +155,7 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
             } }
             media.bitmap != null -> Image(media.bitmap!!.asImageBitmap(), tr(S.output_preview),
                 Modifier.fillMaxWidth().heightIn(max = 480.dp).clip(RoundedCornerShape(16.dp))
-                    .clickable(onClickLabel = tr(S.output_open), enabled = !fetching) { withOriginal { mediaIntent(Intent.ACTION_VIEW, it) } }, contentScale = ContentScale.Fit)
+                    .clickable(onClickLabel = tr(S.output_open)) { viewing = true }, contentScale = ContentScale.Fit)
             output.mime.startsWith("video/") -> FilledTonalButton({ mediaIntent(Intent.ACTION_VIEW, file) }, Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
                 AppIcon(R.drawable.aw_play); Spacer(Modifier.width(8.dp)); Text(tr(S.open_video))
             }
@@ -229,6 +228,34 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
         actionMessage?.let { Text(tr(it), style = MaterialTheme.typography.bodySmall) }
         if (actionMessage == S.public_link_copied) publicLink?.let { Text(it, style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2) }
+    }
+}
+
+/** Full-screen preview with pinch zoom, pan and double-tap zoom; never downloads the original. */
+@Composable
+private fun ZoomViewer(bitmap: androidx.compose.ui.graphics.ImageBitmap, onClose: () -> Unit) {
+    androidx.compose.ui.window.Dialog(onClose, androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        var scale by remember { mutableFloatStateOf(1f) }
+        var offset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+        Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black)
+            .pointerInput(Unit) {
+                detectTransformGestures { _, pan, zoom, _ ->
+                    scale = (scale * zoom).coerceIn(1f, 6f)
+                    offset = if (scale == 1f) androidx.compose.ui.geometry.Offset.Zero else offset + pan
+                }
+            }
+            .pointerInput(Unit) {
+                detectTapGestures(onDoubleTap = { scale = if (scale > 1f) 1f else 2.5f; if (scale == 1f) offset = androidx.compose.ui.geometry.Offset.Zero },
+                    onTap = { if (scale == 1f) onClose() })
+            }) {
+            Image(bitmap, tr(S.output_preview), Modifier.fillMaxSize().graphicsLayer {
+                scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y
+            }, contentScale = ContentScale.Fit)
+            IconButton(onClose, Modifier.align(Alignment.TopEnd).windowInsetsPadding(WindowInsets.safeDrawing).padding(8.dp),
+                colors = IconButtonDefaults.iconButtonColors(contentColor = androidx.compose.ui.graphics.Color.White)) {
+                AppIcon(R.drawable.aw_close, tr(S.close))
+            }
+        }
     }
 }
 
