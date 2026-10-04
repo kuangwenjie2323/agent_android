@@ -22,20 +22,15 @@ private fun sessionTime(seconds: Long): String = runCatching {
 
 @Composable
 internal fun ColumnScope.ClaudeSessionsScreen(state: ClaudeListState, vm: AgentViewModel) {
-    ScreenTitle("Claude Code")
-    Text(tr(S.claude_subtitle), Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall)
+    ScreenTitle("Claude Code", tr(S.claude_subtitle)) {
+        ActionIcon(R.drawable.aw_refresh, tr(S.refresh), !state.loading) { vm.refreshClaudeSessions() }
+    }
     LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item("refresh") {
-            TextButton(onClick = { vm.refreshClaudeSessions() }, enabled = !state.loading,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                Text(if (state.loading) tr(S.loading) else tr(S.refresh))
-            }
-        }
+        if (state.loading) item("loading") { LoadingState(tr(S.loading)) }
         if (state.error != null) item("error") { ErrorBlock(state.error, { vm.refreshClaudeSessions() }, tr(S.retry)) }
         if (!state.loading && state.error == null && state.sessions.isEmpty()) item("empty") {
-            Text(tr(S.claude_empty),
-                Modifier.padding(vertical = 24.dp), style = MaterialTheme.typography.bodyLarge)
+            EmptyState(R.drawable.aw_terminal, tr(S.claude_empty), tr(S.claude_empty_hint))
         }
         state.sessions.groupBy { it.cwd }.forEach { (cwd, sessions) ->
             item("project-$cwd") {
@@ -77,6 +72,7 @@ private fun ActiveBadge() {
 internal fun ColumnScope.ClaudeHistoryScreen(preview: ClaudePreviewState, vm: AgentViewModel) {
     val session = preview.session
     Toolbar(session.title, tr(S.readonly_preview, session.projectName), vm::back)
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     val scroll = rememberLazyListState()
     var landed by remember(session.id) { mutableStateOf(false) }
     LaunchedEffect(preview.loading, session.id) {
@@ -96,7 +92,7 @@ internal fun ColumnScope.ClaudeHistoryScreen(preview: ClaudePreviewState, vm: Ag
             }
         }
         if (preview.loading) item("loading") {
-            Text(tr(S.loading_chat), Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            LoadingState(tr(S.loading_chat))
         }
         if (preview.nextCursor != null) item("older") {
             TextButton(onClick = vm::olderClaudeHistory, enabled = !preview.loadingOlder && !preview.adopting,
@@ -104,7 +100,7 @@ internal fun ColumnScope.ClaudeHistoryScreen(preview: ClaudePreviewState, vm: Ag
                 Text(if (preview.loadingOlder) tr(S.loading) else countLabel(R.plurals.load_older, preview.olderCount))
             }
         }
-        if (!preview.loading && preview.messages.isEmpty() && preview.error == null) item("empty") { Text(tr(S.no_messages)) }
+        if (!preview.loading && preview.messages.isEmpty() && preview.error == null) item("empty") { EmptyState(R.drawable.aw_chat, tr(S.no_messages)) }
         items(preview.messages, key = { it.id }, contentType = { it.role }) { MessageView(it, modelLabel = it.model ?: session.model.takeIf { model -> model.isNotBlank() }) }
         if (preview.error != null) item("error") { ErrorBlock(preview.error, vm::refreshClaudePreview, tr(S.refresh)) }
     }

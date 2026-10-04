@@ -30,8 +30,8 @@ internal fun ColumnScope.SettingsScreen(vm: SettingsViewModel, openBrowser: (Str
     var editor by rememberSaveable { mutableStateOf<String?>(null) }
     var origin by rememberSaveable(prefs.origin) { mutableStateOf(prefs.origin) }
     val busy = saving || phase != SignInPhase.IDLE
-    ScreenTitle(tr(S.settings))
-    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+    ScreenTitle(tr(S.settings), tr(S.settings_subtitle))
+    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
         SettingsGroup(tr(S.account)) {
             SettingsRow(auth.accountName ?: tr(S.signed_out_row),
                 if (auth.signedIn) auth.deviceName.orEmpty() else tr(S.sign_in_explanation), !busy, badge = true) { editor = "account" }
@@ -49,12 +49,12 @@ internal fun ColumnScope.SettingsScreen(vm: SettingsViewModel, openBrowser: (Str
             }
         }
         if (phase != SignInPhase.IDLE) Column {
-            Text(tr(when (phase) { SignInPhase.PASSKEY -> S.passkey_waiting; SignInPhase.BROWSER -> S.sign_in_browser
-                SignInPhase.SIGNING_OUT -> S.signing_out; else -> S.sign_in_completing }))
+            StatusNotice(tr(when (phase) { SignInPhase.PASSKEY -> S.passkey_waiting; SignInPhase.BROWSER -> S.sign_in_browser
+                SignInPhase.SIGNING_OUT -> S.signing_out; else -> S.sign_in_completing }), busy = true)
             if (phase != SignInPhase.SIGNING_OUT) TextButton(vm::cancelPending, Modifier.heightIn(min = 48.dp)) { Text(tr(S.cancel_sign_in)) }
         }
         error?.let { ErrorBlock(ClientError(localMessage(it))) }
-        auth.message?.let { Text(localMessage(it), style = MaterialTheme.typography.bodySmall) }
+        auth.message?.let { StatusNotice(localMessage(it)) }
         SettingsGroup(tr(S.preferences_group)) {
             SettingsRow(tr(S.appearance), tr(when (prefs.theme) { "light" -> S.light; "dark" -> S.dark; else -> S.system }), !busy) { editor = "theme" }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -101,7 +101,7 @@ internal fun ColumnScope.SettingsScreen(vm: SettingsViewModel, openBrowser: (Str
 @Composable
 private fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SectionLabel(title)
         Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) { Column(content = content) }
     }
 }

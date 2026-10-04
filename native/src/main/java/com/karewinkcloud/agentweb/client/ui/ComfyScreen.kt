@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -34,20 +35,22 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
     var detailOpen by remember { mutableStateOf(false) }
     var prompt by remember { mutableStateOf(TextFieldValue(state.prompt)) }
     LaunchedEffect(state.prompt) { if (prompt.text != state.prompt) prompt = TextFieldValue(state.prompt) }
-    ScreenTitle(tr(S.studio)) { ActionIcon(R.drawable.aw_refresh, tr(S.refresh), !state.loading && !state.submitting, vm::refresh) }
+    ScreenTitle(tr(S.studio), tr(S.studio_subtitle)) { ActionIcon(R.drawable.aw_refresh, tr(S.refresh), !state.loading && !state.submitting, vm::refresh) }
     if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-    LazyVerticalGrid(GridCells.Fixed(2), Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item("recent-title", span = { GridItemSpan(2) }) { Text(tr(S.recent_works), Modifier.padding(bottom = 8.dp),
-            style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        if (state.error != null) item("error", span = { GridItemSpan(2) }) {
+    val tileWidth = 156.dp * LocalDensity.current.fontScale.coerceIn(1f, 1.5f)
+    LazyVerticalGrid(GridCells.Adaptive(tileWidth), Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item("recent-title", span = { GridItemSpan(maxLineSpan) }) { SectionLabel(tr(S.recent_works), Modifier.padding(bottom = 4.dp)) }
+        if (state.error != null) item("error", span = { GridItemSpan(maxLineSpan) }) {
             ErrorBlock(ClientError(comfyError(state.error!!)), if (state.pending != null) ({ vm.check() }) else vm::refresh,
                 tr(if (state.pending != null) S.check_status else S.refresh))
         }
         val jobs = ((state.pending?.let { id -> listOf(state.selected?.takeIf { it.requestId == id }
             ?: state.jobs.find { it.requestId == id } ?: ComfyJob(id, "", "unknown")) } ?: emptyList()) + state.jobs).distinctBy { it.requestId }.take(12)
-        if (jobs.isEmpty() && !state.loading) item("empty", span = { GridItemSpan(2) }) { Text(tr(S.history_empty),
-            Modifier.padding(vertical = 24.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if (jobs.isEmpty() && !state.loading && state.error == null) item("empty", span = { GridItemSpan(maxLineSpan) }) {
+            EmptyState(R.drawable.aw_create, tr(S.history_empty), tr(S.creation_empty_hint))
+        }
+        if (jobs.isEmpty() && state.loading) item("loading", span = { GridItemSpan(maxLineSpan) }) { LoadingState(tr(S.loading)) }
         items(jobs, key = { it.requestId }) { job ->
             CreationTile(job, state.workflows.find { it.id == job.workflowId }?.title ?: job.workflowId, vm) { vm.open(job); detailOpen = true }
         }
@@ -122,24 +125,8 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
     onSuggestion: (String) -> Unit = {}, onSize: (ComfySize) -> Unit = {}, maxHeight: Dp = 320.dp) {
     var kindMenu by remember { mutableStateOf(false) }
     var sizeMenu by remember { mutableStateOf(false) }
-    ComposerSurface(maxHeight) {
-        TextField(prompt, onPrompt, Modifier.fillMaxWidth(), placeholder = { Text(tr(S.creation_hint)) }, minLines = 2, maxLines = 4,
-            colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
-                focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
-        if (state.suggestions.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(state.suggestions, key = { it.workflowId }) { suggestion ->
-                ComposerChip(tr(S.recommendation, state.workflows.find { it.id == suggestion.workflowId }?.title ?: suggestion.workflowId),
-                    { onSuggestion(suggestion.workflowId) }, Modifier.widthIn(max = 240.dp), selected = suggestion.workflowId == state.workflowId)
-            }
-        }
-        if (state.initialized && state.choices.isEmpty()) Text(tr(S.no_workflows), Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
-        state.workflow?.let { workflow ->
-            if (workflow.unavailable != null) Text(tr(S.workflow_unavailable), Modifier.padding(8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            val missing = workflow.missingModels(state.resources)
-            if (missing.isNotEmpty()) Text(tr(S.missing_models, missing.joinToString()), Modifier.padding(8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        }
-        if (state.needsResources && state.resources?.ready != true) Text(tr(if (state.resourcesError) S.resources_failed else S.resources_loading),
-            Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
+    val submitDescription = tr(if (state.submitting) S.submitting else S.generate)
+    ComposerSurface(maxHeight, actions = {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Box {
                 ComposerChip(kindLabel(state.kind), { kindMenu = true })
@@ -157,10 +144,31 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
                 } }
             }
             ActionIcon(R.drawable.aw_settings, tr(S.creation_settings), onClick = onSettings)
-            FilledIconButton(onSubmit, enabled = state.canSubmit, modifier = Modifier.size(48.dp)) {
-                AppIcon(R.drawable.aw_create, tr(if (state.submitting) S.submitting else S.generate))
+            FilledIconButton(onSubmit, enabled = state.canSubmit, modifier = Modifier.size(48.dp).semantics { contentDescription = submitDescription }) {
+                if (state.submitting) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                else AppIcon(R.drawable.aw_create)
             }
         }
+    }) {
+        Text(tr(S.creation_prompt), Modifier.padding(horizontal = 12.dp, vertical = 4.dp), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        TextField(prompt, onPrompt, Modifier.fillMaxWidth(), placeholder = { Text(tr(S.creation_hint)) }, minLines = 2, maxLines = 4,
+            colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
+                focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
+        if (state.suggestions.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(state.suggestions, key = { it.workflowId }) { suggestion ->
+                ComposerChip(tr(S.recommendation, state.workflows.find { it.id == suggestion.workflowId }?.title ?: suggestion.workflowId),
+                    { onSuggestion(suggestion.workflowId) }, Modifier.widthIn(max = 240.dp), selected = suggestion.workflowId == state.workflowId)
+            }
+        }
+        if (state.initialized && state.choices.isEmpty()) Text(tr(S.no_workflows), Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
+        state.workflow?.let { workflow ->
+            if (workflow.unavailable != null) Text(tr(S.workflow_unavailable), Modifier.padding(8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            val missing = workflow.missingModels(state.resources)
+            if (missing.isNotEmpty()) Text(tr(S.missing_models, missing.joinToString()), Modifier.padding(8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+        if (state.needsResources && state.resources?.ready != true) Text(tr(if (state.resourcesError) S.resources_failed else S.resources_loading),
+            Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
+
     }
 }
 
