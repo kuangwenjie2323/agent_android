@@ -211,7 +211,7 @@ private fun SchemaField(input: ComfyInput, value: String, state: ComfyState, vm:
 
 @Composable
 private fun NumericEntry(input: ComfyInput, value: String, state: ComfyState, onChange: (String) -> Unit) {
-    TextField(value, onChange, Modifier.fillMaxWidth(), label = { Text(fieldLabel(input)) },
+    OutlinedTextField(value, onChange, Modifier.fillMaxWidth(), label = { Text(fieldLabel(input)) }, shape = RoundedCornerShape(16.dp),
         isError = state.invalidField == input.key, minLines = 1, maxLines = if (input.type == "string") 4 else 1,
         keyboardOptions = KeyboardOptions(keyboardType = if ((input.min ?: 0.0) < 0) KeyboardType.Text else if (input.type == "integer") KeyboardType.Number else if (input.type == "number") KeyboardType.Decimal else KeyboardType.Text),
         supportingText = {

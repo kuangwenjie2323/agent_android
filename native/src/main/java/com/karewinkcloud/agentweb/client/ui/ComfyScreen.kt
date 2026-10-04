@@ -15,6 +15,8 @@ import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,6 +45,8 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
     var detailOpen by remember { mutableStateOf(false) }
     var galleryOpen by remember { mutableStateOf(false) }
     var showFailed by rememberSaveable { mutableStateOf(false) }
+    val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     var returnToSettings by remember { mutableStateOf(false) }
     var prompt by remember { mutableStateOf(TextFieldValue(state.prompt)) }
     // Sync only external replacements. Echoes of our own typing arrive late and would reset the
@@ -84,8 +88,9 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
         }
     }
     Box {
+        // Submitting hides the keyboard so the new progress tile is visible.
         CreationComposer(state, prompt, { prompt = it; vm.prompt(it.text, it.composition != null) }, vm::filter,
-            { settingsOpen = true }, vm::submit, vm::choose, vm::size, composerHeight, { galleryOpen = true })
+            { settingsOpen = true }, { focus.clearFocus(); keyboard?.hide(); vm.submit() }, vm::choose, vm::size, composerHeight, { galleryOpen = true })
     }
     if (settingsOpen) CreationSettings(state, vm, onGallery = {
         settingsOpen = false; returnToSettings = true; galleryOpen = true
@@ -145,7 +150,8 @@ internal fun CreationProgress(job: ComfyJob, vm: ComfyViewModel, modifier: Modif
     }
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         WorkingSpark(animate && motionScale?.scaleFactor != 0f)
-        Text(tr(comfyProgressResource(job)), Modifier.semantics { liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.bodyMedium)
+        Text(tr(comfyProgressResource(job)), Modifier.semantics { liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.bodyMedium,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         job.waitingQueuePosition()?.let { Text(tr(S.kaggle_queue_position, it), style = MaterialTheme.typography.bodySmall) }
         job.progress?.takeIf { it.isFinite() && it in 0.0..1.0 }?.let {
             LinearProgressIndicator(progress = { it.toFloat() }, modifier = Modifier.fillMaxWidth())
