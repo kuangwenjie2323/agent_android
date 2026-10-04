@@ -356,21 +356,17 @@ internal fun ModelSheet(agents: List<Agent>, choice: ModelChoice, onChoice: (Mod
         BoxWithConstraints(Modifier.fillMaxWidth().fillMaxHeight(.88f)) {
             val pinControls = maxHeight >= 480.dp * LocalDensity.current.fontScale
             val visibleAgents = agents.filter { it.enabled }
-            val modelListState = rememberLazyListState()
-            var positioned by rememberSaveable { mutableStateOf(false) }
-            LaunchedEffect(visibleAgents, pinControls) {
-                if (!positioned && visibleAgents.isNotEmpty()) {
-                    // Keep compact layouts at the controls; otherwise reveal the current
-                    // model once, without moving the list again when a choice changes.
-                    val selectedAgent = visibleAgents.indexOfFirst { it.id == choice.agent }
-                    if (pinControls && selectedAgent >= 0) {
-                        val modelIndex = visibleAgents[selectedAgent].models.indexOf(choice.model)
-                        val groupStart = visibleAgents.take(selectedAgent).sumOf { 1 + it.models.size }
-                        modelListState.scrollToItem(groupStart + if (modelIndex > 0) 1 + modelIndex else 0)
-                    }
-                    positioned = true
+            // Start at the current model in the very first frame. Scrolling after the sheet
+            // appeared moved rows under a finger mid-tap and picked the wrong model.
+            // Compact layouts stay at the controls.
+            val initialIndex = remember {
+                val selectedAgent = visibleAgents.indexOfFirst { it.id == choice.agent }
+                if (!pinControls || selectedAgent < 0) 0 else {
+                    val modelIndex = visibleAgents[selectedAgent].models.indexOf(choice.model)
+                    visibleAgents.take(selectedAgent).sumOf { 1 + it.models.size } + if (modelIndex > 0) 1 + modelIndex else 0
                 }
             }
+            val modelListState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(tr(S.model_settings), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
