@@ -24,5 +24,11 @@ object ReconnectPolicy {
 }
 
 fun compactModelLabel(label: String) = label.replace(Regex("DeepSeek", RegexOption.IGNORE_CASE), "DS")
+
+private val claudeModelId = Regex("claude-(opus|sonnet|haiku|fable)-(\\d+)(?:-(\\d))?(?:-\\d{8})?")
+/** Concrete Claude ids recorded in usage ("claude-haiku-4-5-20251001") read as "Haiku 4.5". */
+fun readableModelId(model: String): String = claudeModelId.matchEntire(model)?.let { m ->
+    m.groupValues[1].replaceFirstChar { it.uppercase() } + " " + m.groupValues[2] + (m.groupValues[3].takeIf { it.isNotEmpty() }?.let { ".$it" } ?: "")
+} ?: model
     .replace(Regex("\\s*\\([^)]*\\)"), "").replace("Claude ", "").replace("deepseek-", "DS ", true)
     .replace(Regex("(?i)v(\\d+(?:\\.\\d+)?)-"), "V$1 ").trim()

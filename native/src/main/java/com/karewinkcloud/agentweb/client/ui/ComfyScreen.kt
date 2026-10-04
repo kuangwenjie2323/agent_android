@@ -1,6 +1,14 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package com.karewinkcloud.agentweb.client.ui
 
+import android.animation.ValueAnimator
+import androidx.compose.animation.Crossfade
+import androidx.compose.ui.MotionDurationScale
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -9,13 +17,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.*
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -33,8 +39,14 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
     LifecycleStartEffect(vm) { vm.setForeground(true); onStopOrDispose { vm.setForeground(false) } }
     var settingsOpen by remember { mutableStateOf(false) }
     var detailOpen by remember { mutableStateOf(false) }
+    var galleryOpen by remember { mutableStateOf(false) }
+    var returnToSettings by remember { mutableStateOf(false) }
     var prompt by remember { mutableStateOf(TextFieldValue(state.prompt)) }
-    LaunchedEffect(state.prompt) { if (prompt.text != state.prompt) prompt = TextFieldValue(state.prompt) }
+    // Sync only external replacements. Echoes of our own typing arrive late and would reset the
+    // cursor (scrambling fast typing and dictation), so the field owns its text otherwise.
+    LaunchedEffect(state.promptRevision) {
+        if (prompt.text != state.prompt) prompt = TextFieldValue(state.prompt, androidx.compose.ui.text.TextRange(state.prompt.length))
+    }
     ScreenTitle(tr(S.studio), tr(S.studio_subtitle)) { ActionIcon(R.drawable.aw_refresh, tr(S.refresh), !state.loading && !state.submitting, vm::refresh) }
     if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
     val tileWidth = 156.dp * LocalDensity.current.fontScale.coerceIn(1f, 1.5f)
@@ -45,8 +57,10 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
             ErrorBlock(ClientError(comfyError(state.error!!)), if (state.pending != null) ({ vm.check() }) else vm::refresh,
                 tr(if (state.pending != null) S.check_status else S.refresh))
         }
-        val jobs = ((state.pending?.let { id -> listOf(state.selected?.takeIf { it.requestId == id }
-            ?: state.jobs.find { it.requestId == id } ?: ComfyJob(id, "", "unknown")) } ?: emptyList()) + state.jobs).distinctBy { it.requestId }.take(12)
+        val pendingJob = state.pending?.let { id -> state.selected?.takeIf { it.requestId == id }
+            ?: state.jobs.find { it.requestId == id } ?: ComfyJob(id, "", "unknown") }
+        val jobs = (if (pendingJob != null && state.jobs.none { it.requestId == pendingJob.requestId }) listOf(pendingJob) else emptyList()) +
+            state.jobs.map { job -> pendingJob?.takeIf { it.requestId == job.requestId } ?: job }
         if (jobs.isEmpty() && !state.loading && state.error == null) item("empty", span = { GridItemSpan(maxLineSpan) }) {
             EmptyState(R.drawable.aw_create, tr(S.history_empty), tr(S.creation_empty_hint))
         }
@@ -57,30 +71,32 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
     }
     Box {
         CreationComposer(state, prompt, { prompt = it; vm.prompt(it.text, it.composition != null) }, vm::filter,
-            { settingsOpen = true }, vm::submit, vm::choose, vm::size, composerHeight)
+            { settingsOpen = true }, vm::submit, vm::choose, vm::size, composerHeight, { galleryOpen = true })
     }
-    if (settingsOpen) CreationSettings(state, vm) { settingsOpen = false }
-    if (detailOpen && state.selected != null) CreationDetail(state, vm) { detailOpen = false }
+    if (settingsOpen) CreationSettings(state, vm, onGallery = {
+        settingsOpen = false; returnToSettings = true; galleryOpen = true
+    }, onClose = { settingsOpen = false })
+    if (galleryOpen) WorkflowGallery(state, vm, onClose = {
+        galleryOpen = false; settingsOpen = returnToSettings; returnToSettings = false
+    })
+    if (detailOpen && state.selected != null) CreationDetail(state, vm, onEdit = {
+        detailOpen = false; settingsOpen = true
+    }, onClose = { detailOpen = false })
 }
 
 @Composable
 private fun CreationTile(job: ComfyJob, title: String, vm: ComfyViewModel, onClick: () -> Unit) {
-    val active = job.status in comfyActive
-    val observed by produceState(0L, job.requestId, active) {
-        val start = System.nanoTime()
-        while (active) { value = (System.nanoTime() - start) / 1_000_000_000; delay(1000) }
-    }
     Surface(onClick, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth().aspectRatio(1f)) {
         Box {
-            if (job.outputs.isNotEmpty()) ComfyThumbnail(job, vm, Modifier.fillMaxSize())
-            if (active) Column(Modifier.align(Alignment.Center).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(comfyStatus(job.status), style = MaterialTheme.typography.bodyMedium)
-                if (job.progress != null) LinearProgressIndicator(progress = { job.progress.toFloat() }, modifier = Modifier.fillMaxWidth())
-                else LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text(tr(S.job_elapsed, observed), style = MaterialTheme.typography.bodySmall)
-            } else if (job.outputs.isEmpty()) Text(comfyStatus(job.status), Modifier.align(Alignment.Center), style = MaterialTheme.typography.bodyMedium)
+            Crossfade(targetState = job.phase(), label = "creation result", modifier = Modifier.fillMaxSize()) { phase ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    if (phase == ComfyJobPhase.COMPLETE) ComfyThumbnail(job, vm, Modifier.fillMaxSize())
+                    else if (phase in setOf(ComfyJobPhase.STARTING, ComfyJobPhase.QUEUED, ComfyJobPhase.RUNNING, ComfyJobPhase.FINISHING))
+                        CreationProgress(job, vm, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 36.dp))
+                    else Text(comfyStatus(job.status), Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
+                }
+            }
             Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = .9f), shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.align(Alignment.BottomStart).padding(8.dp)) {
                 Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -88,7 +104,7 @@ private fun CreationTile(job: ComfyJob, title: String, vm: ComfyViewModel, onCli
                     if (video != null) AppIcon(R.drawable.aw_play, tr(S.open_video))
                     Text(title.ifBlank { comfyStatus(job.status) }, Modifier.weight(1f, false), maxLines = 1, overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.labelSmall)
-                    video?.durationSeconds?.let { Text(" · ${it.toInt()}s", style = MaterialTheme.typography.labelSmall) }
+                    video?.durationSeconds?.let { Text(" · ${tr(S.seconds, it.toInt())}", style = MaterialTheme.typography.labelSmall) }
                 }
             }
         }
@@ -96,23 +112,89 @@ private fun CreationTile(job: ComfyJob, title: String, vm: ComfyViewModel, onCli
 }
 
 @Composable
-private fun CreationDetail(state: ComfyState, vm: ComfyViewModel, onClose: () -> Unit) {
+internal fun CreationProgress(job: ComfyJob, vm: ComfyViewModel, modifier: Modifier = Modifier) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val motionScale = rememberCoroutineScope().coroutineContext[MotionDurationScale]
+    var observed by remember(job.requestId) { mutableLongStateOf(vm.observedMillis(job.requestId)) }
+    var animate by remember { mutableStateOf(false) }
+    LaunchedEffect(job.requestId, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            try {
+                while (true) {
+                    observed = vm.observedMillis(job.requestId)
+                    animate = ValueAnimator.areAnimatorsEnabled()
+                    delay(1000)
+                }
+            } finally { animate = false }
+        }
+    }
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        WorkingSpark(animate && motionScale?.scaleFactor != 0f)
+        Text(tr(comfyProgressResource(job)), Modifier.semantics { liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.bodyMedium)
+        job.waitingQueuePosition()?.let { Text(tr(S.kaggle_queue_position, it), style = MaterialTheme.typography.bodySmall) }
+        job.progress?.takeIf { it.isFinite() && it in 0.0..1.0 }?.let {
+            LinearProgressIndicator(progress = { it.toFloat() }, modifier = Modifier.fillMaxWidth())
+            Text(tr(S.job_progress, (it * 100).toInt()), style = MaterialTheme.typography.bodySmall)
+        }
+        Text(tr(S.job_elapsed, observed / 1000), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun CreationDetail(state: ComfyState, vm: ComfyViewModel, onEdit: () -> Unit, onClose: () -> Unit) {
     val job = state.selected ?: return
+    val workflow = state.workflows.find { it.id == job.workflowId }
+    val clipboard = LocalClipboardManager.current
+    val jobPrompt = job.parameters.string(workflow?.promptKey ?: "prompt") ?: job.parameters.string("text").orEmpty()
+    var copied by remember(job.requestId) { mutableStateOf(false) }
+    var actionFailed by remember(job.requestId) { mutableStateOf(false) }
+    val availability = workflow?.availability(state.resources)
+    val blockedReason = when {
+        state.submitting || state.pending != null -> tr(S.creation_action_busy)
+        workflow == null -> tr(S.creation_workflow_missing)
+        state.signInRequired -> tr(S.error_auth)
+        state.loading || !state.initialized -> tr(S.loading)
+        availability?.kind != ComfyAvailabilityKind.AVAILABLE -> availability?.let { availabilityLabel(it) }.orEmpty()
+        else -> null
+    }
+    val editBlocked = when {
+        workflow == null -> tr(S.creation_workflow_missing)
+        state.signInRequired -> tr(S.error_auth)
+        state.submitting -> tr(S.creation_action_busy)
+        state.loading || !state.initialized -> tr(S.loading)
+        else -> null
+    }
     AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            item("title") { Text(state.workflows.find { it.id == job.workflowId }?.title ?: tr(S.job_detail), style = MaterialTheme.typography.titleLarge) }
+            item("title") { Text(workflow?.title ?: tr(S.job_detail), style = MaterialTheme.typography.titleLarge) }
             item("status") {
-                Text(comfyStatus(job.status), Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-                if (job.status in comfyActive || state.checking) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (job.phase() in setOf(ComfyJobPhase.STARTING, ComfyJobPhase.QUEUED, ComfyJobPhase.RUNNING, ComfyJobPhase.FINISHING))
+                    CreationProgress(job, vm, Modifier.fillMaxWidth().padding(vertical = 16.dp))
+                else Text(comfyStatus(job.status), Modifier.semantics { liveRegion = LiveRegionMode.Polite })
                 if (job.status in setOf("unknown", "query_failed")) Text(tr(S.uncertain_hint), style = MaterialTheme.typography.bodySmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton({ vm.check(job.requestId) }, enabled = !state.checking && !state.submitting) { Text(tr(S.check_status)) }
-                    if (job.status in comfyActive || state.polling || state.pollingPaused) TextButton(
+                    if (job.needsPolling() || state.polling || state.pollingPaused) TextButton(
                         { if (state.pollingPaused) vm.resumePolling() else vm.stopPolling() }) { Text(tr(if (state.pollingPaused) S.resume_polling else S.pause_polling)) }
                 }
-                if (job.status in comfyActive || state.pollingPaused) Text(tr(S.polling_hint), style = MaterialTheme.typography.bodySmall)
+                if (job.needsPolling() || state.pollingPaused) Text(tr(S.polling_hint), style = MaterialTheme.typography.bodySmall)
                 job.errorCode?.let { Text(comfyError(it), color = MaterialTheme.colorScheme.error) }
                 state.error?.let { ErrorBlock(ClientError(comfyError(it))) }
+            }
+            item("actions") {
+                if (jobPrompt.isNotBlank()) {
+                    Text(jobPrompt, maxLines = 4, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+                    TextButton({ clipboard.setText(AnnotatedString(jobPrompt)); copied = true }) { Text(tr(if (copied) S.copied else S.copy_prompt)) }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton({ if (vm.again(job)) onClose() else actionFailed = true },
+                        Modifier.weight(1f), enabled = blockedReason == null) { Text(tr(S.creation_again)) }
+                    OutlinedButton({ if (vm.edit(job)) onEdit() else actionFailed = true },
+                        Modifier.weight(1f), enabled = editBlocked == null) { Text(tr(S.creation_edit)) }
+                }
+                (blockedReason ?: editBlocked)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                if (actionFailed) Text(tr(S.creation_action_failed), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
             items(job.outputs, key = { it.index }) { output -> ComfyOutputView(job, output, vm) }
         }
@@ -122,11 +204,39 @@ private fun CreationDetail(state: ComfyState, vm: ComfyViewModel, onClose: () ->
 @Composable
 internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPrompt: (TextFieldValue) -> Unit,
     onFilter: (String, String) -> Unit, onSettings: () -> Unit, onSubmit: () -> Unit,
-    onSuggestion: (String) -> Unit = {}, onSize: (ComfySize) -> Unit = {}, maxHeight: Dp = 320.dp) {
+    onSuggestion: (String) -> Unit = {}, onSize: (ComfySize) -> Unit = {}, maxHeight: Dp = 320.dp, onGallery: () -> Unit = onSettings) {
     var kindMenu by remember { mutableStateOf(false) }
+    var channelMenu by remember { mutableStateOf(false) }
     var sizeMenu by remember { mutableStateOf(false) }
-    val submitDescription = tr(if (state.submitting) S.submitting else S.generate)
-    ComposerSurface(maxHeight, actions = {
+    ComposerSurface(maxHeight) {
+        TextField(prompt, onPrompt, Modifier.fillMaxWidth(), placeholder = { Text(tr(S.creation_hint)) }, minLines = 2, maxLines = 4,
+            colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
+                focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
+        ComposerChip(state.workflow?.title ?: tr(S.workflow), onGallery,
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp), selected = true)
+        Box(Modifier.padding(horizontal = 8.dp)) {
+            ComposerChip(tr(comfyChannelResource(state.channel)), { channelMenu = true })
+            DropdownMenu(channelMenu, { channelMenu = false }) {
+                listOf("kaggle_gpu", "cloud_gpu", "partner_api").filter { channel -> state.workflows.any { it.channel == channel } }.forEach { channel ->
+                    DropdownMenuItem(text = { Text(tr(comfyChannelResource(channel))) },
+                        onClick = { onFilter(state.kind, channel); channelMenu = false })
+                }
+            }
+        }
+        if (state.channel == "kaggle_gpu") Text(tr(S.channel_kaggle_terms), Modifier.padding(horizontal = 16.dp),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (state.suggestions.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(state.suggestions, key = { it.workflowId }) { suggestion ->
+                ComposerChip(tr(S.recommendation, state.workflows.find { it.id == suggestion.workflowId }?.title ?: suggestion.workflowId),
+                    { onSuggestion(suggestion.workflowId) }, Modifier.widthIn(max = 240.dp), selected = suggestion.workflowId == state.workflowId)
+            }
+        }
+        if (state.initialized && state.choices.isEmpty()) Text(tr(S.no_workflows), Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
+        state.workflow?.availability(state.resources)?.takeIf { it.kind != ComfyAvailabilityKind.AVAILABLE }?.let {
+            Text(availabilityLabel(it), Modifier.padding(8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+        if (state.needsResources && state.resources?.ready != true) Text(tr(if (state.resourcesError) S.resources_failed else S.resources_loading),
+            Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Box {
                 ComposerChip(kindLabel(state.kind), { kindMenu = true })
@@ -144,149 +254,9 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
                 } }
             }
             ActionIcon(R.drawable.aw_settings, tr(S.creation_settings), onClick = onSettings)
-            FilledIconButton(onSubmit, enabled = state.canSubmit, modifier = Modifier.size(48.dp).semantics { contentDescription = submitDescription }) {
-                if (state.submitting) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                else AppIcon(R.drawable.aw_create)
-            }
-        }
-    }) {
-        Text(tr(S.creation_prompt), Modifier.padding(horizontal = 12.dp, vertical = 4.dp), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        TextField(prompt, onPrompt, Modifier.fillMaxWidth(), placeholder = { Text(tr(S.creation_hint)) }, minLines = 2, maxLines = 4,
-            colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
-                focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
-        if (state.suggestions.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(state.suggestions, key = { it.workflowId }) { suggestion ->
-                ComposerChip(tr(S.recommendation, state.workflows.find { it.id == suggestion.workflowId }?.title ?: suggestion.workflowId),
-                    { onSuggestion(suggestion.workflowId) }, Modifier.widthIn(max = 240.dp), selected = suggestion.workflowId == state.workflowId)
-            }
-        }
-        if (state.initialized && state.choices.isEmpty()) Text(tr(S.no_workflows), Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
-        state.workflow?.let { workflow ->
-            if (workflow.unavailable != null) Text(tr(S.workflow_unavailable), Modifier.padding(8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            val missing = workflow.missingModels(state.resources)
-            if (missing.isNotEmpty()) Text(tr(S.missing_models, missing.joinToString()), Modifier.padding(8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        }
-        if (state.needsResources && state.resources?.ready != true) Text(tr(if (state.resourcesError) S.resources_failed else S.resources_loading),
-            Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
-
-    }
-}
-
-@Composable
-private fun CreationSettings(state: ComfyState, vm: ComfyViewModel, onClose: () -> Unit) {
-    var choosingWorkflow by remember { mutableStateOf(false) }
-    var query by remember { mutableStateOf("") }
-    AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.fillMaxWidth().fillMaxHeight(.9f)) {
-            Row(Modifier.padding(start = 24.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(tr(S.creation_settings), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                ActionIcon(R.drawable.aw_check, tr(S.done), onClick = onClose)
-            }
-            LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                item("channel") {
-                    Text(tr(S.channel), style = MaterialTheme.typography.titleMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("cloud_gpu" to S.channel_gpu, "partner_api" to S.channel_api).forEach { (channel, label) ->
-                            ComposerChip(tr(label), { vm.filter(state.kind, channel) }, selected = state.channel == channel)
-                        }
-                    }
-                    Text(tr(if (state.channel == "partner_api") S.channel_api_hint else S.channel_gpu_hint), style = MaterialTheme.typography.bodySmall)
-                }
-                item("workflow") {
-                    FilledTonalButton({ choosingWorkflow = !choosingWorkflow }, Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                        Text(state.workflow?.title ?: tr(S.workflow), Modifier.weight(1f)); AppIcon(R.drawable.aw_down)
-                    }
-                    state.workflow?.description?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall) }
-                }
-                if (choosingWorkflow || state.workflow == null) {
-                    item("search") { TextField(query, { query = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text(tr(S.workflow_search)) }) }
-                    items(state.choices.filter { it.title.contains(query, true) || it.id.contains(query, true) }, key = { "workflow-${it.id}" }) { workflow ->
-                        val unavailable = workflow.unavailable != null || workflow.missingModels(state.resources).isNotEmpty()
-                        ChoiceRow(workflow.title, workflow.id == state.workflowId, subtitle = if (unavailable) tr(S.workflow_unavailable) else workflow.description) {
-                            vm.choose(workflow.id); choosingWorkflow = false
-                        }
-                    }
-                } else state.workflow?.let { workflow ->
-                    val sizes = workflow.sizes()
-                    if (sizes.isNotEmpty()) item("size") {
-                        ValuePicker(tr(S.size), sizes.firstOrNull { size -> size.parameters.all { state.values[it.key] == it.value } }?.label.orEmpty(),
-                            sizes.map { it.label to it.label }) { label -> sizes.find { it.label == label }?.let(vm::size) }
-                    }
-                    if (state.needsResources) item("resources") {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(tr(S.resources), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                            ActionIcon(R.drawable.aw_refresh, tr(S.resources_refresh), !state.resourcesLoading) { vm.ensureResources(true) }
-                        }
-                        if (state.resourcesLoading) Text(tr(S.resources_loading), style = MaterialTheme.typography.bodySmall)
-                        if (state.resourcesError || (state.resources?.ready != true && !state.resourcesLoading)) Text(tr(S.resources_failed), color = MaterialTheme.colorScheme.error)
-                        if (state.resources?.stale == true) Text(tr(S.resources_stale), style = MaterialTheme.typography.bodySmall)
-                    }
-                    items(workflow.inputs.filter { it.key != workflow.promptKey && (sizes.isEmpty() || it.key !in setOf("width", "height", "size")) }, key = { "field-${workflow.id}-${it.key}" }) { input ->
-                        SchemaField(input, state.values[input.key] ?: input.default, state, { vm.parameter(input.key, it) })
-                    }
-                }
-                if (state.invalidField != null) item("validation") { Text(comfyError("invalid_parameters"), color = MaterialTheme.colorScheme.error) }
+            FilledIconButton(onSubmit, enabled = state.canSubmit, modifier = Modifier.size(48.dp)) {
+                AppIcon(R.drawable.aw_create, tr(if (state.submitting) S.submitting else S.generate))
             }
         }
     }
-}
-
-@Composable
-private fun SchemaField(input: ComfyInput, value: String, state: ComfyState, onChange: (String) -> Unit) {
-    val title = fieldLabel(input)
-    when {
-        input.resource != null -> {
-            val resources = state.resources?.items.orEmpty().filter { it.category == input.resource }
-                .sortedByDescending { input.family != null && it.family == input.family }
-            ValuePicker(title, value, resources.map { it.name to "${it.name}\n${it.family.orEmpty()}" }, enabled = state.resources?.ready == true, onChange = onChange)
-            Text(tr(S.resource_compatibility), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        input.type == "asset" -> {
-            val options = state.jobs.filter { it.status == "succeeded" && it.jobId != null }.flatMap { job ->
-                job.outputs.filter { it.mime.startsWith("image/") }.map { output ->
-                    buildJsonObject { put("job_id", job.jobId); put("output_index", output.index) }.toString() to
-                        ((state.workflows.find { it.id == job.workflowId }?.title ?: job.workflowId) + " · ${output.index + 1}")
-                }
-            }
-            ValuePicker(title, value, options, onChange = onChange)
-            Text(tr(S.asset_hint), style = MaterialTheme.typography.bodySmall)
-        }
-        input.options.isNotEmpty() -> ValuePicker(title, value, input.options.map { (it as JsonPrimitive).content.let { raw -> raw to raw } }, onChange = onChange)
-        input.type == "boolean" -> Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-            Switch(value.toBoolean(), { onChange(it.toString()) }, Modifier.semantics { contentDescription = title })
-        }
-        else -> TextField(value, onChange, Modifier.fillMaxWidth(), label = { Text(title) },
-            isError = state.invalidField == input.key, minLines = 1, maxLines = if (input.type == "string") 4 else 1,
-            keyboardOptions = KeyboardOptions(keyboardType = if (input.type == "integer") KeyboardType.Number else if (input.type == "number") KeyboardType.Decimal else KeyboardType.Text),
-            supportingText = { if (input.min != null || input.max != null) Text(tr(S.bounds, input.min?.toString() ?: "…", input.max?.toString() ?: "…")) })
-    }
-}
-
-@Composable
-private fun ValuePicker(title: String, value: String, options: List<Pair<String, String>>, enabled: Boolean = true, onChange: (String) -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    var search by remember { mutableStateOf("") }
-    FilledTonalButton({ open = true; search = "" }, Modifier.fillMaxWidth().heightIn(min = 56.dp), enabled = enabled, shape = RoundedCornerShape(16.dp)) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.labelMedium)
-            Text(options.find { it.first == value }?.second?.substringBefore('\n') ?: value.ifBlank { tr(S.select_value) },
-                maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
-        }
-        AppIcon(R.drawable.aw_down)
-    }
-    if (open) AlertDialog(onDismissRequest = { open = false }, title = { Text(title, style = MaterialTheme.typography.titleLarge) },
-        text = {
-            Column {
-                if (options.size > 8) TextField(search, { search = it }, Modifier.fillMaxWidth(), singleLine = true,
-                    label = { Text(tr(S.resource_search)) })
-                LazyColumn(Modifier.heightIn(max = 360.dp)) {
-                    val filtered = options.filter { it.second.contains(search, true) }
-                    if (filtered.isEmpty()) item { Text(tr(S.resource_empty), Modifier.padding(vertical = 16.dp)) }
-                    items(filtered.distinctBy { it.first }, key = { it.first }) { (key, label) ->
-                        ChoiceRow(label, value == key) { onChange(key); open = false }
-                    }
-                }
-            }
-        }, confirmButton = { TextButton({ open = false }, Modifier.heightIn(min = 48.dp)) { Text(tr(S.close)) } })
 }

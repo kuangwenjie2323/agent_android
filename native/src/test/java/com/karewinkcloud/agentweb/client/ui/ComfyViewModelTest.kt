@@ -129,12 +129,13 @@ class ComfyViewModelTest {
         vm.open(ComfyJob(id, "video", "succeeded")); runCurrent()
         assertEquals("keep me", vm.state.value.prompt); assertEquals(listOf(id), repo.reads); assertTrue(repo.submissions.isEmpty())
     }
-    @Test fun resourcesAreLazyAndColdInventoryBlocksGeneration() = modelTest {
+    // Comfy Cloud's model list is incomplete, so neither a cold nor an incomplete inventory blocks generation.
+    @Test fun resourcesAreLazyAndInventoryNeverBlocksGeneration() = modelTest {
         runCurrent(); assertEquals(0, repo.resourceCalls)
         repo.catalog = listOf(workflow.copy(requiredModels = listOf("checkpoints" to "base")))
         repo.inventory = ComfyResources(emptyList(), false, true, true); vm.refresh(); runCurrent(); vm.prompt("mountain")
-        assertEquals(1, repo.resourceCalls); assertFalse(vm.state.value.canSubmit)
-        repo.inventory = ComfyResources(listOf(ComfyResource("checkpoints", "base", null)), true, false, false)
+        assertEquals(1, repo.resourceCalls); assertTrue(vm.state.value.canSubmit)
+        repo.inventory = ComfyResources(listOf(ComfyResource("checkpoints", "other", null)), true, false, false)
         advanceTimeBy(3000); runCurrent(); assertTrue(vm.state.value.canSubmit)
     }
     @Test fun catalogOutageDoesNotBlockSavedRequestRecovery() = modelTest {
@@ -168,6 +169,147 @@ class ComfyViewModelTest {
         val next = FakeComfy(); vm.changeConnection(next, Pending(), false); runCurrent()
         assertNotEquals(first, vm.output(job, output)); assertEquals(1, next.downloads)
     }
+    @Test fun galleryResourcesLoadEvenWhenCurrentChannelIsApi() = modelTest {
+        runCurrent(); vm.choose("api")
+        repo.catalog = repo.catalog + workflow.copy(id = "gpu-resource", requiredModels = listOf("vae" to "base"))
+        vm.refresh(); runCurrent()
+        assertEquals("api", vm.state.value.workflowId); assertEquals("partner_api", vm.state.value.channel)
+        assertEquals(1, repo.resourceCalls)
+    }
+    @Test fun activeHistoryAndFinishingJobsPollFairlyWithoutReordering() = modelTest {
+        runCurrent()
+        val second = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        repo.history = listOf(ComfyJob(id, "image", "running"), ComfyJob(second, "video", "succeeded"))
+        repo.onJob = { key -> repo.history.first { it.requestId == key } }
+        vm.refresh(); runCurrent(); assertEquals(listOf(id), repo.reads)
+        advanceTimeBy(3000); runCurrent(); assertEquals(listOf(id, second), repo.reads)
+        repo.onJob = { key -> ComfyJob(key, "image", "succeeded", outputs = listOf(ComfyOutput(0, "image/png", 1))) }
+        advanceTimeBy(3000); runCurrent()
+        assertEquals(listOf(id, second), vm.state.value.jobs.map { it.requestId })
+        assertEquals(ComfyJobPhase.COMPLETE, vm.state.value.jobs.first().phase())
+        vm.setForeground(false); advanceTimeBy(9000); runCurrent(); assertEquals(3, repo.reads.size)
+        vm.setForeground(true); runCurrent(); assertEquals(second, repo.reads.last())
+        assertTrue(repo.submissions.isEmpty())
+    }
+    @Test fun hiddenLateHistoryLoadCannotRestartPollingButReturnResumes() = modelTest {
+        runCurrent(); val late = CompletableDeferred<List<ComfyJob>>()
+        repo.onHistory = { late.await() }; vm.refresh(); runCurrent(); vm.setForeground(false)
+        late.complete(listOf(ComfyJob(id, "image", "running"))); runCurrent()
+        assertTrue(repo.reads.isEmpty()); assertFalse(vm.state.value.polling)
+        vm.setForeground(true); runCurrent(); assertEquals(listOf(id), repo.reads)
+    }
+    @Test fun hidingCancelsInFlightGetAndIgnoresNonCancellableLateResult() = modelTest {
+        runCurrent(); val late = CompletableDeferred<ComfyJob>(); var canceled = false
+        repo.onJob = { try { awaitCancellation() } finally { canceled = true } }
+        vm.open(ComfyJob(id, "image", "running")); runCurrent(); vm.setForeground(false); runCurrent()
+        assertTrue(canceled); assertFalse(vm.state.value.checking)
+        repo.onJob = { withContext(NonCancellable) { late.await() } }
+        vm.setForeground(true); runCurrent(); vm.setForeground(false)
+        late.complete(ComfyJob(id, "image", "succeeded")); runCurrent()
+        assertEquals("running", vm.state.value.selected?.status); assertFalse(vm.state.value.polling)
+    }
+    @Test fun openingCompletedHistoryDoesNotStrandPendingPoll() = modelTest {
+        runCurrent(); vm.prompt("mountain"); vm.submit(); runCurrent()
+        val pendingId = pending.id!!
+        repo.onJob = { key -> if (key == id) ComfyJob(key, "image", "succeeded", outputs = listOf(ComfyOutput(0, "image/png", 1))) else ComfyJob(key, "image", "running") }
+        vm.open(ComfyJob(id, "image", "succeeded")); runCurrent()
+        advanceTimeBy(3000); runCurrent(); assertEquals(listOf(id, pendingId), repo.reads)
+        assertEquals(id, vm.state.value.selected?.requestId)
+    }
+    @Test fun finishingPollKeepsLegacyPendingClearAndWaitsForPartialOutputs() = modelTest {
+        runCurrent(); repo.onSubmit = { ComfyJob(it.requestId, it.workflowId, "succeeded", it.parameters, listOf(ComfyOutput(0, "image/png", 1)), "output_unavailable") }
+        vm.prompt("mountain"); vm.submit(); runCurrent()
+        assertNull(pending.id); assertTrue(vm.state.value.polling)
+        val submitted = repo.submissions.single().requestId
+        repo.onJob = { ComfyJob(it, "image", "succeeded", outputs = listOf(ComfyOutput(0, "image/png", 1))) }
+        advanceTimeBy(3000); runCurrent()
+        assertEquals(listOf(submitted), repo.reads); assertFalse(vm.state.value.polling)
+    }
+    @Test fun againUsesOriginalTypedParametersNewSeedAndSingleDurableRequest() = modelTest {
+        runCurrent()
+        val seed = ComfyInput("seed", buildJsonObject { put("type", "integer"); put("minimum", 1); put("maximum", 2) })
+        val flag = ComfyInput("enabled", buildJsonObject { put("type", "boolean") })
+        val asset = ComfyInput("image", buildJsonObject { put("type", "asset") })
+        repo.catalog = listOf(workflow.copy(id = "api", channel = "partner_api", inputs = workflow.inputs + listOf(seed, flag, asset)))
+        vm.refresh(); runCurrent(); vm.prompt("unsaved"); vm.parameter("steps", "1")
+        val params = buildJsonObject { put("prompt", "original"); put("steps", 20); put("seed", 1); put("enabled", false); putJsonObject("image") { put("job_id", "upstream-job"); put("output_index", 0) } }
+        val source = ComfyJob(id, "api", "succeeded", params)
+        assertTrue(vm.again(source)); assertFalse(vm.again(source)); runCurrent()
+        val request = repo.submissions.single()
+        assertNotEquals(id, request.requestId); assertEquals(request.requestId, pending.id)
+        assertEquals(params - "seed", request.parameters - "seed"); assertEquals(2L, request.parameters.long("seed"))
+        assertEquals("original", vm.state.value.prompt); assertEquals("partner_api", vm.state.value.channel)
+        assertEquals(1L, source.parameters.long("seed"))
+    }
+    @Test fun seedlessAgainDoesNotAddDefaultsAndRemovedWorkflowNeverFallsBack() = modelTest {
+        runCurrent()
+        val source = ComfyJob(id, "image", "succeeded", buildJsonObject { put("prompt", "original") })
+        assertFalse(vm.again(source.copy(workflowId = "removed"))); assertEquals("invalid_workflow", vm.state.value.error)
+        assertTrue(vm.again(source)); runCurrent(); assertEquals(source.parameters, repo.submissions.single().parameters)
+    }
+    @Test fun editPrefillsCrossChannelDraftAndCancelsRecommendationsWithoutSubmitting() = modelTest {
+        runCurrent(); vm.prompt("mountain")
+        // Typing never bumps the revision; only an external replacement (Edit) does.
+        assertEquals(0, vm.state.value.promptRevision)
+        val source = ComfyJob(id, "api", "succeeded", buildJsonObject { put("prompt", "old prompt"); put("steps", 7); put("unknown", "drop") })
+        assertTrue(vm.edit(source)); advanceTimeBy(1000); runCurrent()
+        assertEquals(1, vm.state.value.promptRevision)
+        assertEquals("old prompt", vm.state.value.prompt); assertEquals("7", vm.state.value.values["steps"])
+        assertEquals("partner_api", vm.state.value.channel); assertFalse(vm.state.value.values.containsKey("unknown"))
+        assertEquals(0, repo.recommendations); assertTrue(repo.submissions.isEmpty())
+        assertFalse(vm.edit(source.copy(workflowId = "removed")))
+        assertEquals("api", vm.state.value.workflowId)
+    }
+    @Test fun rejectedAndUnknownSubmissionsReplaceGridPlaceholder() = modelTest {
+        runCurrent(); vm.prompt("mountain"); repo.onSubmit = { throw ComfyFailure("invalid_parameters") }
+        vm.submit(); runCurrent(); assertEquals("failed", vm.state.value.jobs.first().status)
+        assertFalse(vm.state.value.jobs.first().needsPolling())
+        repo.onSubmit = { throw ComfyFailure("network") }; vm.submit(); runCurrent()
+        assertEquals("unknown", vm.state.value.jobs.first().status); assertFalse(vm.state.value.polling)
+    }
+    @Test fun resourceSelectionsMustExistBeforeCanSubmitAndAgain() = modelTest {
+        runCurrent()
+        val loader = ComfyInput("checkpoint", buildJsonObject { put("resource", "checkpoints"); put("required", true); put("default", "base") })
+        repo.catalog = listOf(workflow.copy(inputs = workflow.inputs + loader)); vm.refresh(); runCurrent(); vm.prompt("mountain")
+        assertFalse(vm.state.value.canSubmit)
+        val source = ComfyJob(id, "image", "succeeded", buildJsonObject { put("prompt", "old"); put("steps", 20); put("checkpoint", "base") })
+        assertFalse(vm.again(source)); assertTrue(repo.submissions.isEmpty())
+    }
+    @Test fun enabledKaggleIsPreferredInitiallyWithoutCloudResourcePrerequisite() = modelTest {
+        val free = workflow.copy(id = "qwen-image-21-kaggle", channel = "kaggle_gpu", available = true, requiredModels = listOf("diffusion_models" to "qwen"))
+        runCurrent(); vm.setForeground(false)
+        repo = FakeComfy().apply { catalog = listOf(workflow, free) }
+        vm = create(repo, pending); vm.setForeground(true); runCurrent(); vm.prompt("mountain")
+        assertEquals(free.id, vm.state.value.workflowId); assertEquals("kaggle_gpu", vm.state.value.channel)
+        assertTrue(vm.state.value.canSubmit); assertFalse(vm.state.value.needsResources); assertEquals(0, repo.resourceCalls)
+        vm.filter("image", "cloud_gpu"); vm.refresh(); runCurrent()
+        assertEquals("cloud_gpu", vm.state.value.channel); assertEquals(workflow.id, vm.state.value.workflowId)
+        assertEquals("mountain", vm.state.value.prompt)
+        vm.filter("image", "partner_api"); vm.refresh(); runCurrent()
+        assertEquals("partner_api", vm.state.value.channel); assertNull(vm.state.value.workflowId)
+    }
+    @Test fun kaggleMustBeExplicitlyAvailableBeforeItReplacesInitialCloudChoice() = modelTest {
+        repo.catalog = listOf(workflow, workflow.copy(id = "free", channel = "kaggle_gpu")); runCurrent()
+        assertEquals("cloud_gpu", vm.state.value.channel)
+        repo.catalog = listOf(workflow, workflow.copy(id = "free", channel = "kaggle_gpu", available = false, unavailable = "kaggle_unavailable"))
+        vm.refresh(); runCurrent(); vm.filter("image", "kaggle_gpu"); vm.prompt("mountain")
+        assertFalse(vm.state.value.canSubmit); assertEquals("kaggle_gpu", vm.state.value.channel)
+    }
+    @Test fun coldStartPollsSameIdentityAndFailureNeverSubmitsToCloud() = modelTest {
+        runCurrent(); vm.setForeground(false)
+        repo = FakeComfy().apply { catalog = listOf(workflow, workflow.copy(id = "free", channel = "kaggle_gpu", available = true)) }
+        vm = create(repo, pending); vm.setForeground(true); runCurrent()
+        repo.onSubmit = { ComfyJob(it.requestId, it.workflowId, "queued", it.parameters, billingChannel = "kaggle_gpu", workerState = "launching", queuePosition = 2) }
+        vm.prompt("mountain"); vm.submit(); runCurrent()
+        val request = repo.submissions.single(); assertEquals("free", request.workflowId)
+        assertEquals(ComfyJobPhase.STARTING, vm.state.value.selected?.phase()); assertTrue(vm.state.value.polling)
+        repo.onJob = { ComfyJob(it, "free", "failed", errorCode = "kaggle_wait_timeout", billingChannel = "kaggle_gpu", workerState = "failed") }
+        advanceTimeBy(3000); runCurrent(); advanceTimeBy(30_000); runCurrent()
+        assertEquals(listOf(request.requestId), repo.reads); assertEquals(1, repo.submissions.size)
+        assertEquals("kaggle_wait_timeout", vm.state.value.error); assertNull(pending.id); assertFalse(vm.state.value.polling)
+        assertEquals("kaggle_gpu", vm.state.value.channel)
+        vm.filter("image", "cloud_gpu"); assertTrue(vm.state.value.canSubmit); assertEquals(1, repo.submissions.size)
+    }
     private class Pending : ComfyPendingStore {
         var id: String? = null; var failWrite = false; var failRead = false
         override suspend fun read(): String? { if (failRead) throw ComfyFailure("storage"); return id }
@@ -186,7 +328,9 @@ class ComfyViewModelTest {
             recommendations++; if (recommendFails) throw ComfyFailure("unavailable"); return listOf(ComfySuggestion("video", .9))
         }
         override suspend fun submit(request: ComfySubmission): ComfyJob { submissions += request; return onSubmit(request) }
-        override suspend fun jobs() = emptyList<ComfyJob>()
+        var history = emptyList<ComfyJob>()
+        var onHistory: (suspend () -> List<ComfyJob>)? = null
+        override suspend fun jobs() = onHistory?.invoke() ?: history
         override suspend fun job(requestId: String): ComfyJob { reads += requestId; return onJob(requestId) }
         override suspend fun resources(refresh: Boolean): ComfyResources { resourceCalls++; return inventory }
         override suspend fun download(requestId: String, output: ComfyOutput, destination: File) { downloads++; destination.writeText("test") }

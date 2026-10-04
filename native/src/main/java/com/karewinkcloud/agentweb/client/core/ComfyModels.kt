@@ -3,13 +3,15 @@ package com.karewinkcloud.agentweb.client.core
 import kotlinx.serialization.json.*
 import java.util.UUID
 
-val comfyActive = setOf("pending", "submitting", "queued", "running")
+val comfyActive = setOf("pending", "submitting", "queued", "running", "canceling")
 val comfyTerminal = setOf("succeeded", "failed", "error", "canceled", "expired")
 // Only these answered rejection codes establish that no generation was dispatched.
 val comfyRejected = setOf("invalid_request", "invalid_workflow", "invalid_parameters", "configuration_required",
     "client_setup_failed", "conflict", "too_large", "busy", "capacity", "not_found", "rate_limited", "file_exists")
 class ComfyFailure(val code: String, val field: String? = null) : Exception(code)
 fun validComfyId(id: String) = id.matches(Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))
+
+fun validComfyJobId(id: String) = id.matches(Regex("[A-Za-z0-9_-]{1,128}"))
 
 data class ComfyInput(val key: String, val spec: JsonObject) {
     val type get() = spec.string("type") ?: "string"
@@ -24,7 +26,8 @@ data class ComfyInput(val key: String, val spec: JsonObject) {
 }
 data class ComfySize(val label: String, val parameters: Map<String, String>)
 data class ComfyWorkflow(val id: String, val title: String, val description: String, val kind: String,
-    val channel: String, val inputs: List<ComfyInput>, val unavailable: String?, val requiredModels: List<Pair<String, String>>) {
+    val channel: String, val inputs: List<ComfyInput>, val unavailable: String?, val requiredModels: List<Pair<String, String>>,
+    val available: Boolean? = null) {
     val promptKey get() = inputs.firstOrNull { it.key == "prompt" }?.key
         ?: inputs.firstOrNull { it.key == "text" }?.key
     fun defaults() = inputs.associate { it.key to it.default }
@@ -47,7 +50,7 @@ data class ComfyWorkflow(val id: String, val title: String, val description: Str
         }
     }
     fun parameters(values: Map<String, String>, resources: ComfyResources?): JsonObject {
-        if (unavailable != null || (requiredModels.isNotEmpty() && resources?.ready != true) || missingModels(resources).isNotEmpty()) throw ComfyFailure("invalid_workflow")
+        if (availability(resources).kind != ComfyAvailabilityKind.AVAILABLE) throw ComfyFailure("invalid_workflow")
         return buildJsonObject {
             inputs.forEach { input ->
                 val raw = values[input.key] ?: input.default
@@ -62,7 +65,10 @@ data class ComfyWorkflow(val id: String, val title: String, val description: Str
                     "number" -> JsonPrimitive(raw.toDoubleOrNull()?.takeIf { it.isFinite() } ?: invalid())
                     "boolean" -> JsonPrimitive(if (raw.isEmpty()) false else raw.toBooleanStrictOrNull() ?: invalid())
                     "asset" -> runCatching { wireJson.parseToJsonElement(raw).jsonObject }.getOrNull()?.takeIf {
-                        validComfyId(it.string("job_id").orEmpty()) && it.long("output_index")?.let { index -> index in 0..63 } == true
+                        it.keys == setOf("job_id", "output_index") &&
+                            (it["job_id"] as? JsonPrimitive)?.isString == true &&
+                            (it["output_index"] as? JsonPrimitive)?.isString == false &&
+                            validComfyJobId(it.string("job_id").orEmpty()) && it.long("output_index")?.let { index -> index in 0..63 } == true
                     } ?: invalid()
                     "string" -> JsonPrimitive(raw)
                     else -> invalid()
@@ -90,6 +96,7 @@ data class ComfyWorkflow(val id: String, val title: String, val description: Str
             j.string("unavailable_reason") ?: j.string("unavailable")?.takeIf { it != "false" && it.isNotBlank() }
                 ?: if (j.boolean("available") == false) "unavailable" else null,
             j.objects("required_model_files").mapNotNull { file -> file.string("category")?.let { c -> file.string("name")?.let { c to it } } },
+            j.boolean("available"),
         )
     }
 }
@@ -102,15 +109,22 @@ data class ComfyResources(val items: List<ComfyResource>, val ready: Boolean, va
     }
 }
 data class ComfySuggestion(val workflowId: String, val probability: Double)
-data class ComfyOutput(val index: Int, val mime: String, val bytes: Long, val durationSeconds: Double? = null)
+data class ComfyOutput(val index: Int, val mime: String, val bytes: Long, val durationSeconds: Double? = null, val publicUrl: String? = null)
 data class ComfyJob(val requestId: String, val workflowId: String, val status: String,
-    val parameters: JsonObject = JsonObject(emptyMap()), val outputs: List<ComfyOutput> = emptyList(), val errorCode: String? = null, val jobId: String? = null, val progress: Double? = null) {
+    val parameters: JsonObject = JsonObject(emptyMap()), val outputs: List<ComfyOutput> = emptyList(), val errorCode: String? = null, val jobId: String? = null, val progress: Double? = null,
+    val billingChannel: String? = null, val workerState: String? = null, val queuePosition: Int? = null,
+    /** Kaggle cold-start stage reported by the worker (installing, models, comfy, …). */
+    val workerStage: String? = null) {
     companion object {
         fun from(j: JsonObject): ComfyJob {
             val id = requireNotNull(j.string("request_id")); require(validComfyId(id))
             return ComfyJob(id, j.string("workflow_id").orEmpty(), requireNotNull(j.string("status")), j.obj("parameters") ?: JsonObject(emptyMap()),
-                j.objects("outputs").map { ComfyOutput(requireNotNull(it.long("index")).toInt(), requireNotNull(it.string("mime")), it.long("bytes") ?: 0, (it["duration"] as? JsonPrimitive)?.doubleOrNull?.takeIf { d -> d.isFinite() && d >= 0 }) },
-                j.obj("error")?.string("code"), j.string("job_id"), (j["progress"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it in 0.0..1.0 })
+                j.objects("outputs").map { ComfyOutput(requireNotNull(it.long("index")).toInt(), requireNotNull(it.string("mime")), it.long("bytes") ?: 0, (it["duration"] as? JsonPrimitive)?.doubleOrNull?.takeIf { d -> d.isFinite() && d >= 0 },
+                    it.string("public_url")?.takeIf { url -> url.startsWith("https://") && url.length <= 512 }) },
+                j.obj("error")?.string("code"), j.string("job_id"), (j["progress"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it in 0.0..1.0 },
+                j.string("billing_channel"), j.string("worker_state"),
+                (j["queue_position"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull?.takeIf { it in 1..Int.MAX_VALUE.toLong() }?.toInt(),
+                j.string("worker_stage")?.takeIf { it in setOf("starting", "installing", "models", "comfy", "ready", "first_image") })
         }
     }
 }

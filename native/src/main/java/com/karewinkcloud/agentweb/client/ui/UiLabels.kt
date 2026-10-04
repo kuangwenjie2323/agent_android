@@ -50,27 +50,68 @@ internal val LocalAppResources = staticCompositionLocalOf<Resources?> { null }
     "succeeded" -> S.status_succeeded; "failed", "error" -> S.status_failed; "canceled" -> S.status_canceled
     "expired" -> S.status_expired; "query_failed" -> S.status_query_failed; else -> S.status_unknown
 })
-@Composable internal fun comfyError(code: String) = tr(when(code) {
+internal fun comfyChannelResource(channel: String) = when (channel) {
+    "kaggle_gpu" -> S.channel_kaggle; "cloud_gpu" -> S.channel_gpu; "partner_api" -> S.channel_api; else -> S.channel_unknown
+}
+internal fun comfyChannelHintResource(channel: String) = when (channel) {
+    "kaggle_gpu" -> S.channel_kaggle_hint; "cloud_gpu" -> S.channel_gpu_hint; "partner_api" -> S.channel_api_hint; else -> S.channel_unknown
+}
+internal fun comfyProgressResource(job: ComfyJob) = if (job.status == "canceling") S.status_canceling else when (job.phase()) {
+    ComfyJobPhase.STARTING -> when (job.workerStage) {
+        "installing" -> S.status_kaggle_installing
+        "models" -> S.status_kaggle_models
+        "comfy", "ready", "first_image" -> S.status_kaggle_comfy
+        else -> S.status_kaggle_starting
+    }
+    ComfyJobPhase.QUEUED -> S.status_queued
+    ComfyJobPhase.FINISHING -> S.status_finishing
+    else -> S.status_running
+}
+internal fun comfyErrorResource(code: String) = when(code) {
     "auth", "sign_in_required" -> S.error_auth; "forbidden" -> S.error_forbidden
     "network", "timeout" -> S.error_network; "invalid_parameters", "invalid_request", "validation_error" -> S.error_invalid_parameters
     "invalid_workflow", "workflow_not_found" -> S.workflow_unavailable; "storage" -> S.error_storage
     "busy", "capacity", "rate_limited" -> S.error_busy; "configuration_required", "client_setup_failed" -> S.error_config
     "not_found" -> S.error_not_found; "media", "output_unavailable" -> S.error_media; "too_large" -> S.error_too_large
-    "history_failed" -> S.error_history; "conflict" -> S.error_conflict; "unknown" -> S.uncertain_hint; else -> S.error_generic
-})
+    "history_failed" -> S.error_history; "conflict" -> S.error_conflict; "unknown" -> S.uncertain_hint
+    "kaggle_launch_failed" -> S.error_kaggle_launch
+    "kaggle_quota_exhausted" -> S.error_kaggle_quota
+    "kaggle_wait_timeout" -> S.error_kaggle_wait
+    "kaggle_lease_expired" -> S.error_kaggle_lease
+    "kaggle_worker_lost" -> S.error_kaggle_worker_lost
+    "kaggle_execution_failed" -> S.error_kaggle_execution
+    "kaggle_unavailable" -> S.error_kaggle_unavailable
+    else -> S.error_generic
+}
+@Composable internal fun comfyError(code: String) = tr(comfyErrorResource(code))
 @Composable internal fun fieldLabel(input: ComfyInput): String {
     val id = when (input.key) {
         "prompt", "text" -> S.field_prompt; "negative_prompt" -> S.field_negative_prompt; "seed" -> S.field_seed; "steps" -> S.field_steps
         "width" -> S.field_width; "height" -> S.field_height; "duration", "duration_seconds" -> S.field_duration
         "size" -> S.size; "resolution" -> S.field_resolution; "aspect_ratio" -> S.field_aspect_ratio
-        "cfg", "guidance", "prompt_influence" -> S.field_guidance
+        "cfg", "guidance", "guidance_scale", "prompt_influence" -> S.field_guidance
         "model", "model_name", "checkpoint", "ckpt_name", "diffusion_model", "unet_name" -> S.field_model
         "lora", "lora_name" -> S.field_lora; "strength_model", "strength_clip", "lora_strength" -> S.field_strength
         "clip_name", "clip_name1", "clip_name2", "text_encoder", "text_encoder_2" -> S.field_encoder
         "vae", "vae_name" -> S.field_vae; "image" -> S.field_image; "lyrics" -> S.field_lyrics
-        "output_format" -> S.field_format; "quality" -> S.field_quality; "style" -> S.field_style; "language" -> S.field_language
+        "output_format" -> S.field_format; "quality" -> S.field_quality; "style" -> S.field_style; "language", "language_code" -> S.field_language
         "voice", "voice_id" -> S.field_voice; "camera_fixed" -> S.field_camera_fixed; "loop" -> S.field_loop
         "generate_audio" -> S.field_generate_audio; "raw" -> S.field_raw
+        "image_weight" -> S.field_image_weight
+        "creativity" -> S.field_creativity
+        "background" -> S.field_background
+        "color_preservation" -> S.field_color_preservation
+        "face_enhancement" -> S.field_face_enhancement
+        "loudness_rate" -> S.field_loudness_rate
+        "pitch_rate" -> S.field_pitch_rate
+        "speech_rate" -> S.field_speech_rate
+        "stability" -> S.field_stability
+        "movement_amplitude" -> S.field_movement_amplitude
+        "prompt_extend" -> S.field_prompt_extend
+        "rendering_speed" -> S.field_rendering_speed
+        "sample_rate" -> S.field_sample_rate
+        "subject_detection" -> S.field_subject_detection
+        "thinking" -> S.field_thinking
         else -> null
     }
     return id?.let { tr(it) } ?: input.title

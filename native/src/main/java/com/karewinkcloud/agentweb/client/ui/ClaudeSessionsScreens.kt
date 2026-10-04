@@ -10,6 +10,7 @@ import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.karewinkcloud.agentweb.client.core.ClaudeSession
+import com.karewinkcloud.agentweb.client.core.readableModelId
 import com.karewinkcloud.agentweb.client.R.string as S
 import com.karewinkcloud.agentweb.client.R
 import java.time.Instant
@@ -101,7 +102,7 @@ internal fun ColumnScope.ClaudeHistoryScreen(preview: ClaudePreviewState, vm: Ag
             }
         }
         if (!preview.loading && preview.messages.isEmpty() && preview.error == null) item("empty") { EmptyState(R.drawable.aw_chat, tr(S.no_messages)) }
-        items(preview.messages, key = { it.id }, contentType = { it.role }) { MessageView(it, modelLabel = it.model ?: session.model.takeIf { model -> model.isNotBlank() }) }
+        items(preview.messages, key = { it.id }, contentType = { it.role }) { MessageView(it, modelLabel = (it.model ?: session.model.takeIf { model -> model.isNotBlank() })?.let(::readableModelId)) }
         if (preview.error != null) item("error") { ErrorBlock(preview.error, vm::refreshClaudePreview, tr(S.refresh)) }
     }
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {

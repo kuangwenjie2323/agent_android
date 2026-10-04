@@ -15,6 +15,8 @@ interface ComfyRepository {
     suspend fun job(requestId: String): ComfyJob
     suspend fun resources(refresh: Boolean = false): ComfyResources
     suspend fun download(requestId: String, output: ComfyOutput, destination: File)
+    /** Uploads one finished output to the server's public R2 storage; returns its stable https link. */
+    suspend fun publish(requestId: String, output: ComfyOutput): String = throw ComfyFailure("publish_unavailable")
 }
 
 class HttpComfyRepository(private val http: HttpAgentRepository) : ComfyRepository {
@@ -66,6 +68,11 @@ class HttpComfyRepository(private val http: HttpAgentRepository) : ComfyReposito
         if (output.bytes > limit) throw ComfyFailure("too_large")
         // Derive a same-origin endpoint: never forward the bearer to an output URL.
         http.download("/api/comfy/jobs/$requestId/outputs/${output.index}", destination, output.mime, limit)
+    }
+    override suspend fun publish(requestId: String, output: ComfyOutput) = operation {
+        require(validComfyId(requestId) && output.index in 0..63)
+        val url = http.json("/api/comfy/jobs/$requestId/outputs/${output.index}/publish", buildJsonObject { }, 90).string("public_url")
+        requireNotNull(url?.takeIf { it.startsWith("https://") && it.length <= 512 })
     }
 }
 val mediaExtensions = mapOf("image/png" to "png", "image/jpeg" to "jpg", "image/jpg" to "jpg", "image/webp" to "webp", "image/gif" to "gif",

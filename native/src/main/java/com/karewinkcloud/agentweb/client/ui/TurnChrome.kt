@@ -63,7 +63,7 @@ data class FooterLabels(val input: String, val output: String, val steps: String
 /** Templates come from Android resources; the formatting is also testable without Android. */
 fun turnFooter(usage: TurnUsage?, traceDurationMs: Long?, steps: Int?, labels: FooterLabels): String = buildList {
     (usage?.durationMs ?: traceDurationMs)?.takeIf { it >= 0 }?.let { add(elapsedLabel(it)) }
-    usage?.inputTokens?.takeIf { it >= 0 }?.let { add(String.format(Locale.ROOT, labels.input, compactTokenCount(it))) }
+    usage?.promptTokens?.takeIf { it >= 0 }?.let { add(String.format(Locale.ROOT, labels.input, compactTokenCount(it))) }
     usage?.outputTokens?.takeIf { it >= 0 }?.let { add(String.format(Locale.ROOT, labels.output, compactTokenCount(it))) }
     steps?.takeIf { it > 0 }?.let { add(String.format(Locale.ROOT, labels.steps, it)) }
 }.joinToString(" · ")
@@ -129,7 +129,7 @@ internal fun WorkingIndicator(turn: TurnState, connection: Connection?) {
 }
 
 @Composable
-private fun WorkingSpark(animate: Boolean) {
+internal fun WorkingSpark(animate: Boolean) {
     // Animated values are read only inside the draw lambda, so frames redraw without recomposing.
     var rotation: State<Float> = remember { mutableFloatStateOf(0f) }
     var breathing: State<Float> = remember { mutableFloatStateOf(1f) }
