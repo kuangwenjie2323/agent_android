@@ -124,6 +124,18 @@ class ComfyViewModelTest {
         receipt.complete(ComfyJob(original, "image", "succeeded")); runCurrent()
         assertEquals(original, pending.id); assertNull(vm.state.value.selected); assertTrue(next.submissions.isEmpty())
     }
+    @Test fun deleteRemovesFromHistoryOnlyAfterTheServerConfirms() = modelTest {
+        val done = ComfyJob(id, "image", "succeeded")
+        repo.history = listOf(done, ComfyJob("22345678-1234-1234-1234-123456789012", "image", "failed"))
+        runCurrent(); repo.onJob = { done }; vm.open(done); runCurrent()
+        repo.deleteFails = "unpublish_failed"
+        assertEquals("unpublish_failed", runCatching { vm.delete(done) }.exceptionOrNull()?.let { (it as ComfyFailure).code })
+        assertEquals(2, vm.state.value.jobs.size)
+        repo.deleteFails = null; vm.delete(done)
+        assertEquals(listOf(id), repo.deletions)
+        assertEquals(listOf("22345678-1234-1234-1234-123456789012"), vm.state.value.jobs.map { it.requestId })
+        assertNull(vm.state.value.selected)
+    }
     @Test fun openingHistoryOnlyReadsAndNeverChangesDraft() = modelTest {
         runCurrent(); vm.prompt("keep me"); repo.onJob = { ComfyJob(it, "video", "succeeded") }
         vm.open(ComfyJob(id, "video", "succeeded")); runCurrent()
@@ -334,5 +346,7 @@ class ComfyViewModelTest {
         override suspend fun job(requestId: String): ComfyJob { reads += requestId; return onJob(requestId) }
         override suspend fun resources(refresh: Boolean): ComfyResources { resourceCalls++; return inventory }
         override suspend fun download(requestId: String, output: ComfyOutput, destination: File) { downloads++; destination.writeText("test") }
+        val deletions = mutableListOf<String>(); var deleteFails: String? = null
+        override suspend fun delete(requestId: String) { deleteFails?.let { throw ComfyFailure(it) }; deletions += requestId }
     }
 }

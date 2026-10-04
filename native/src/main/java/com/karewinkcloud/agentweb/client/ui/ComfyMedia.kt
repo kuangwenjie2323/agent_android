@@ -13,6 +13,8 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -45,14 +47,14 @@ private fun decodePreview(file: File, size: Int): Bitmap {
     return BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample }) ?: throw ComfyFailure("media")
 }
 @Composable
-private fun mediaState(job: ComfyJob, output: ComfyOutput, vm: ComfyViewModel, size: Int, revision: Int = 0): State<MediaState> {
+private fun mediaState(job: ComfyJob, output: ComfyOutput, vm: ComfyViewModel, size: Int, revision: Int = 0, preview: Int = 0): State<MediaState> {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    return produceState(MediaState(), job.requestId, output, vm, revision, lifecycle) {
+    return produceState(MediaState(), job.requestId, output, vm, revision, lifecycle, preview) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             if (value.file == null || value.failed) {
                 value = MediaState()
                 try {
-                    val file = vm.output(job, output)
+                    val file = if (preview > 0) vm.preview(job, output, preview) else vm.output(job, output)
                     val bitmap = if (output.mime.startsWith("image/")) withContext(Dispatchers.IO) { decodePreview(file, size) } else null
                     value = MediaState(file, bitmap)
                 } catch (e: CancellationException) { throw e }
@@ -65,8 +67,9 @@ private fun mediaState(job: ComfyJob, output: ComfyOutput, vm: ComfyViewModel, s
 @Composable
 internal fun ComfyThumbnail(job: ComfyJob, vm: ComfyViewModel, modifier: Modifier = Modifier) {
     val output = job.outputs.firstOrNull { it.mime.startsWith("image/") }
-    val bitmap = if (output != null) mediaState(job, output, vm, 480).value.bitmap else null
-    Box(modifier.size(52.dp).clip(RoundedCornerShape(16.dp)), contentAlignment = Alignment.Center) {
+    val bitmap = if (output != null) mediaState(job, output, vm, 480, preview = 512).value.bitmap else null
+    Box(modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh),
+        contentAlignment = Alignment.Center) {
         Crossfade(bitmap, label = "creation preview", modifier = Modifier.fillMaxSize()) { image ->
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 if (image != null) Image(image.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -79,7 +82,11 @@ internal fun ComfyThumbnail(job: ComfyJob, vm: ComfyViewModel, modifier: Modifie
 @Composable
 internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewModel) {
     var revision by remember(job.requestId, output.index) { mutableIntStateOf(0) }
-    val media by mediaState(job, output, vm, 1280, revision)
+    val image = output.mime.startsWith("image/")
+    val media by mediaState(job, output, vm, 1280, revision, preview = if (image) 1280 else 0)
+    // Images display a preview; the original is downloaded only when an action needs it.
+    var original by remember(job.requestId, output.index) { mutableStateOf<File?>(null) }
+    var fetching by remember(job.requestId, output.index) { mutableStateOf(false) }
     val context = LocalContext.current
     val activity = LocalActivity.current
     val scope = rememberCoroutineScope()
@@ -93,7 +100,14 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
     @Suppress("DEPRECATION") val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     var saving by remember { mutableStateOf(false) }
     val file = media.file
+    suspend fun originalFile(): File = original ?: (if (image) vm.output(job, output) else requireNotNull(file)).also { original = it }
+    fun withOriginal(block: suspend (File) -> Unit) = scope.launch {
+        fetching = true
+        val source = try { originalFile() } catch (e: CancellationException) { throw e } catch (_: Exception) { null } finally { fetching = false }
+        if (source == null) actionMessage = S.output_failed else block(source)
+    }
     val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(output.mime)) { uri ->
+        val file = original
         if (uri != null && file != null) scope.launch {
             saving = true
             try { withContext(Dispatchers.IO) {
@@ -104,8 +118,7 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
             finally { saving = false }
         }
     }
-    fun mediaIntent(action: String) {
-        if (file == null) return
+    fun mediaIntent(action: String, file: File) {
         try {
             val uri = FileProvider.getUriForFile(context, "${context.packageName}.comfy-output", file)
             val intent = Intent(action).apply {
@@ -122,21 +135,32 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         when {
             media.failed -> TextButton({ revision++ }, Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(tr(S.output_failed)) }
-            file == null -> Text(tr(S.output_loading), Modifier.padding(vertical = 24.dp), style = MaterialTheme.typography.bodyMedium)
+            // Show the tile's small preview (usually cached) while the original downloads.
+            file == null -> {
+                val preview = if (output.mime.startsWith("image/")) mediaState(job, output, vm, 640, preview = 512).value.bitmap else null
+                val ratio = preview?.let { it.width.toFloat() / it.height.coerceAtLeast(1) }?.coerceIn(.5f, 2f) ?: 1f
+                Box(Modifier.fillMaxWidth().aspectRatio(ratio).clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh), contentAlignment = Alignment.Center) {
+                if (preview != null) Image(preview.asImageBitmap(), tr(S.output_preview), Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
+            } }
             media.bitmap != null -> Image(media.bitmap!!.asImageBitmap(), tr(S.output_preview),
-                Modifier.fillMaxWidth().heightIn(max = 480.dp).clip(RoundedCornerShape(16.dp)), contentScale = ContentScale.Fit)
-            output.mime.startsWith("video/") -> FilledTonalButton({ mediaIntent(Intent.ACTION_VIEW) }, Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
+                Modifier.fillMaxWidth().heightIn(max = 480.dp).clip(RoundedCornerShape(16.dp))
+                    .clickable(onClickLabel = tr(S.output_open), enabled = !fetching) { withOriginal { mediaIntent(Intent.ACTION_VIEW, it) } }, contentScale = ContentScale.Fit)
+            output.mime.startsWith("video/") -> FilledTonalButton({ mediaIntent(Intent.ACTION_VIEW, file) }, Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
                 AppIcon(R.drawable.aw_play); Spacer(Modifier.width(8.dp)); Text(tr(S.open_video))
             }
             else -> AudioOutput(file)
         }
+        if (fetching) Text(tr(S.output_fetching_original), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (file != null) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
             FilledTonalButton(onClick = {
-                if (Build.VERSION.SDK_INT < 29) {
+                if (Build.VERSION.SDK_INT < 29) withOriginal { file ->
                     try { saver.launch("AgentWeb-${job.requestId.take(8)}-${output.index}.${file.extension}") }
                     catch (_: Exception) { actionMessage = S.save_failed }
                 }
-                else scope.launch {
+                else withOriginal { file ->
                     saving = true
                     try {
                         withContext(Dispatchers.IO) {
@@ -166,11 +190,11 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
                     catch (_: Exception) { actionMessage = S.save_failed }
                     finally { saving = false }
                 }
-            }, enabled = !saving, modifier = Modifier.weight(1f)) {
+            }, enabled = !saving && !fetching, modifier = Modifier.weight(1f)) {
                 AppIcon(R.drawable.aw_save); Spacer(Modifier.width(8.dp)); Text(tr(when { saving -> S.saving; saved -> S.output_saved_to_gallery; else -> S.save_output }))
             }
             Spacer(Modifier.width(8.dp))
-            OutlinedButton({ mediaIntent(Intent.ACTION_SEND) }, Modifier.weight(1f)) {
+            OutlinedButton({ withOriginal { mediaIntent(Intent.ACTION_SEND, it) } }, Modifier.weight(1f), enabled = !fetching) {
                 AppIcon(R.drawable.aw_share); Spacer(Modifier.width(8.dp)); Text(tr(S.share_output))
             }
         }

@@ -392,4 +392,16 @@
     <string name="status_kaggle_installing">Free GPU ready, installing ComfyUI…</string>
     <string name="status_kaggle_models">Preparing models…</string>
     <string name="status_kaggle_comfy">Loading models, generation starts shortly…</string>
+    <string name="failed_show">Show failed (%1$d)</string>
+    <string name="failed_hide">Hide failed</string>
+    <string name="output_open">Open full screen</string>
+    <string name="delete">Delete</string>
+    <string name="delete_creation">Delete creation</string>
+    <string name="deleting">Deleting…</string>
+    <string name="delete_confirm_title">Delete this creation?</string>
+    <string name="delete_confirm_body">This removes it from the server. It cannot be undone.</string>
+    <string name="delete_confirm_public">This removes it from the server and deletes its public link. It cannot be undone.</string>
+    <string name="error_job_active">This task is still running. Delete it after it finishes.</string>
+    <string name="error_unpublish_failed">The public copy could not be removed. Try again.</string>
+    <string name="output_fetching_original">Downloading the original…</string>
 </resources>

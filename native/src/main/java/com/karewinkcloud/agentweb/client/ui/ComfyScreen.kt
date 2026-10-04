@@ -16,9 +16,11 @@ import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.*
@@ -40,6 +42,7 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
     var settingsOpen by remember { mutableStateOf(false) }
     var detailOpen by remember { mutableStateOf(false) }
     var galleryOpen by remember { mutableStateOf(false) }
+    var showFailed by rememberSaveable { mutableStateOf(false) }
     var returnToSettings by remember { mutableStateOf(false) }
     var prompt by remember { mutableStateOf(TextFieldValue(state.prompt)) }
     // Sync only external replacements. Echoes of our own typing arrive late and would reset the
@@ -53,7 +56,7 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
     val tileWidth = 136.dp * LocalDensity.current.fontScale.coerceIn(1f, 1.5f)
     LazyVerticalGrid(GridCells.Adaptive(tileWidth), Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item("recent-title", span = { GridItemSpan(maxLineSpan) }) { SectionLabel(tr(S.recent_works), Modifier.padding(bottom = 4.dp)) }
+
         if (state.error != null) item("error", span = { GridItemSpan(maxLineSpan) }) {
             ErrorBlock(ClientError(comfyError(state.error!!)), if (state.pending != null) ({ vm.check() }) else vm::refresh,
                 tr(if (state.pending != null) S.check_status else S.refresh))
@@ -62,11 +65,21 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
             ?: state.jobs.find { it.requestId == id } ?: ComfyJob(id, "", "unknown") }
         val jobs = (if (pendingJob != null && state.jobs.none { it.requestId == pendingJob.requestId }) listOf(pendingJob) else emptyList()) +
             state.jobs.map { job -> pendingJob?.takeIf { it.requestId == job.requestId } ?: job }
+        val failed = jobs.count { it.phase() == ComfyJobPhase.FAILED }
+        val shown = if (showFailed) jobs else jobs.filter { it.phase() != ComfyJobPhase.FAILED }
+        item("recent-title", span = { GridItemSpan(maxLineSpan) }) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+                SectionLabel(tr(S.recent_works), Modifier.weight(1f))
+                if (failed > 0) TextButton({ showFailed = !showFailed }) {
+                    Text(if (showFailed) tr(S.failed_hide) else tr(S.failed_show, failed), style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
         if (jobs.isEmpty() && !state.loading && state.error == null) item("empty", span = { GridItemSpan(maxLineSpan) }) {
             EmptyState(R.drawable.aw_create, tr(S.history_empty), tr(S.creation_empty_hint))
         }
         if (jobs.isEmpty() && state.loading) item("loading", span = { GridItemSpan(maxLineSpan) }) { LoadingState(tr(S.loading)) }
-        items(jobs, key = { it.requestId }) { job ->
+        items(shown, key = { it.requestId }) { job ->
             CreationTile(job, state.workflows.find { it.id == job.workflowId }?.title ?: job.workflowId, vm) { vm.open(job); detailOpen = true }
         }
     }
@@ -95,7 +108,8 @@ private fun CreationTile(job: ComfyJob, title: String, vm: ComfyViewModel, onCli
                     if (phase == ComfyJobPhase.COMPLETE) ComfyThumbnail(job, vm, Modifier.fillMaxSize())
                     else if (phase in setOf(ComfyJobPhase.STARTING, ComfyJobPhase.QUEUED, ComfyJobPhase.RUNNING, ComfyJobPhase.FINISHING))
                         CreationProgress(job, vm, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 36.dp))
-                    else Text(comfyStatus(job.status), Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
+                    else Text(comfyStatus(job.status), Modifier.padding(16.dp), style = MaterialTheme.typography.labelLarge,
+                        color = if (phase == ComfyJobPhase.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = .9f), shape = RoundedCornerShape(16.dp),
@@ -166,40 +180,80 @@ private fun CreationDetail(state: ComfyState, vm: ComfyViewModel, onEdit: () -> 
         state.loading || !state.initialized -> tr(S.loading)
         else -> null
     }
+    val active = job.phase() != ComfyJobPhase.COMPLETE
+    val scope = rememberCoroutineScope()
+    var confirmDelete by remember(job.requestId) { mutableStateOf(false) }
+    var deleting by remember(job.requestId) { mutableStateOf(false) }
+    var deleteError by remember(job.requestId) { mutableStateOf<String?>(null) }
     AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            item("title") { Text(workflow?.title ?: tr(S.job_detail), style = MaterialTheme.typography.titleLarge) }
-            item("status") {
+        LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            item("title") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(workflow?.title ?: tr(S.job_detail), Modifier.weight(1f).semantics { heading() }, maxLines = 2,
+                        overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
+                    ActionIcon(R.drawable.aw_close, tr(S.close), onClick = onClose)
+                }
+            }
+            // A finished result leads with the media; status controls only matter while a job is open or failed.
+            if (active) item("status") {
                 if (job.phase() in setOf(ComfyJobPhase.STARTING, ComfyJobPhase.QUEUED, ComfyJobPhase.RUNNING, ComfyJobPhase.FINISHING))
                     CreationProgress(job, vm, Modifier.fillMaxWidth().padding(vertical = 16.dp))
-                else Text(comfyStatus(job.status), Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                else Text(comfyStatus(job.status), Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    style = MaterialTheme.typography.titleSmall, color = if (job.phase() == ComfyJobPhase.FAILED) MaterialTheme.colorScheme.error else Color.Unspecified)
+                job.errorCode?.let { Text(comfyError(it), style = MaterialTheme.typography.bodyMedium) }
                 if (job.status in setOf("unknown", "query_failed")) Text(tr(S.uncertain_hint), style = MaterialTheme.typography.bodySmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (job.phase() != ComfyJobPhase.FAILED) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton({ vm.check(job.requestId) }, enabled = !state.checking && !state.submitting) { Text(tr(S.check_status)) }
                     if (job.needsPolling() || state.polling || state.pollingPaused) TextButton(
                         { if (state.pollingPaused) vm.resumePolling() else vm.stopPolling() }) { Text(tr(if (state.pollingPaused) S.resume_polling else S.pause_polling)) }
                 }
                 if (job.needsPolling() || state.pollingPaused) Text(tr(S.polling_hint), style = MaterialTheme.typography.bodySmall)
-                job.errorCode?.let { Text(comfyError(it), color = MaterialTheme.colorScheme.error) }
-                state.error?.let { ErrorBlock(ClientError(comfyError(it))) }
+            }
+            state.error?.let { item("error") { ErrorBlock(ClientError(comfyError(it))) } }
+            items(job.outputs, key = { it.index }) { output -> ComfyOutputView(job, output, vm) }
+            if (jobPrompt.isNotBlank()) item("prompt") {
+                Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(12.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(start = 12.dp, top = 12.dp, end = 4.dp)) {
+                        Text(jobPrompt, Modifier.padding(end = 8.dp), maxLines = 6, overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodyMedium)
+                        TextButton({ clipboard.setText(AnnotatedString(jobPrompt)); copied = true }, Modifier.align(Alignment.End)) {
+                            Text(tr(if (copied) S.copied else S.copy_prompt))
+                        }
+                    }
+                }
             }
             item("actions") {
-                if (jobPrompt.isNotBlank()) {
-                    Text(jobPrompt, maxLines = 4, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
-                    TextButton({ clipboard.setText(AnnotatedString(jobPrompt)); copied = true }) { Text(tr(if (copied) S.copied else S.copy_prompt)) }
-                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilledTonalButton({ if (vm.again(job)) onClose() else actionFailed = true },
                         Modifier.weight(1f), enabled = blockedReason == null) { Text(tr(S.creation_again)) }
                     OutlinedButton({ if (vm.edit(job)) onEdit() else actionFailed = true },
                         Modifier.weight(1f), enabled = editBlocked == null) { Text(tr(S.creation_edit)) }
                 }
-                (blockedReason ?: editBlocked)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                (blockedReason ?: editBlocked)?.let { Text(it, Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 if (actionFailed) Text(tr(S.creation_action_failed), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
-            items(job.outputs, key = { it.index }) { output -> ComfyOutputView(job, output, vm) }
+            if (job.phase() in setOf(ComfyJobPhase.COMPLETE, ComfyJobPhase.FAILED)) item("delete") {
+                TextButton({ confirmDelete = true }, Modifier.fillMaxWidth(), enabled = !deleting,
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                    AppIcon(R.drawable.aw_delete); Spacer(Modifier.width(8.dp)); Text(tr(if (deleting) S.deleting else S.delete_creation))
+                }
+                deleteError?.let { Text(comfyError(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+            }
         }
     }
+    if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false },
+        title = { Text(tr(S.delete_confirm_title)) },
+        text = { Text(tr(if (job.outputs.any { it.publicUrl != null }) S.delete_confirm_public else S.delete_confirm_body)) },
+        confirmButton = { TextButton({
+            confirmDelete = false; deleting = true; deleteError = null
+            scope.launch {
+                try { vm.delete(job); onClose() }
+                catch (e: ComfyFailure) { deleteError = e.code }
+                finally { deleting = false }
+            }
+        }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text(tr(S.delete)) } },
+        dismissButton = { TextButton({ confirmDelete = false }) { Text(tr(S.cancel)) } })
 }
 
 @Composable

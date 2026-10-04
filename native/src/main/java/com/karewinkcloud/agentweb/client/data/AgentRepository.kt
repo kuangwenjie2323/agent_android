@@ -131,6 +131,13 @@ class HttpAgentRepository(
                 .getOrElse { throw ApiException(response.code, ClientError("The server returned an unreadable response.")) }
         }
     }
+    internal suspend fun delete(path: String, timeoutSeconds: Long? = null): JsonObject = withContext(Dispatchers.IO) {
+        execute(request(path).newBuilder().delete().build(), timeoutSeconds) { response ->
+            validate(response)
+            runCatching { wireJson.parseToJsonElement(response.body?.string().orEmpty()) as JsonObject }
+                .getOrElse { throw ApiException(response.code, ClientError("The server returned an unreadable response.")) }
+        }
+    }
     /** Stream authenticated output to private disk; never load an unbounded byte array. */
     internal suspend fun download(path: String, destination: java.io.File, mime: String, maxBytes: Long): Unit = withContext(Dispatchers.IO) {
         val owner = currentCoroutineContext()

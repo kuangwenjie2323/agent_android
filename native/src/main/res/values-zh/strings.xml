@@ -388,4 +388,16 @@
     <string name="status_kaggle_installing">免费 GPU 已就绪，正在安装 ComfyUI…</string>
     <string name="status_kaggle_models">正在准备模型…</string>
     <string name="status_kaggle_comfy">正在载入模型，马上开始生成…</string>
+    <string name="failed_show">显示失败（%1$d）</string>
+    <string name="failed_hide">隐藏失败</string>
+    <string name="output_open">全屏查看</string>
+    <string name="delete">删除</string>
+    <string name="delete_creation">删除作品</string>
+    <string name="deleting">正在删除…</string>
+    <string name="delete_confirm_title">删除这个作品？</string>
+    <string name="delete_confirm_body">会从服务器上删除，删除后无法恢复。</string>
+    <string name="delete_confirm_public">会从服务器上删除，并让公开链接失效，删除后无法恢复。</string>
+    <string name="error_job_active">作品还在生成中，完成后才能删除。</string>
+    <string name="error_unpublish_failed">公开链接删除失败，请重试。</string>
+    <string name="output_fetching_original">正在下载原图…</string>
 </resources>

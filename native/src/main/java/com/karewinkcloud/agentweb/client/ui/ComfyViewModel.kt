@@ -7,7 +7,9 @@ import com.karewinkcloud.agentweb.client.data.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
 
 // Unknown submission identity survives process death; drafts and downloaded output do not enter Bundles.
@@ -53,7 +55,11 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
     private var checkingGeneration = 0L
     private val observed = mutableMapOf<String, Long>()
     private var lastPolled: String? = null
-    private val mediaLock = Mutex()
+    // One lock per output (a cached file never waits behind another download), and at most
+    // three downloads at once so a slow upstream output cannot stall the whole gallery.
+    private val mediaLocks = mutableMapOf<String, Mutex>()
+    private val downloadSlots = Semaphore(3)
+    private val evictionLock = Mutex()
     private fun observe(job: ComfyJob) { observed.putIfAbsent(job.requestId, System.nanoTime()) }
     fun observedMillis(requestId: String): Long = ((System.nanoTime() - observed.getOrPut(requestId) { System.nanoTime() }) / 1_000_000).coerceAtLeast(0)
     private fun pollingIds(): List<String> = buildList {
@@ -229,6 +235,14 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
     }
     suspend fun publish(job: ComfyJob, output: ComfyOutput): String = repository.publish(job.requestId, output)
 
+    /** Deletes a finished creation on the server, then drops it from history. Throws [ComfyFailure]. */
+    suspend fun delete(job: ComfyJob) {
+        repository.delete(job.requestId)
+        if (state.value.selected?.requestId == job.requestId) stopPolling(user = false)
+        mutable.update { current -> current.copy(jobs = current.jobs.filterNot { it.requestId == job.requestId },
+            selected = current.selected?.takeUnless { it.requestId == job.requestId }) }
+    }
+
     fun again(job: ComfyJob): Boolean {
         if (state.value.pending != null || state.value.submitting || !state.value.initialized || state.value.signInRequired || state.value.loading) return false
         val workflow = state.value.workflows.find { it.id == job.workflowId }
@@ -342,28 +356,39 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
         mutable.update { it.copy(polling = false, checking = false, pollingPaused = if (user) true else it.pollingPaused) }
     }
     fun resumePolling() { mutable.update { it.copy(pollingPaused = false) }; check(state.value.pending ?: nextPollingId() ?: state.value.selected?.requestId) }
-    suspend fun output(job: ComfyJob, output: ComfyOutput): File = mediaLock.withLock {
+    /** The original file, needed only to save, share or open full screen. */
+    suspend fun output(job: ComfyJob, output: ComfyOutput): File = cached(job, output, edge = 0)
+    /** A JPEG preview (512 for tiles, 1280 for the detail view); falls back to the original when the server has none. */
+    suspend fun preview(job: ComfyJob, output: ComfyOutput, edge: Int = 512): File =
+        if (!output.mime.startsWith("image/")) output(job, output)
+        else try { cached(job, output, edge) } catch (e: CancellationException) { throw e } catch (_: ComfyFailure) { output(job, output) }
+    private suspend fun cached(job: ComfyJob, output: ComfyOutput, edge: Int): File = synchronized(mediaLocks) {
+        mediaLocks.getOrPut("${job.requestId}-${output.index}-$edge") { Mutex() }
+    }.withLock {
+        val thumbnail = edge > 0
         val source = repository; val owner = epoch
         withContext(io) {
             if (state.value.signInRequired) throw ComfyFailure("auth")
             mediaDirectory.mkdirs()
-            val extension = mediaExtensions[output.mime] ?: throw ComfyFailure("media")
-            val file = File(mediaDirectory, "$mediaSession-$owner-${job.requestId}-${output.index}.$extension")
-            if (!file.isFile) {
+            val extension = if (thumbnail) "jpg" else mediaExtensions[output.mime] ?: throw ComfyFailure("media")
+            val file = File(mediaDirectory, "$mediaSession-$owner-${job.requestId}-${output.index}${if (thumbnail) "-p$edge" else ""}.$extension")
+            if (!file.isFile) downloadSlots.withPermit {
                 // Private, disposable cache: reserve at most one bounded media download.
-                val existing = mediaDirectory.listFiles()?.filter { it.isFile && !it.name.endsWith(".part") }
-                    ?.sortedBy { it.lastModified() }.orEmpty()
-                var retained = existing.sumOf { it.length() }
-                val selectedPrefix = "$mediaSession-$owner-${state.value.selected?.requestId}-"
-                for (old in existing) {
-                    if (retained <= 256L * 1024 * 1024 && System.currentTimeMillis() - old.lastModified() < 24 * 60 * 60 * 1000L) break
-                    if (old.name.startsWith(selectedPrefix)) continue
-                    val length = old.length()
-                    if (old.delete()) retained -= length
+                evictionLock.withLock {
+                    val existing = mediaDirectory.listFiles()?.filter { it.isFile && !it.name.endsWith(".part") }
+                        ?.sortedBy { it.lastModified() }.orEmpty()
+                    var retained = existing.sumOf { it.length() }
+                    val selectedPrefix = "$mediaSession-$owner-${state.value.selected?.requestId}-"
+                    for (old in existing) {
+                        if (retained <= 256L * 1024 * 1024 && System.currentTimeMillis() - old.lastModified() < 24 * 60 * 60 * 1000L) break
+                        if (old.name.startsWith(selectedPrefix)) continue
+                        val length = old.length()
+                        if (old.delete()) retained -= length
+                    }
                 }
                 val temporary = File.createTempFile("download-", ".part", mediaDirectory)
                 try {
-                    source.download(job.requestId, output, temporary)
+                    if (thumbnail) source.thumbnail(job.requestId, output, temporary, edge) else source.download(job.requestId, output, temporary)
                     if (owner != epoch) throw CancellationException("Connection changed")
                     if (!temporary.renameTo(file)) throw ComfyFailure("storage")
                 } finally { temporary.delete() }
