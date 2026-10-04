@@ -154,6 +154,11 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
             catch (e: Exception) { if (owner == epoch) mutable.update { it.copy(initialized = false, loading = false, error = failure(e)) } }
         }
     }
+    /** Replace the prompt from outside the field (a style or an inspiration), moving the cursor to the end. */
+    fun replacePrompt(value: String) {
+        mutable.update { it.copy(prompt = value, promptRevision = it.promptRevision + 1) }
+        prompt(value)
+    }
     fun prompt(value: String, composing: Boolean = false) {
         mutable.update { it.copy(prompt = value, error = null, invalidField = null, suggestions = emptyList()) }
         if (value.isBlank()) manualWorkflow = false

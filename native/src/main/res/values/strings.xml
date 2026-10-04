@@ -414,4 +414,15 @@
     <string name="error_runpod_unavailable">The RunPod GPU channel is not configured or not reachable. Try again later.</string>
     <string name="error_runpod_rejected">RunPod refused the job. Check the endpoint and the account balance.</string>
     <string name="error_runpod_failed">The RunPod GPU job failed. Try again or choose another workflow.</string>
+    <string name="style_inspire">Inspire me</string>
+    <string name="style_portrait">Portrait</string>
+    <string name="style_fashion">Fashion</string>
+    <string name="style_anime">Anime</string>
+    <string name="style_cartoon3d">3D cartoon</string>
+    <string name="style_cinematic">Cinematic</string>
+    <string name="style_product">Product</string>
+    <string name="style_poster">Poster</string>
+    <string name="style_watercolor">Watercolor</string>
+    <string name="style_guofeng">Chinese ink</string>
+    <string name="style_cyberpunk">Cyberpunk</string>
 </resources>

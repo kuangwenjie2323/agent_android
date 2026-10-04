@@ -50,6 +50,11 @@ internal val LocalAppResources = staticCompositionLocalOf<Resources?> { null }
     "succeeded" -> S.status_succeeded; "failed", "error" -> S.status_failed; "canceled" -> S.status_canceled
     "expired" -> S.status_expired; "query_failed" -> S.status_query_failed; else -> S.status_unknown
 })
+@Composable internal fun styleLabel(key: String) = tr(when (key) {
+    "portrait" -> S.style_portrait; "fashion" -> S.style_fashion; "anime" -> S.style_anime; "cartoon3d" -> S.style_cartoon3d
+    "cinematic" -> S.style_cinematic; "product" -> S.style_product; "poster" -> S.style_poster; "watercolor" -> S.style_watercolor
+    "guofeng" -> S.style_guofeng; else -> S.style_cyberpunk
+})
 internal fun comfyChannelResource(channel: String) = when (channel) {
     "kaggle_gpu" -> S.channel_kaggle; "cloud_gpu" -> S.channel_gpu; "partner_api" -> S.channel_api
     "runpod_gpu" -> S.channel_runpod; else -> S.channel_unknown

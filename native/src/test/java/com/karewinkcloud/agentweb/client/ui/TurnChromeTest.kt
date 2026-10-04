@@ -17,6 +17,13 @@ class TurnChromeTest {
         return FooterLabels(value("turn_input"), value("turn_output"), value("turn_steps"))
     }
 
+    @Test fun stylesAppendOnceAndInspirationsAreVaried() {
+        val anime = comfyStyles.first { it.key == "anime" }
+        assertEquals(anime.phrase, applyStyle("", anime))
+        assertEquals("a cat, ${anime.phrase}", applyStyle("a cat，", anime))
+        assertEquals("a cat, ${anime.phrase}", applyStyle("a cat, ${anime.phrase}", anime))
+        assertTrue(comfyInspirations.size >= 10 && comfyInspirations.toSet().size == comfyInspirations.size)
+    }
     @Test fun sizeChipsAreShortAndUpscaledSizesAreGrouped() {
         assertEquals("4K · 16:9", sizeChipLabel("16:9 4K · 3840×2160"))
         assertEquals("1:1 · 1024", sizeChipLabel("1:1 · 1024×1024"))
