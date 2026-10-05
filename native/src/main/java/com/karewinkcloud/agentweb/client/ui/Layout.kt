@@ -1,6 +1,7 @@
 package com.karewinkcloud.agentweb.client.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -52,12 +53,17 @@ internal fun GroupLabel(title: String, detail: String? = null) {
 
 /** Circular initials badge used for models and accounts. */
 @Composable
-internal fun Avatar(text: String, accent: Boolean = false) {
+internal fun Avatar(text: String, accent: Boolean = false, tint: androidx.compose.ui.graphics.Color? = null) {
     // Rounded-square artwork, like album covers in a library list; the account uses the accent.
+    val base = tint ?: if (accent) MaterialTheme.colorScheme.primary else null
     Surface(shape = if (accent) CircleShape else RoundedCornerShape(10.dp),
-        color = if (accent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
-        contentColor = if (accent) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant) {
-        Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) { Text(text, style = MaterialTheme.typography.titleSmall) }
+        color = base ?: MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = if (base != null) androidx.compose.ui.graphics.Color.White else MaterialTheme.colorScheme.onSurfaceVariant) {
+        val fill = if (base != null && !accent) Modifier.background(androidx.compose.ui.graphics.Brush.linearGradient(
+            listOf(base, androidx.compose.ui.graphics.lerp(base, androidx.compose.ui.graphics.Color.Black, .35f)))) else Modifier
+        Box(Modifier.size(42.dp).then(fill), contentAlignment = Alignment.Center) {
+            Text(text, style = MaterialTheme.typography.titleSmall, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+        }
     }
 }
 
@@ -81,7 +87,8 @@ internal fun ListRow(title: String, subtitle: String? = null, position: RowPosit
                 horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 leading?.invoke()
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(title, maxLines = titleLines, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
+                    Text(title, maxLines = titleLines, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface)
                     if (!subtitle.isNullOrBlank()) Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     extra?.invoke()

@@ -213,7 +213,7 @@ internal fun ConversationRow(conversation: Conversation, agents: List<Agent>, po
     val model = agents.find { it.id == conversation.choice.agent }?.label(conversation.choice.model)
         ?: conversation.choice.model.ifBlank { tr(S.assistant) }
     val preview = "${compactModelLabel(model)}: ${plainPreview(conversation.preview).ifBlank { if (conversation.messageCount == null) "…" else tr(S.unused_chat) }}"
-    ListRow(conversationTitle(conversation), preview, position, leading = { Avatar(modelBadge(conversation.choice)) },
+    ListRow(conversationTitle(conversation), preview, position, leading = { Avatar(modelBadge(conversation.choice), tint = Color(modelTint(conversation.choice))) },
         extra = conversation.project?.takeIf { it.isNotBlank() }?.let { project -> {
             Text(project, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
         } },
@@ -227,6 +227,15 @@ internal fun ConversationRow(conversation: Conversation, agents: List<Agent>, po
 /** "Model · effort · permission", listing only non-default settings so the chip stays short. */
 internal fun composerModelLabel(model: String, effort: String?, permission: String?): String =
     listOfNotNull(model, effort, permission).joinToString(" · ")
+
+/** Brand tint for a model's artwork tile: DeepSeek blue, OpenAI green, Claude clay, Grok graphite. */
+internal fun modelTint(choice: ModelChoice): Long = when {
+    choice.agent == "deepseek" || choice.model.contains("deepseek", true) -> 0xff4d6bfe
+    choice.agent == "claude" || listOf("opus", "sonnet", "haiku", "claude").any { choice.model.contains(it, true) } -> 0xffd97757
+    choice.agent == "grok" || choice.model.contains("grok", true) -> 0xff3a3a3c
+    choice.agent == "codex" || choice.model.contains("gpt", true) -> 0xff10a37f
+    else -> 0xff8e8e93
+}
 
 internal fun modelBadge(choice: ModelChoice): String = when {
     choice.agent == "deepseek" || choice.model.contains("deepseek", true) -> "DS"
