@@ -14,6 +14,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.ui.graphics.Color
+import kotlinx.coroutines.withContext
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -54,45 +59,64 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
     LaunchedEffect(state.promptRevision) {
         if (prompt.text != state.prompt) prompt = TextFieldValue(state.prompt, androidx.compose.ui.text.TextRange(state.prompt.length))
     }
+    var composerOpen by rememberSaveable { mutableStateOf(false) }
+    var allOpen by rememberSaveable { mutableStateOf(false) }
+    val pendingJob = state.pending?.let { id -> state.selected?.takeIf { it.requestId == id }
+        ?: state.jobs.find { it.requestId == id } ?: ComfyJob(id, "", "unknown") }
+    val jobs = (if (pendingJob != null && state.jobs.none { it.requestId == pendingJob.requestId }) listOf(pendingJob) else emptyList()) +
+        state.jobs.map { job -> pendingJob?.takeIf { it.requestId == job.requestId } ?: job }
+    val recent = jobs.filter { it.phase() != ComfyJobPhase.FAILED }
+    fun titleOf(job: ComfyJob) = state.workflows.find { it.id == job.workflowId }?.title ?: job.workflowId
+    val openJob: (ComfyJob) -> Unit = { vm.open(it); detailOpen = true }
     ScreenTitle(tr(S.studio)) { ActionIcon(R.drawable.aw_refresh, tr(S.refresh), !state.loading && !state.submitting, vm::refresh) }
     if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-    // Two columns even on narrow (~340dp) phones; larger text or wider screens adapt.
-    val tileWidth = 136.dp * LocalDensity.current.fontScale.coerceIn(1f, 1.5f)
-    LazyVerticalGrid(GridCells.Adaptive(tileWidth), Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-
-        if (state.error != null) item("error", span = { GridItemSpan(maxLineSpan) }) {
-            ErrorBlock(ClientError(comfyError(state.error!!)), if (state.pending != null) ({ vm.check() }) else vm::refresh,
-                tr(if (state.pending != null) S.check_status else S.refresh))
+    LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (state.error != null) item("error") {
+            Box(Modifier.padding(horizontal = PageGutter)) {
+                ErrorBlock(ClientError(comfyError(state.error!!)), if (state.pending != null) ({ vm.check() }) else vm::refresh,
+                    tr(if (state.pending != null) S.check_status else S.refresh))
+            }
         }
-        val pendingJob = state.pending?.let { id -> state.selected?.takeIf { it.requestId == id }
-            ?: state.jobs.find { it.requestId == id } ?: ComfyJob(id, "", "unknown") }
-        val jobs = (if (pendingJob != null && state.jobs.none { it.requestId == pendingJob.requestId }) listOf(pendingJob) else emptyList()) +
-            state.jobs.map { job -> pendingJob?.takeIf { it.requestId == job.requestId } ?: job }
-        val failed = jobs.count { it.phase() == ComfyJobPhase.FAILED }
-        val shown = if (showFailed) jobs else jobs.filter { it.phase() != ComfyJobPhase.FAILED }
-        item("recent-title", span = { GridItemSpan(maxLineSpan) }) {
-            Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
-                SectionLabel(tr(S.recent_works), Modifier.weight(1f))
-                if (failed > 0) TextButton({ showFailed = !showFailed }) {
-                    Text(if (showFailed) tr(S.failed_hide) else tr(S.failed_show, failed), style = MaterialTheme.typography.labelMedium)
+        item("recent") {
+            ShelfHeader(tr(S.recent_works), if (jobs.isNotEmpty()) tr(S.see_all) else null) { allOpen = true }
+            when {
+                recent.isNotEmpty() -> LazyRow(contentPadding = PaddingValues(horizontal = PageGutter), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(recent.take(20), key = { it.requestId }) { job -> CreationCard(job, titleOf(job), vm) { openJob(job) } }
+                }
+                state.loading -> LoadingState(tr(S.loading))
+                else -> EmptyState(R.drawable.aw_create, tr(S.history_empty), tr(S.creation_empty_hint), tr(S.creation_start)) { composerOpen = true }
+            }
+        }
+        val featured = featuredWorkflows(state.workflows, state.kind)
+        if (featured.isNotEmpty()) item("featured") {
+            ShelfHeader(tr(S.featured_workflows), tr(S.see_all)) { galleryOpen = true }
+            LazyRow(contentPadding = PaddingValues(horizontal = PageGutter), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                items(featured, key = { it.id }) { workflow ->
+                    WorkflowCard(workflow, workflow.id == state.workflowId, vm) { vm.choose(workflow.id); composerOpen = true }
                 }
             }
         }
-        if (jobs.isEmpty() && !state.loading && state.error == null) item("empty", span = { GridItemSpan(maxLineSpan) }) {
-            EmptyState(R.drawable.aw_create, tr(S.history_empty), tr(S.creation_empty_hint))
-        }
-        if (jobs.isEmpty() && state.loading) item("loading", span = { GridItemSpan(maxLineSpan) }) { LoadingState(tr(S.loading)) }
-        items(shown, key = { it.requestId }) { job ->
-            CreationTile(job, state.workflows.find { it.id == job.workflowId }?.title ?: job.workflowId, vm) { vm.open(job); detailOpen = true }
+        if (state.kind != "audio") item("styles") {
+            ShelfHeader(tr(S.start_with_style), null) {}
+            LazyRow(contentPadding = PaddingValues(horizontal = PageGutter), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                items(comfyStyles, key = { it.key }) { style ->
+                    StyleCard(style) { vm.replacePrompt(applyStyle(prompt.text, style)); composerOpen = true }
+                }
+            }
         }
     }
-    Box {
-        // Submitting hides the keyboard so the new progress tile is visible.
-        CreationComposer(state, prompt, { prompt = it; vm.prompt(it.text, it.composition != null) }, vm::filter,
-            { settingsOpen = true }, { focus.clearFocus(); keyboard?.hide(); vm.submit() }, vm::choose, vm::size, composerHeight, { galleryOpen = true },
-            onStyle = { vm.replacePrompt(applyStyle(prompt.text, it)) }, onInspire = { vm.replacePrompt(comfyInspirations.random()) })
+    MiniComposer(state, prompt.text, pendingJob, vm, onOpen = { composerOpen = true },
+        onSubmit = { focus.clearFocus(); keyboard?.hide(); vm.submit() })
+    if (composerOpen) AppModalBottomSheet({ composerOpen = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
+        Column(Modifier.fillMaxWidth().imePadding().padding(bottom = 8.dp)) {
+            CreationComposer(state, prompt, { prompt = it; vm.prompt(it.text, it.composition != null) }, vm::filter,
+                { settingsOpen = true }, { focus.clearFocus(); keyboard?.hide(); vm.submit(); composerOpen = false }, vm::choose, vm::size,
+                composerHeight.coerceAtLeast(260.dp), { galleryOpen = true },
+                onStyle = { vm.replacePrompt(applyStyle(prompt.text, it)) }, onInspire = { vm.replacePrompt(comfyInspirations.random()) })
+        }
     }
+    if (allOpen) AllCreations(jobs, ::titleOf, vm, showFailed, { showFailed = it }, openJob) { allOpen = false }
     if (settingsOpen) CreationSettings(state, vm, onGallery = {
         settingsOpen = false; returnToSettings = true; galleryOpen = true
     }, onClose = { settingsOpen = false })
@@ -103,6 +127,143 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
         detailOpen = false; settingsOpen = true
     }, onClose = { detailOpen = false })
 }
+
+/** Section heading with an optional trailing action ("See all"), Apple Music style. */
+@Composable
+private fun ShelfHeader(title: String, action: String?, onAction: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(start = PageGutter + 4.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(title, Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.titleLarge,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+        if (action != null) TextButton(onAction) { Text(action) }
+    }
+}
+
+/** A large square artwork with its title and subtitle underneath, like an album. */
+@Composable
+private fun ArtworkCard(title: String, subtitle: String?, width: Dp, onClick: () -> Unit, artwork: @Composable BoxScope.() -> Unit) {
+    Column(Modifier.width(width).clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)) {
+        Box(Modifier.size(width).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh),
+            contentAlignment = Alignment.Center, content = artwork)
+        Text(title, Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp), maxLines = 1, overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodyMedium)
+        if (!subtitle.isNullOrBlank()) Text(subtitle, Modifier.padding(horizontal = 2.dp), maxLines = 1, overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun CreationCard(job: ComfyJob, title: String, vm: ComfyViewModel, onClick: () -> Unit) {
+    val video = job.outputs.any { it.mime.startsWith("video/") }
+    ArtworkCard(title.ifBlank { comfyStatus(job.status) }, if (job.phase() == ComfyJobPhase.COMPLETE) null else comfyStatus(job.status),
+        168.dp, onClick) {
+        when (job.phase()) {
+            ComfyJobPhase.COMPLETE -> ComfyThumbnail(job, vm, Modifier.fillMaxSize())
+            ComfyJobPhase.STARTING, ComfyJobPhase.QUEUED, ComfyJobPhase.RUNNING, ComfyJobPhase.FINISHING ->
+                CreationProgress(job, vm, Modifier.padding(12.dp))
+            else -> Text(comfyStatus(job.status), Modifier.padding(12.dp), style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (video) Surface(shape = androidx.compose.foundation.shape.CircleShape, color = Color.Black.copy(alpha = .5f), contentColor = Color.White,
+            modifier = Modifier.align(Alignment.BottomStart).padding(8.dp)) { Box(Modifier.padding(6.dp)) { AppIcon(R.drawable.aw_play) } }
+    }
+}
+
+@Composable
+private fun WorkflowCard(workflow: ComfyWorkflow, selected: Boolean, vm: ComfyViewModel, onClick: () -> Unit) {
+    ArtworkCard(workflow.title.substringBefore(" · "), tr(comfyChannelResource(workflow.channel)), 148.dp, onClick) {
+        RemoteImage(workflow.coverUrl, vm, Modifier.fillMaxSize()) {
+            Text(workflow.modelFamily().ifBlank { kindLabel(workflow.kind) }, style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary)
+        }
+        if (selected) Surface(shape = androidx.compose.foundation.shape.CircleShape, color = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+            Box(Modifier.padding(4.dp)) { AppIcon(R.drawable.aw_check, tr(S.workflow_selected)) }
+        }
+    }
+}
+
+private val styleColors = mapOf(
+    "portrait" to listOf(0xFFB8875F, 0xFF5B3A29), "fashion" to listOf(0xFFE0457B, 0xFF6A1B9A), "anime" to listOf(0xFF4FC3F7, 0xFF7E57C2),
+    "cartoon3d" to listOf(0xFFFFB74D, 0xFFEF5350), "cinematic" to listOf(0xFF263238, 0xFF00897B), "product" to listOf(0xFFECEFF1, 0xFF90A4AE),
+    "poster" to listOf(0xFFFFD54F, 0xFFD84315), "watercolor" to listOf(0xFF80DEEA, 0xFFF48FB1), "guofeng" to listOf(0xFF8D6E63, 0xFF212121),
+    "cyberpunk" to listOf(0xFFFF00A8, 0xFF00E5FF))
+
+@Composable
+private fun StyleCard(style: ComfyStyle, onClick: () -> Unit) {
+    val colors = (styleColors[style.key] ?: listOf(0xFF607D8B, 0xFF263238)).map { Color(it) }
+    Box(Modifier.size(132.dp, 84.dp).clip(RoundedCornerShape(12.dp))
+        .background(androidx.compose.ui.graphics.Brush.linearGradient(colors)).clickable(onClick = onClick),
+        contentAlignment = Alignment.BottomStart) {
+        Text(styleLabel(style.key), Modifier.padding(10.dp), color = Color.White, style = MaterialTheme.typography.titleSmall,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+    }
+}
+
+/** Collapsed composer above the navigation bar, like a mini player: tap to expand, spark to generate. */
+@Composable
+private fun MiniComposer(state: ComfyState, prompt: String, pending: ComfyJob?, vm: ComfyViewModel, onOpen: () -> Unit, onSubmit: () -> Unit) {
+    Surface(onOpen, Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh, shadowElevation = 6.dp) {
+        Row(Modifier.padding(start = 8.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
+                RemoteImage(state.workflow?.coverUrl, vm, Modifier.fillMaxSize()) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { AppIcon(R.drawable.aw_create) } }
+            }
+            Column(Modifier.weight(1f)) {
+                Text(prompt.ifBlank { tr(S.creation_hint) }, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium,
+                    color = if (prompt.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
+                Text(pending?.let { comfyStatus(it.status) } ?: state.workflow?.title ?: tr(S.workflow), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            val description = tr(if (state.submitting) S.submitting else S.generate)
+            FilledIconButton(onSubmit, enabled = state.canSubmit, modifier = Modifier.size(44.dp).semantics { contentDescription = description }) {
+                if (state.submitting || pending != null) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) else AppIcon(R.drawable.aw_create)
+            }
+        }
+    }
+}
+
+/** Every creation in a grid, with failed ones behind a toggle. */
+@Composable
+private fun AllCreations(jobs: List<ComfyJob>, titleOf: (ComfyJob) -> String, vm: ComfyViewModel, showFailed: Boolean,
+    onShowFailed: (Boolean) -> Unit, onOpen: (ComfyJob) -> Unit, onClose: () -> Unit) {
+    AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        val failed = jobs.count { it.phase() == ComfyJobPhase.FAILED }
+        val shown = if (showFailed) jobs else jobs.filter { it.phase() != ComfyJobPhase.FAILED }
+        Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(tr(S.recent_works), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            if (failed > 0) TextButton({ onShowFailed(!showFailed) }) { Text(if (showFailed) tr(S.failed_hide) else tr(S.failed_show, failed)) }
+            ActionIcon(R.drawable.aw_close, tr(S.close), onClick = onClose)
+        }
+        val tileWidth = 136.dp * LocalDensity.current.fontScale.coerceIn(1f, 1.5f)
+        LazyVerticalGrid(GridCells.Adaptive(tileWidth), Modifier.fillMaxWidth().fillMaxHeight(.92f), contentPadding = PaddingValues(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(shown, key = { it.requestId }) { job -> CreationTile(job, titleOf(job), vm) { onOpen(job) } }
+        }
+    }
+}
+
+/** Loads a public cover image once (cached); shows [placeholder] until it arrives or when there is none. */
+@Composable
+internal fun RemoteImage(url: String?, vm: ComfyViewModel, modifier: Modifier = Modifier, placeholder: @Composable () -> Unit) {
+    val bitmap by produceState<android.graphics.Bitmap?>(null, url) {
+        value = url?.let { runCatching { vm.image(it) }.getOrNull() }?.let { file ->
+            withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { android.graphics.BitmapFactory.decodeFile(file.absolutePath) }.getOrNull() }
+        }
+    }
+    Crossfade(bitmap, label = "cover", modifier = modifier) { image ->
+        if (image != null) Image(image.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+        else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { placeholder() }
+    }
+}
+
+/** Workflows to feature: the free/on-demand GPU channels first, then the rest, preferring ones with covers. */
+internal fun featuredWorkflows(workflows: List<ComfyWorkflow>, kind: String): List<ComfyWorkflow> =
+    workflows.filter { it.unavailable == null && (kind == "image" || it.kind == kind) }
+        .sortedWith(compareBy<ComfyWorkflow>({ if (it.kind == kind) 0 else 1 },
+            { when (it.channel) { "kaggle_gpu" -> 0; "runpod_gpu" -> 1; "cloud_gpu" -> 2; else -> 3 } }, { if (it.coverUrl != null) 0 else 1 }))
+        .take(14)
 
 @Composable
 private fun CreationTile(job: ComfyJob, title: String, vm: ComfyViewModel, onClick: () -> Unit) {

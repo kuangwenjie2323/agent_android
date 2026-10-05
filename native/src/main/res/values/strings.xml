@@ -425,4 +425,8 @@
     <string name="style_watercolor">Watercolor</string>
     <string name="style_guofeng">Chinese ink</string>
     <string name="style_cyberpunk">Cyberpunk</string>
+    <string name="see_all">See all</string>
+    <string name="featured_workflows">Workflows</string>
+    <string name="start_with_style">Start with a style</string>
+    <string name="creation_start">Start creating</string>
 </resources>

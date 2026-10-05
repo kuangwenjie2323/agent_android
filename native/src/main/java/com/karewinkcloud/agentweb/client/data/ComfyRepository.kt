@@ -19,6 +19,8 @@ interface ComfyRepository {
     suspend fun publish(requestId: String, output: ComfyOutput): String = throw ComfyFailure("publish_unavailable")
     /** A server-made JPEG preview of an image output, at most [edge] px (512 tiles, 1280 detail). */
     suspend fun thumbnail(requestId: String, output: ComfyOutput, destination: File, edge: Int = 512): Unit = throw ComfyFailure("unavailable")
+    /** A public cloud-storage image (workflow covers), fetched without our credentials. */
+    suspend fun image(url: String, destination: File): Unit = throw ComfyFailure("unavailable")
     /** Deletes a finished creation on the server, including its public R2 copy. */
     suspend fun delete(requestId: String): Unit = throw ComfyFailure("unavailable")
 }
@@ -89,6 +91,9 @@ class HttpComfyRepository(private val http: HttpAgentRepository) : ComfyReposito
         require(validComfyId(requestId) && output.index in 0..63)
         val url = http.json("/api/comfy/jobs/$requestId/outputs/${output.index}/publish", buildJsonObject { }, 90).string("public_url")
         requireNotNull(url?.takeIf { it.startsWith("https://") && it.length <= 512 })
+    }
+    override suspend fun image(url: String, destination: File) = operation {
+        http.downloadStorage(requireNotNull(storageUrl(url)), destination, "image/jpeg", 4L * 1024 * 1024)
     }
     override suspend fun delete(requestId: String) = operation {
         require(validComfyId(requestId))

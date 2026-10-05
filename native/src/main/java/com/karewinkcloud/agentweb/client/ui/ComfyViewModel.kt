@@ -364,6 +364,20 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
         mutable.update { it.copy(polling = false, checking = false, pollingPaused = if (user) true else it.pollingPaused) }
     }
     fun resumePolling() { mutable.update { it.copy(pollingPaused = false) }; check(state.value.pending ?: nextPollingId() ?: state.value.selected?.requestId) }
+    /** A cached public image (workflow cover). */
+    suspend fun image(url: String): File = synchronized(mediaLocks) { mediaLocks.getOrPut("img:$url") { Mutex() } }.withLock {
+        val source = repository
+        withContext(io) {
+            mediaDirectory.mkdirs()
+            val file = File(mediaDirectory, "cover-" + java.security.MessageDigest.getInstance("SHA-256")
+                .digest(url.toByteArray()).joinToString("") { "%02x".format(it) }.take(32) + ".jpg")
+            if (!file.isFile) downloadSlots.withPermit {
+                val temporary = File.createTempFile("cover-", ".part", mediaDirectory)
+                try { source.image(url, temporary); if (!temporary.renameTo(file)) throw ComfyFailure("storage") } finally { temporary.delete() }
+            }
+            file
+        }
+    }
     /** The original file, needed only to save, share or open full screen. */
     suspend fun output(job: ComfyJob, output: ComfyOutput): File = cached(job, output, edge = 0)
     /** A JPEG preview (512 for tiles, 1280 for the detail view); falls back to the original when the server has none. */

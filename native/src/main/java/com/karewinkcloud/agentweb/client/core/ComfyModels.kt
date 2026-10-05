@@ -27,7 +27,7 @@ data class ComfyInput(val key: String, val spec: JsonObject) {
 data class ComfySize(val label: String, val parameters: Map<String, String>)
 data class ComfyWorkflow(val id: String, val title: String, val description: String, val kind: String,
     val channel: String, val inputs: List<ComfyInput>, val unavailable: String?, val requiredModels: List<Pair<String, String>>,
-    val available: Boolean? = null) {
+    val available: Boolean? = null, val coverUrl: String? = null) {
     val promptKey get() = inputs.firstOrNull { it.key == "prompt" }?.key
         ?: inputs.firstOrNull { it.key == "text" }?.key
     fun defaults() = inputs.associate { it.key to it.default }
@@ -97,6 +97,7 @@ data class ComfyWorkflow(val id: String, val title: String, val description: Str
                 ?: if (j.boolean("available") == false) "unavailable" else null,
             j.objects("required_model_files").mapNotNull { file -> file.string("category")?.let { c -> file.string("name")?.let { c to it } } },
             j.boolean("available"),
+            storageUrl(j.string("cover_url")),
         )
     }
 }

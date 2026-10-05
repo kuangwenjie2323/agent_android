@@ -421,4 +421,8 @@
     <string name="style_watercolor">水彩</string>
     <string name="style_guofeng">国风水墨</string>
     <string name="style_cyberpunk">赛博朋克</string>
+    <string name="see_all">查看全部</string>
+    <string name="featured_workflows">精选工作流</string>
+    <string name="start_with_style">从风格开始</string>
+    <string name="creation_start">开始创作</string>
 </resources>
