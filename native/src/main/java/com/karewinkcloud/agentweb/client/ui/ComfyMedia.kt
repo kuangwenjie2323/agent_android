@@ -329,7 +329,7 @@ private fun AudioOutput(file: File) {
         } catch (_: Exception) { failed = true }
         onStopOrDispose { player = null; ready = false; playing = false; media.release() }
     }
-    FilledTonalButton({ player?.let { if (playing) it.pause() else it.start(); playing = !playing } },
+    AppleButton({ player?.let { if (playing) it.pause() else it.start(); playing = !playing } },
         Modifier.fillMaxWidth().heightIn(min = 64.dp), enabled = ready && !failed) {
         AppIcon(if (playing) R.drawable.aw_pause else R.drawable.aw_play)
         Spacer(Modifier.width(8.dp)); Text(tr(if (failed) S.output_failed else if (playing) S.pause_audio else S.play_audio))
