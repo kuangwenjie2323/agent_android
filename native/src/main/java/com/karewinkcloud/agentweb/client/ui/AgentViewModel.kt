@@ -186,6 +186,8 @@ class AgentViewModel(
                         projectError = if (projectOwner == projectVersion) projectResult.exceptionOrNull()?.let(::problem) else old.projectError,
                         error = (conversations.exceptionOrNull() ?: agents.exceptionOrNull())?.let(::problem))
                 }
+                // Save at once (previews over a slow link can take a while); saved again with previews below.
+                if (conversations.isSuccess && state.value.conversations.isNotEmpty()) launch { source.saveConversations(state.value.conversations) }
                 loadPreviews()
             }
         }
@@ -214,7 +216,7 @@ class AgentViewModel(
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { /* Unknown is visible; a failed read never hides a conversation. */ }
             } } }.joinAll() }
-            if (owner == epoch && state.value.error == null) source.saveConversations(state.value.conversations)
+            if (owner == epoch && rows.isNotEmpty() && state.value.error == null) source.saveConversations(state.value.conversations)
         }
         prefetchRecent(owner)
     }
