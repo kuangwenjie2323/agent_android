@@ -55,6 +55,9 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
     private var checkingGeneration = 0L
     private val observed = mutableMapOf<String, Long>()
     private var lastPolled: String? = null
+    // Consecutive status reads that failed for a passing reason (slow link, server restart).
+    private var failedChecks = 0
+    private var loadedAt = 0L
     // One lock per output (a cached file never waits behind another download), and at most
     // three downloads at once so a slow upstream output cannot stall the whole gallery.
     private val mediaLocks = mutableMapOf<String, Mutex>()
@@ -94,7 +97,7 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
         epoch++; viewModelScope.coroutineContext.cancelChildren()
         repository = source; pendingStore = store
         loadingJob = null; recommendationJob = null; resourceJob = null; pollJob = null; checkJob = null
-        manualWorkflow = false; manualChannel = false; observed.clear(); lastPolled = null
+        manualWorkflow = false; manualChannel = false; observed.clear(); lastPolled = null; failedChecks = 0; loadedAt = 0L
         mutable.value = ComfyState(signInRequired = blocked)
         observeAuth()
         if (foreground) refresh()
@@ -106,6 +109,8 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
         if (!value) { stopPolling(user = false); recommendationJob?.cancel(); resourceJob?.cancel()
             mutable.update { it.copy(resourcesLoading = false) }; return }
         if (!state.value.initialized) refresh()
+        // The server keeps advancing jobs while the app is away; one list read shows all of them.
+        else if (System.nanoTime() - loadedAt > 30_000_000_000L && !state.value.submitting) refresh()
         else {
             val id = state.value.pending ?: nextPollingId()
             if (id != null && !state.value.pollingPaused && !state.value.submitting) check(id)
@@ -143,6 +148,7 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
                     val selected = catalog.find { it.id == old.workflowId }
                         ?: catalog.firstOrNull { it.kind == old.kind && it.channel == channel && it.unavailable == null }
                         ?: catalog.firstOrNull { it.kind == old.kind && it.channel == channel }
+                    if (jobs != null) loadedAt = System.nanoTime()
                     mutable.update { it.copy(workflows = catalog, workflowId = selected?.id, channel = channel,
                         values = if (it.workflowId == selected?.id) it.values else selected?.defaults().orEmpty(),
                         jobs = jobs ?: it.jobs, initialized = true, loading = false,
@@ -341,11 +347,18 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
         checkJob = viewModelScope.launch {
             try {
                 val result = source.job(id)
+                if (owner == epoch) failedChecks = 0
                 if (foreground && generation == checkingGeneration) accept(result, owner, persistence)
             }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                if (owner == epoch && generation == checkingGeneration) {
+                val code = failure(e)
+                if (owner == epoch && generation == checkingGeneration && code in passingCheckFailures) {
+                    // Keep the job's state and read again later; say so only once it keeps failing.
+                    failedChecks++
+                    if (failedChecks >= 3) mutable.update { it.copy(error = code) }
+                    schedulePoll((pollDelay shl (failedChecks - 1).coerceAtMost(4)).coerceAtMost(30_000))
+                } else if (owner == epoch && generation == checkingGeneration) {
                     stopPolling(user = false)
                     mutable.update { it.copy(error = failure(e), selected = it.selected?.let { selected ->
                         if (selected.requestId == id) selected.copy(status = "query_failed") else selected }) }
@@ -353,14 +366,14 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
             } finally { if (owner == epoch && generation == checkingGeneration) mutable.update { it.copy(checking = false) } }
         }
     }
-    private fun schedulePoll() {
+    private fun schedulePoll(delayMs: Long = pollDelay) {
         pollJob?.cancel()
         if (!foreground || state.value.pollingPaused || nextPollingId() == null) {
             mutable.update { it.copy(polling = false) }; return
         }
         mutable.update { it.copy(polling = true) }
         pollJob = viewModelScope.launch {
-            delay(pollDelay.coerceAtLeast(1))
+            delay(delayMs.coerceAtLeast(1))
             mutable.update { it.copy(polling = false) }
             if (foreground && !state.value.pollingPaused) nextPollingId()?.let { check(it) }
         }
@@ -438,5 +451,6 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
             file
         }
     }
+    private val passingCheckFailures = setOf("network", "timeout", "unavailable", "busy", "capacity", "rate_limited")
     private fun failure(error: Exception) = (error as? ComfyFailure)?.code ?: "network"
 }

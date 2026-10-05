@@ -95,9 +95,22 @@ class ComfyViewModelTest {
         repo.onJob = { ComfyJob(it, "image", "succeeded") }; vm.resumePolling(); runCurrent()
         assertEquals(2, repo.reads.size); assertNull(pending.id)
     }
-    @Test fun pollingFailureIsNotGenerationFailure() = modelTest {
+    @Test fun passingPollingFailuresBackOffAndRecover() = modelTest {
         runCurrent(); vm.prompt("mountain"); vm.submit(); runCurrent()
-        repo.onJob = { throw ComfyFailure("unavailable") }; advanceTimeBy(3000); runCurrent()
+        repo.onJob = { throw ComfyFailure("network") }
+        advanceTimeBy(3001); runCurrent(); assertEquals(1, repo.reads.size)
+        assertEquals("queued", vm.state.value.selected?.status); assertNull(vm.state.value.error)  // one blip changes nothing
+        assertTrue(vm.state.value.polling)
+        advanceTimeBy(3000); runCurrent(); assertEquals(2, repo.reads.size)  // retries back off: 3 s, 6 s, 12 s ...
+        advanceTimeBy(3000); runCurrent(); assertEquals(2, repo.reads.size)
+        advanceTimeBy(3000); runCurrent(); assertEquals(3, repo.reads.size); assertEquals("network", vm.state.value.error)
+        repo.onJob = { ComfyJob(it, "image", "succeeded") }; advanceTimeBy(12_001); runCurrent()
+        assertEquals("succeeded", vm.state.value.selected?.status); assertNull(vm.state.value.error); assertNull(pending.id)
+        assertEquals(1, repo.submissions.size)
+    }
+    @Test fun definitePollingFailureIsNotGenerationFailure() = modelTest {
+        runCurrent(); vm.prompt("mountain"); vm.submit(); runCurrent()
+        repo.onJob = { throw ComfyFailure("forbidden") }; advanceTimeBy(3000); runCurrent()
         assertEquals("query_failed", vm.state.value.selected?.status); assertNotNull(pending.id)
         assertFalse(vm.state.value.polling); assertEquals(1, repo.submissions.size)
     }
