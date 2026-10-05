@@ -291,6 +291,11 @@
     <string name="channel">Channel</string>
     <string name="recent_works">Recent works</string>
     <string name="job_elapsed">Observed for %1$d s</string>
+    <string name="job_elapsed_total">Elapsed %1$s</string>
+    <string name="job_time_total">Took %1$s</string>
+    <string name="job_time_queue">waiting for a GPU %1$s</string>
+    <string name="job_time_run">generating %1$s</string>
+    <string name="minutes_seconds">%1$d min %2$d s</string>
     <string name="job_detail">Creation details</string>
     <string name="overflow_empty">Show unused chats</string>
     <string name="passkey_none">No passkey found. Use browser sign-in to continue.</string>

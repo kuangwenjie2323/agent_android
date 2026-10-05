@@ -116,7 +116,7 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
                 { settingsOpen = true }, { focus.clearFocus(); keyboard?.hide(); vm.submit(); composerOpen = false }, vm::choose, vm::size,
                 composerHeight.coerceAtLeast(260.dp), { galleryOpen = true },
                 onStyle = { vm.replacePrompt(applyStyle(prompt.text, it)) }, onInspire = { vm.replacePrompt(comfyInspirations.random()) },
-                autoFocus = true)
+                autoFocus = true, onParameter = vm::parameter)
         }
     }
     if (allOpen) AllCreations(jobs, ::titleOf, vm, showFailed, { showFailed = it }, openJob) { allOpen = false }
@@ -326,8 +326,9 @@ internal fun CreationProgress(job: ComfyJob, vm: ComfyViewModel, modifier: Modif
             LinearProgressIndicator(progress = { it.toFloat() }, modifier = Modifier.fillMaxWidth())
             Text(tr(S.job_progress, (it * 100).toInt()), style = MaterialTheme.typography.bodySmall)
         }
-        Text(tr(S.job_elapsed, observed / 1000), style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        val sinceSubmit = job.createdAt?.let { (System.currentTimeMillis() / 1000 - it).takeIf { s -> s >= 0 } }
+        Text(if (sinceSubmit != null) tr(S.job_elapsed_total, spanLabel(sinceSubmit)) else tr(S.job_elapsed, observed / 1000),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -386,6 +387,12 @@ private fun CreationDetail(state: ComfyState, vm: ComfyViewModel, onEdit: () -> 
             }
             state.error?.let { item("error") { ErrorBlock(ClientError(comfyError(it))) } }
             items(job.outputs, key = { it.index }) { output -> ComfyOutputView(job, output, vm) }
+            job.totalSeconds?.takeIf { !active }?.let { total -> item("timing") {
+                Text(listOfNotNull(tr(S.job_time_total, spanLabel(total)),
+                    job.queueMs?.let { tr(S.job_time_queue, spanLabel(it / 1000)) },
+                    job.runMs?.let { tr(S.job_time_run, spanLabel(it / 1000)) }).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } }
             if (jobPrompt.isNotBlank()) item("prompt") {
                 Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(12.dp)) {
                     Column(Modifier.fillMaxWidth().padding(start = 12.dp, top = 12.dp, end = 4.dp)) {
@@ -437,7 +444,8 @@ private fun CreationDetail(state: ComfyState, vm: ComfyViewModel, onEdit: () -> 
 internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPrompt: (TextFieldValue) -> Unit,
     onFilter: (String, String) -> Unit, onSettings: () -> Unit, onSubmit: () -> Unit,
     onSuggestion: (String) -> Unit = {}, onSize: (ComfySize) -> Unit = {}, maxHeight: Dp = 320.dp, onGallery: () -> Unit = onSettings,
-    onStyle: (ComfyStyle) -> Unit = {}, onInspire: () -> Unit = {}, autoFocus: Boolean = false) {
+    onStyle: (ComfyStyle) -> Unit = {}, onInspire: () -> Unit = {}, autoFocus: Boolean = false,
+    onParameter: (String, String) -> Unit = { _, _ -> }) {
     val promptFocus = remember { androidx.compose.ui.focus.FocusRequester() }
     if (autoFocus) LaunchedEffect(Unit) { delay(250); runCatching { promptFocus.requestFocus() } }
     var kindMenu by remember { mutableStateOf(false) }
@@ -455,9 +463,18 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
             Box(Modifier.weight(1f)) {
                 val sizes = state.workflow?.sizes().orEmpty()
                 val size = sizes.firstOrNull { it.parameters.all { (key, value) -> state.values[key] == value } }
-                val label = size?.label?.let(::sizeChipLabel) ?: listOfNotNull(state.values["size"], state.values["aspect_ratio"], state.values["resolution"]).joinToString(" · ").ifBlank { tr(S.size) }
-                ComposerChip(label, { if (sizes.isEmpty()) onSettings() else sizeMenu = true })
-                if (sizeMenu) SizeSheet(sizes, size?.label, onSize) { sizeMenu = false }
+                // On a narrow phone the row has room for one more button: video folds its frame shape
+                // and duration into it ("16:9 · 5 s"), and the sheet offers both.
+                val duration = state.workflow?.inputs?.find { it.key == "duration" && it.options.isNotEmpty() }
+                val durationValue = duration?.let { state.values[it.key] ?: it.default }
+                val label = if (state.workflow?.kind == "video" && duration != null)
+                    listOfNotNull(size?.label?.substringBefore(" · "), durationLabel(durationValue.orEmpty())).joinToString(" · ")
+                else size?.label?.let(::sizeChipLabel)
+                    ?: listOfNotNull(state.values["size"], state.values["aspect_ratio"], state.values["resolution"]).joinToString(" · ").ifBlank { tr(S.size) }
+                ComposerChip(label, { if (sizes.isEmpty() && duration == null) onSettings() else sizeMenu = true }, arrow = duration == null)
+                if (sizeMenu) SizeSheet(sizes, size?.label, onSize,
+                    durations = duration?.options?.mapNotNull { (it as? JsonPrimitive)?.content }.orEmpty(), duration = durationValue,
+                    onDuration = { onParameter("duration", it) }) { sizeMenu = false }
             }
             ActionIcon(R.drawable.aw_settings, tr(S.creation_settings), onClick = onSettings)
             val submitDescription = tr(if (state.submitting) S.submitting else S.generate)

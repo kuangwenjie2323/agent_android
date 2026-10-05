@@ -45,6 +45,11 @@ internal val LocalAppResources = staticCompositionLocalOf<Resources?> { null }
 }
 @Composable internal fun conversationTitle(conversation: Conversation) =
     if (conversation.title.isBlank() || conversation.title.equals("New chat", true)) tr(S.new_chat) else conversation.title
+/** "45 s" under a minute, "12 min 30 s" after. */
+@Composable internal fun spanLabel(seconds: Long) = if (seconds < 60) tr(S.seconds, seconds.toInt())
+    else tr(S.minutes_seconds, (seconds / 60).toInt(), (seconds % 60).toInt())
+/** "5 s" / "5 秒" for a whole number of seconds; anything else as given. */
+@Composable internal fun durationLabel(value: String) = value.toIntOrNull()?.let { tr(S.seconds, it) } ?: value
 @Composable internal fun comfyStatus(status: String) = tr(when(status) {
     "pending", "submitting" -> S.status_pending; "queued" -> S.status_queued; "running" -> S.status_running
     "succeeded" -> S.status_succeeded; "failed", "error" -> S.status_failed; "canceled" -> S.status_canceled

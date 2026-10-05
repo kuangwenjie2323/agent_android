@@ -206,7 +206,8 @@ private fun SchemaField(input: ComfyInput, value: String, state: ComfyState, vm:
             ValuePicker(title, value, resources.map { it.name to "${it.name}\n${it.family.orEmpty()}" }, enabled = state.resources?.ready == true, onChange = onChange)
         }
         input.type == "asset" -> ReferenceImagePicker(input, value, state, vm, onChange)
-        input.options.isNotEmpty() -> ValuePicker(title, value, input.options.mapNotNull { (it as? JsonPrimitive)?.content?.let { raw -> raw to raw } }, onChange = onChange)
+        input.options.isNotEmpty() -> ValuePicker(title, value, input.options.mapNotNull { (it as? JsonPrimitive)?.content?.let { raw ->
+            raw to if (input.key in setOf("duration", "duration_seconds")) durationLabel(raw) else raw } }, onChange = onChange)
         input.type == "boolean" -> Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
             Switch(value.toBoolean(), { onChange(it.toString()) }, Modifier.semantics { contentDescription = title })
@@ -289,7 +290,8 @@ internal fun sizeIsUpscaled(label: String) = SizeLabel.matchEntire(label)?.group
 
 /** Size and aspect choice, styled like the model sheet: native and AI-upscaled groups of radio rows. */
 @Composable
-internal fun SizeSheet(sizes: List<ComfySize>, selected: String?, onPick: (ComfySize) -> Unit, onClose: () -> Unit) {
+internal fun SizeSheet(sizes: List<ComfySize>, selected: String?, onPick: (ComfySize) -> Unit,
+    durations: List<String> = emptyList(), duration: String? = null, onDuration: (String) -> Unit = {}, onClose: () -> Unit) {
     AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -297,7 +299,22 @@ internal fun SizeSheet(sizes: List<ComfySize>, selected: String?, onPick: (Comfy
                 ActionIcon(R.drawable.aw_check, tr(S.done), onClick = onClose)
             }
             val (upscaled, native) = sizes.partition { sizeIsUpscaled(it.label) }
+            // A combined video sheet keeps open after a pick, so shape and duration can both be set.
+            val closeOnPick = durations.isEmpty()
             LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (durations.isNotEmpty()) {
+                    item("title-duration") {
+                        Text(tr(S.field_duration), Modifier.padding(top = 12.dp, start = 4.dp).semantics { heading() },
+                            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    items(durations, key = { "duration-$it" }) { value ->
+                        ChoiceRow(durationLabel(value), value == duration) { onDuration(value) }
+                    }
+                    if (sizes.isNotEmpty()) item("title-frame") {
+                        Text(tr(S.size), Modifier.padding(top = 12.dp, start = 4.dp).semantics { heading() },
+                            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
                 listOf(S.size_native to native, S.size_upscaled to upscaled).filter { it.second.isNotEmpty() }.forEach { (title, group) ->
                     if (upscaled.isNotEmpty()) item("title-$title") {
                         Text(tr(title), Modifier.padding(top = 12.dp, start = 4.dp).semantics { heading() },
@@ -305,7 +322,7 @@ internal fun SizeSheet(sizes: List<ComfySize>, selected: String?, onPick: (Comfy
                     }
                     items(group, key = { it.label }) { size ->
                         ChoiceRow(size.label, size.label == selected, subtitle = if (title == S.size_upscaled) tr(S.size_upscaled_hint) else null) {
-                            onPick(size); onClose()
+                            onPick(size); if (closeOnPick) onClose()
                         }
                     }
                 }

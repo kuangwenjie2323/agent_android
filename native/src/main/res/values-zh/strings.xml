@@ -287,6 +287,11 @@
     <string name="channel">生成渠道</string>
     <string name="recent_works">最近作品</string>
     <string name="job_elapsed">已跟踪 %1$d 秒</string>
+    <string name="job_elapsed_total">已用时 %1$s</string>
+    <string name="job_time_total">总耗时 %1$s</string>
+    <string name="job_time_queue">等显卡 %1$s</string>
+    <string name="job_time_run">生成 %1$s</string>
+    <string name="minutes_seconds">%1$d 分 %2$d 秒</string>
     <string name="job_detail">作品详情</string>
     <string name="overflow_empty">显示空对话</string>
     <string name="passkey_none">未找到通行密钥，可使用浏览器登录。</string>

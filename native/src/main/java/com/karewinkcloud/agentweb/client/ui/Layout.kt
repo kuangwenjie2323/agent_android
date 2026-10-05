@@ -178,7 +178,7 @@ internal fun PillChip(selected: Boolean, onClick: () -> Unit, label: @Composable
             disabledContainerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = .5f)))
 
 @Composable
-internal fun ComposerChip(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false) {
+internal fun ComposerChip(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false, arrow: Boolean = true) {
     Surface(onClick, modifier = modifier.heightIn(min = 40.dp), shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
         contentColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) {
@@ -186,7 +186,7 @@ internal fun ComposerChip(label: String, onClick: () -> Unit, modifier: Modifier
             horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.weight(1f, false))
-            AppIcon(R.drawable.aw_down)
+            if (arrow) AppIcon(R.drawable.aw_down)
         }
     }
 }
