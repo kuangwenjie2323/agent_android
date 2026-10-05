@@ -184,7 +184,11 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
             focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent),
         trailingIcon = { if (state.search.isNotEmpty()) ActionIcon(R.drawable.aw_close, tr(S.clear_search)) { vm.search("") } })
     Box(Modifier.weight(1f)) {
-        PullToRefreshBox(state.refreshing, vm::refresh) {
+        // The top indicator answers a pull only; background refreshes stay quiet and an
+        // empty first load shows the single in-list loading row instead.
+        var pulled by remember { mutableStateOf(false) }
+        LaunchedEffect(state.refreshing) { if (!state.refreshing) pulled = false }
+        PullToRefreshBox(state.refreshing && pulled, { pulled = true; vm.refresh() }) {
             LazyColumn(state = list, contentPadding = PaddingValues(start = PageGutter, end = PageGutter, bottom = 24.dp),
                 modifier = Modifier.fillMaxSize()) {
                 if (state.error != null) item("error") { ErrorBlock(state.error, vm::refresh, tr(S.refresh)) }

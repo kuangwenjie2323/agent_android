@@ -39,6 +39,10 @@ interface AgentRepository {
     val authenticationRequired: Flow<Boolean> get() = emptyFlow()
     suspend fun agents(): List<Agent>
     suspend fun conversations(): List<Conversation>
+    /** The last list saved on this device for the current server and account; empty when none. */
+    suspend fun cachedConversations(): List<Conversation> = emptyList()
+    suspend fun saveConversations(rows: List<Conversation>) {}
+    fun clearConversationCache() {}
     suspend fun createConversation(choice: ModelChoice): Conversation
     suspend fun createConversation(choice: ModelChoice, projectId: String?): Conversation = createConversation(choice)
     suspend fun projects(): List<Project> = emptyList()
@@ -60,6 +64,7 @@ class HttpAgentRepository(
     private val tokens: TokenProvider,
     private val client: OkHttpClient = defaultClient(),
     private val reconnectDelayMs: Long = 500,
+    private val listCacheDir: java.io.File? = null,
 ) : AgentRepository {
     private val authRequired = MutableStateFlow(false)
     override val authenticationRequired = authRequired.asStateFlow()
@@ -202,6 +207,31 @@ class HttpAgentRepository(
         } catch (e: Exception) { destination.delete(); throw e }
     }
     override suspend fun conversations() = json("/api/chat/conversations").objects("conversations").map(Conversation::from)
+    // One file per server + credential, so another account never sees this list; older files are removed.
+    private fun listCacheFile(): java.io.File? = listCacheDir?.let { dir ->
+        val token = tokens.tokenFor(origin)?.takeIf { it.isNotBlank() } ?: return null
+        val key = java.security.MessageDigest.getInstance("SHA-256").digest((origin + "\n" + token).toByteArray())
+            .joinToString("") { "%02x".format(it) }.take(32)
+        java.io.File(dir, "$key.json")
+    }
+    override suspend fun cachedConversations(): List<Conversation> = withContext(Dispatchers.IO) {
+        runCatching {
+            val file = listCacheFile()?.takeIf { it.isFile } ?: return@runCatching emptyList()
+            Json.parseToJsonElement(file.readText()).jsonObject.objects("conversations").map(Conversation::from)
+        }.getOrDefault(emptyList())
+    }
+    override fun clearConversationCache() { listCacheDir?.listFiles()?.forEach { it.delete() } }
+    override suspend fun saveConversations(rows: List<Conversation>) = withContext(Dispatchers.IO) {
+        val file = listCacheFile() ?: return@withContext
+        runCatching {
+            file.parentFile?.mkdirs()
+            val temp = java.io.File(file.parentFile, file.name + ".tmp")
+            temp.writeText(buildJsonObject { put("conversations", JsonArray(rows.take(200).map { it.cacheJson() })) }.toString())
+            if (!temp.renameTo(file)) temp.delete()
+            file.parentFile?.listFiles()?.filter { it.name != file.name }?.forEach { it.delete() }
+        }
+        Unit
+    }
     override suspend fun createConversation(choice: ModelChoice) = createConversation(choice, null)
     override suspend fun createConversation(choice: ModelChoice, projectId: String?) = Conversation.from(json("/api/chat/conversations", buildJsonObject {
         put("title", "New Chat")

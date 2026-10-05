@@ -57,6 +57,20 @@ data class Conversation(
     val lineage: ConversationLineage? = null,
 ) {
     val running get() = active || starting
+    /** The list-API shape of this row (without live run state), for the on-device list cache. */
+    fun cacheJson(): JsonObject = buildJsonObject {
+        put("id", id); put("title", title); put("pinned", pinned); put("updated_at", updatedAt)
+        if (choice.agent.isNotBlank()) put("agent", choice.agent)
+        if (choice.model.isNotBlank()) put("model", choice.model)
+        choice.effort?.let { put("effort", it) }
+        put("perm_mode", choice.permission); put("execution_mode", choice.execution)
+        if (nativeControl) put("controlKind", "codexNative")
+        messageCount?.let { put("message_count", it) }
+        if (preview.isNotEmpty()) put("last_message_preview", preview)
+        if (projectId != null || project != null) put("project", buildJsonObject {
+            projectId?.let { put("id", it) }; project?.let { put("name", it) }
+        })
+    }
     companion object {
         fun from(j: JsonObject) = Conversation(
             j.string("id").orEmpty(), j.string("title").orEmpty().ifBlank { "New chat" },

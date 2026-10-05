@@ -28,6 +28,7 @@ import com.karewinkcloud.agentweb.client.ui.*
 
 class MainActivity : ComponentActivity() {
     private lateinit var settings: SettingsViewModel
+    private val listCacheDir by lazy { java.io.File(noBackupFilesDir, "conversation-list") }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -42,14 +43,14 @@ class MainActivity : ComponentActivity() {
             val connection = ServerConnection(preferences.origin, authentication.revision,
                 phase == SignInPhase.SIGNING_OUT || (!settings.localTesting() && authentication.origin != preferences.origin))
             val chat: AgentViewModel = viewModel(factory = factory {
-                AgentViewModel(HttpAgentRepository(preferences.origin, settings.store), preferences.choice,
+                AgentViewModel(HttpAgentRepository(preferences.origin, settings.store, listCacheDir = listCacheDir), preferences.choice,
                     connection.signInRequired, settings.store::saveChoice).also { it.appliedConnection = connection }
             })
             LaunchedEffect(connection) {
                 // The epoch survives Activity recreation along with the chat ViewModel.
                 if (chat.appliedConnection != connection) {
                     chat.appliedConnection = connection
-                    chat.changeServer(HttpAgentRepository(connection.origin, settings.store), settings.store.load().choice, connection.signInRequired)
+                    chat.changeServer(HttpAgentRepository(connection.origin, settings.store, listCacheDir = listCacheDir), settings.store.load().choice, connection.signInRequired)
                 }
             }
             val studio: ComfyViewModel = viewModel(factory = factory {

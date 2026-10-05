@@ -221,6 +221,24 @@ class AgentViewModelTest {
         gate.complete(Unit); runCurrent()
         assertEquals(listOf("1", "2", "3"), vm.state.value.chat!!.messages.map { it.id })
     }
+    @Test fun coldStartShowsSavedListAndReusesItsPreviews() = modelTest {
+        val fresh = FakeRepository()
+        val saved = conversation("one").copy(updatedAt = 10, messageCount = 4, preview = "last words")
+        fresh.cached = listOf(saved)
+        fresh.list = listOf(conversation("one").copy(updatedAt = 10), conversation("two").copy(updatedAt = 20))
+        val gate = CompletableDeferred<Unit>(); fresh.listGate = gate
+        val cold = AgentViewModel(fresh, ModelChoice("a", "model")) { }
+        val holder = ViewModelStore().apply { put("cold", cold) }
+        try {
+            runCurrent()
+            assertEquals(listOf(saved), cold.state.value.conversations)  // shown before the network answers
+            gate.complete(Unit); runCurrent()
+            assertEquals(listOf("one", "two"), cold.state.value.conversations.map { it.id })
+            assertEquals("last words", cold.state.value.conversations.first().preview)
+            assertEquals(listOf("two"), fresh.previewCalls)  // the unchanged row is not fetched again
+            assertEquals(listOf("one", "two"), fresh.saved.last().map { it.id })
+        } finally { holder.clear() }
+    }
     @Test fun preStreamNegotiatedRejectionRestoresDraft() = modelTest {
         vm.open(conversation("one")); runCurrent()
         repo.followFlow = { _, _, _, _ -> flow { throw ApiException(409, ClientError("Incompatible protocol"), directSendRejected = true) } }
@@ -600,7 +618,14 @@ class AgentViewModelTest {
         val queueCalls = mutableListOf<QueueRequest>()
         val resumeCalls = mutableListOf<Pair<String, String>>()
         override suspend fun agents(): List<Agent> { readCalls++; return listOf(Agent("a", "Agent", models, emptyMap(), "model", true, true)) }
-        override suspend fun conversations(): List<Conversation> { readCalls++; return list }
+        override suspend fun conversations(): List<Conversation> { readCalls++; listGate?.await(); return list }
+        var listGate: CompletableDeferred<Unit>? = null
+        var cached = emptyList<Conversation>()
+        val saved = mutableListOf<List<Conversation>>()
+        val previewCalls = mutableListOf<String>()
+        override suspend fun cachedConversations() = cached
+        override suspend fun saveConversations(rows: List<Conversation>) { saved += rows }
+        override suspend fun preview(id: String): ConversationDetail { previewCalls += id; return detail(id, null) }
         override suspend fun createConversation(choice: ModelChoice): Conversation { createCalls++; return create() }
         override suspend fun detail(id: String, cursor: String?) = getDetail(id, cursor)
         override fun follow(conversationId: String, runId: String?, send: SendRequest?, previous: TurnState?): Flow<TurnSnapshot> {

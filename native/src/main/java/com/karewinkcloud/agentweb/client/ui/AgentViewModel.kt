@@ -119,6 +119,7 @@ class AgentViewModel(
 
     private fun requireSignIn() {
         generation++; attachmentScope = newControlId(); epoch++; livePresentation.value = null
+        repository.clearConversationCache()
         // Close followers and pending client requests; never send Stop or replay mutations.
         viewModelScope.coroutineContext.cancelChildren()
         drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear(); chatCache.clear()
@@ -149,6 +150,15 @@ class AgentViewModel(
         val projectOwner = projectVersion
         mutable.update { it.copy(refreshing = true, error = null) }
         listJob = viewModelScope.launch {
+            // Show the last saved list at once on a cold start; the network result replaces it.
+            if (state.value.conversations.isEmpty()) {
+                val cached = source.cachedConversations()
+                if (owner == epoch && cached.isNotEmpty()) {
+                    // Saved previews stay valid while a row's updated_at is unchanged.
+                    cached.forEach { row -> if (row.messageCount != null) previews.putIfAbsent(row.id, row) }
+                    mutable.update { old -> if (old.conversations.isEmpty()) old.copy(conversations = cached) else old }
+                }
+            }
             supervisorScope {
                 val catalog = async { runCatching { source.agents() } }
                 val projects = async { runCatching { source.projects() } }
@@ -204,6 +214,7 @@ class AgentViewModel(
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { /* Unknown is visible; a failed read never hides a conversation. */ }
             } } }.joinAll() }
+            if (owner == epoch && state.value.error == null) source.saveConversations(state.value.conversations)
         }
         prefetchRecent(owner)
     }
