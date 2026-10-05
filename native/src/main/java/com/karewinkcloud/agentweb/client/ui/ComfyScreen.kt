@@ -218,7 +218,9 @@ private fun MiniComposer(state: ComfyState, prompt: String, pending: ComfyJob?, 
             }
             val description = tr(if (state.submitting) S.submitting else S.generate)
             FilledIconButton(onSubmit, enabled = state.canSubmit, modifier = Modifier.size(44.dp).semantics { contentDescription = description }) {
-                if (state.submitting || pending != null) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) else AppIcon(R.drawable.aw_create)
+                // Spin only while a task is really in flight; an unconfirmed one just shows its status text.
+                if (state.submitting || pending?.needsPolling() == true) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                else AppIcon(R.drawable.aw_create)
             }
         }
     }
