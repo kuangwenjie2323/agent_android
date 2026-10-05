@@ -1,5 +1,7 @@
 package com.karewinkcloud.agentweb.client.ui
 
+import androidx.compose.ui.graphics.graphicsLayer
+
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -48,6 +50,10 @@ fun ErrorBlock(error: ClientError, onRetry: (() -> Unit)? = null, action: String
     }
 }
 
+/** Grey text buttons for secondary message actions; the accent stays for primary actions. */
+@Composable
+internal fun quietButton() = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant)
+
 /** Observe the initial pass so nested selectable code cannot swallow whole-message copy. */
 private fun Modifier.messageLongPress(onLongPress: () -> Unit): Modifier = pointerInput(onLongPress) {
     awaitEachGesture {
@@ -95,24 +101,28 @@ fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String?
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     Spacer(Modifier.weight(.15f))
                     Surface(modifier = Modifier.weight(.85f, fill = false).widthIn(max = 560.dp), color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)) {
+                        contentColor = MaterialTheme.colorScheme.onSurface, shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)) {
                         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) { BlockContent(message.blocks, live) }
                     }
                 }
                 if (onEdit != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = { editText = message.text; editing = true }, enabled = canFork,
-                        modifier = Modifier.heightIn(min = 48.dp)) { AppIcon(R.drawable.aw_edit); Spacer(Modifier.width(6.dp)); Text(tr(S.edit_message)) }
+                        modifier = Modifier.heightIn(min = 40.dp), colors = quietButton()) {
+                        Box(Modifier.size(18.dp)) { AppIcon(R.drawable.aw_edit) }; Spacer(Modifier.width(4.dp))
+                        Text(tr(S.edit_message), style = MaterialTheme.typography.labelLarge)
+                    }
                 }
             } else {
-                Text(modelLabel ?: message.model ?: tr(S.assistant), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                (modelLabel ?: message.model)?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 BlockContent(message.blocks, live)
                 if (turn != null && !turn.done) WorkingIndicator(turn, connection)
                 else if (!live || turn?.done == true) TurnFooter(message)
                 if (!live) Row(verticalAlignment = Alignment.CenterVertically) {
                     if (message.text.isNotBlank()) ActionIcon(if (copied) R.drawable.aw_check else R.drawable.aw_copy,
                         tr(if (copied) S.copied else S.copy_response), onClick = copy)
-                    if (onRetry != null) TextButton(onClick = onRetry, enabled = canFork, modifier = Modifier.heightIn(min = 48.dp)) {
-                        AppIcon(R.drawable.aw_refresh); Spacer(Modifier.width(6.dp)); Text(tr(S.retry))
+                    if (onRetry != null) TextButton(onClick = onRetry, enabled = canFork, modifier = Modifier.heightIn(min = 40.dp), colors = quietButton()) {
+                        Box(Modifier.size(18.dp)) { AppIcon(R.drawable.aw_refresh) }; Spacer(Modifier.width(4.dp))
+                        Text(tr(S.retry), style = MaterialTheme.typography.labelLarge)
                     }
                 }
             }
@@ -185,10 +195,11 @@ private fun WorkTrace(blocks: List<ChatBlock>, live: Boolean, answerStarted: Boo
     Surface(color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(16.dp)) {
         Column {
-            TextButton(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            TextButton(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)
                 .semantics { stateDescription = expansion },
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-                Text(if (expanded) "⌄" else "›", Modifier.padding(end = 8.dp))
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp), colors = quietButton()) {
+                Box(Modifier.size(18.dp).graphicsLayer { rotationZ = if (expanded) 90f else 0f }) { AppIcon(R.drawable.aw_chevron) }
+                Spacer(Modifier.width(6.dp))
                 Text(countLabel(if (running) R.plurals.working else R.plurals.trace, blocks.size) +
                     if (failures > 0) " · " + countLabel(R.plurals.failed_steps, failures) else "", Modifier.weight(1f),
                     maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)

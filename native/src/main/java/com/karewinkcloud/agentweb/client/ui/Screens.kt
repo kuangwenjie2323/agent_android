@@ -16,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -449,15 +450,15 @@ private fun ModelChoiceControls(agent: Agent?, choice: ModelChoice, onChoice: (M
             Text(tr(S.effort), style = MaterialTheme.typography.labelMedium)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(listOf("default") + (agent.effortLevels[choice.model] ?: listOf("low", "medium", "high", "xhigh", "max"))) { value ->
-                    FilterChip((choice.effort ?: "default") == value, { onChoice(choice.copy(effort = value.takeUnless { it == "default" })) },
-                        label = { Text(effortLabel(value)) }, modifier = Modifier.heightIn(min = 48.dp))
+                    PillChip((choice.effort ?: "default") == value, { onChoice(choice.copy(effort = value.takeUnless { it == "default" })) },
+                        label = { Text(effortLabel(value)) })
                 }
             }
         }
         Text(tr(S.permission), style = MaterialTheme.typography.labelMedium)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(listOf("auto", "plan", "full")) { permission -> FilterChip(choice.permission == permission,
-                { onChoice(choice.copy(permission = permission)) }, label = { Text(permissionLabel(permission)) }, modifier = Modifier.heightIn(min = 48.dp)) }
+            items(listOf("auto", "plan", "full")) { permission -> PillChip(choice.permission == permission,
+                { onChoice(choice.copy(permission = permission)) }, label = { Text(permissionLabel(permission)) }) }
         }
         Text(tr(when { choice.permission == "full" -> S.permission_full_hint; choice.permission == "plan" -> S.permission_plan_hint
             choice.agent == "grok" -> S.permission_grok_hint; else -> S.permission_auto_hint }), style = MaterialTheme.typography.bodySmall,
@@ -468,14 +469,18 @@ private fun ModelChoiceControls(agent: Agent?, choice: ModelChoice, onChoice: (M
 
 @Composable
 internal fun ChoiceRow(title: String, selected: Boolean, enabled: Boolean = true, subtitle: String? = null, onClick: () -> Unit) {
-    Surface(color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp)) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).selectable(selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            RadioButton(selected, onClick = null, enabled = enabled)
-            Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                Text(title, style = MaterialTheme.typography.bodyMedium)
+    // Plain row with a trailing check, like Apple's pickers.
+    Column {
+        Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(RoundedCornerShape(10.dp))
+            .selectable(selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight.SemiBold else null,
+                    color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
                 if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            if (selected) Box(Modifier.size(22.dp)) { CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.primary) { AppIcon(R.drawable.aw_check) } }
         }
+        HorizontalDivider(Modifier.padding(start = 8.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
     }
 }

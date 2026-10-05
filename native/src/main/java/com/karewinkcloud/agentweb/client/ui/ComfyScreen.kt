@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.focusRequester
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.graphics.asImageBitmap
@@ -143,9 +144,11 @@ private fun ShelfHeader(title: String, action: String?, onAction: () -> Unit) {
 
 /** A large square artwork with its title and subtitle underneath, like an album. */
 @Composable
-private fun ArtworkCard(title: String, subtitle: String?, width: Dp, onClick: () -> Unit, artwork: @Composable BoxScope.() -> Unit) {
-    Column(Modifier.width(width).clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)) {
-        Box(Modifier.size(width).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh),
+internal fun ArtworkCard(title: String, subtitle: String?, width: Dp?, onClick: () -> Unit, enabled: Boolean = true, artwork: @Composable BoxScope.() -> Unit) {
+    Column((if (width != null) Modifier.width(width) else Modifier.fillMaxWidth()).clip(RoundedCornerShape(12.dp))
+        .clickable(enabled = enabled, onClick = onClick).graphicsLayer { alpha = if (enabled) 1f else .45f }) {
+        Box((if (width != null) Modifier.size(width) else Modifier.fillMaxWidth().aspectRatio(1f)).clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center, content = artwork)
         Text(title, Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp), maxLines = 1, overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodyMedium)
@@ -470,7 +473,7 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
                 AssistChip(onInspire, label = { Text(tr(S.style_inspire)) }, leadingIcon = { AppIcon(R.drawable.aw_create) })
             }
             items(comfyStyles, key = { it.key }) { style ->
-                FilterChip(prompt.text.contains(style.phrase), { onStyle(style) }, label = { Text(styleLabel(style.key)) })
+                PillChip(prompt.text.contains(style.phrase), { onStyle(style) }, label = { Text(styleLabel(style.key)) })
             }
         }
         if (state.suggestions.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

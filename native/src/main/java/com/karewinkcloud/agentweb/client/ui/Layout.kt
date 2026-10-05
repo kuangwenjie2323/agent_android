@@ -157,6 +157,15 @@ internal fun ComposerSurface(maxHeight: Dp = 320.dp, actions: (@Composable () ->
     }
 }
 
+/** Apple-style pill: grey when idle, inverted (black/white) when selected. */
+@Composable
+internal fun PillChip(selected: Boolean, onClick: () -> Unit, label: @Composable () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) =
+    FilterChip(selected, onClick, label, modifier, enabled, shape = CircleShape, border = null,
+        colors = FilterChipDefaults.filterChipColors(containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            labelColor = MaterialTheme.colorScheme.onSurface, selectedContainerColor = MaterialTheme.colorScheme.onSurface,
+            selectedLabelColor = MaterialTheme.colorScheme.surface,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = .5f)))
+
 @Composable
 internal fun ComposerChip(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false) {
     Surface(onClick, modifier = modifier.heightIn(min = 40.dp), shape = RoundedCornerShape(12.dp),

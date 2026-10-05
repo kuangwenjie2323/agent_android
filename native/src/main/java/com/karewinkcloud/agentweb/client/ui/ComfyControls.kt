@@ -5,6 +5,7 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -48,47 +49,44 @@ internal fun WorkflowGallery(state: ComfyState, vm: ComfyViewModel, onClose: () 
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("image", "video", "audio").forEach { candidate ->
-                    FilterChip(kind == candidate, { kind = candidate }, label = { Text(kindLabel(candidate)) }, modifier = Modifier.weight(1f))
+                    PillChip(kind == candidate, { kind = candidate }, label = { Text(kindLabel(candidate)) }, modifier = Modifier.weight(1f))
                 }
             }
-            OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                singleLine = true, label = { Text(tr(S.workflow_search)) })
+            TextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), singleLine = true,
+                shape = RoundedCornerShape(12.dp), placeholder = { Text(tr(S.workflow_search)) }, leadingIcon = { AppIcon(R.drawable.aw_search) },
+                colors = TextFieldDefaults.colors(focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent, unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent))
             if (state.resourcesLoading || state.resourcesError) Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(tr(if (state.resourcesError) S.resources_failed else S.resources_loading), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                 if (state.resourcesError) TextButton({ vm.ensureResources(true) }) { Text(tr(S.refresh)) }
             }
-            LazyVerticalGrid(GridCells.Adaptive(240.dp), Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp),
+            LazyVerticalGrid(GridCells.Adaptive(150.dp), Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (groups.isEmpty()) item("empty", span = { GridItemSpan(maxLineSpan) }) {
                     Text(tr(S.workflow_no_matches), Modifier.padding(vertical = 24.dp), style = MaterialTheme.typography.bodyMedium)
                 }
                 groups.forEach { group ->
                     item("group-${group.channel}-${group.family}", span = { GridItemSpan(maxLineSpan) }) {
-                        Column(Modifier.padding(top = 8.dp)) {
-                            Text(tr(comfyChannelResource(group.channel)),
-                                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                            Text(group.family.ifBlank { tr(S.workflow_other_family) }, style = MaterialTheme.typography.titleMedium)
+                        Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(group.family.ifBlank { tr(S.workflow_other_family) }, style = MaterialTheme.typography.titleLarge)
+                            Text(tr(comfyChannelResource(group.channel)), Modifier.padding(bottom = 3.dp), style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                     items(group.workflows, key = { it.id }) { workflow ->
                         val availability = workflow.availability(state.resources)
                         val chosen = workflow.id == state.workflowId
-                        Surface(onClick = { vm.choose(workflow.id); onClose() }, enabled = availability.kind == ComfyAvailabilityKind.AVAILABLE,
-                            shape = RoundedCornerShape(20.dp), color = if (chosen) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
-                            border = BorderStroke(1.dp, if (chosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
-                            modifier = Modifier.fillMaxWidth().semantics { selected = chosen }) {
-                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(workflow.modelFamily().ifBlank { kindLabel(workflow.kind) }, Modifier.weight(1f), maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.headlineSmall,
-                                        color = MaterialTheme.colorScheme.primary.copy(alpha = .7f))
-                                    if (chosen) AppIcon(R.drawable.aw_check, tr(S.workflow_selected))
-                                }
-                                Text(workflow.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
-                                Text(workflow.description.ifBlank { workflow.id }, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                if (availability.kind != ComfyAvailabilityKind.AVAILABLE) Text(availabilityLabel(availability),
-                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        ArtworkCard(workflow.title.substringBefore(" · "),
+                            workflow.title.substringAfter(" · ", "").ifBlank { null } ?: availabilityLabel(availability).ifBlank { null },
+                            null, { vm.choose(workflow.id); onClose() }, enabled = availability.kind == ComfyAvailabilityKind.AVAILABLE) {
+                            RemoteImage(workflow.coverUrl, vm, Modifier.fillMaxSize()) {
+                                Text(workflow.modelFamily().ifBlank { kindLabel(workflow.kind) }, style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.primary)
+                            }
+                            if (chosen) Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).semantics { selected = true }) {
+                                Box(Modifier.padding(4.dp)) { AppIcon(R.drawable.aw_check, tr(S.workflow_selected)) }
                             }
                         }
                     }
@@ -120,7 +118,7 @@ internal fun CreationSettings(state: ComfyState, vm: ComfyViewModel, onGallery: 
                     Text(tr(S.creation_channel), style = MaterialTheme.typography.labelMedium)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf("kaggle_gpu", "runpod_gpu", "cloud_gpu", "partner_api").forEach { channel ->
-                            FilterChip(state.channel == channel, { vm.filter(channel = channel) },
+                            PillChip(state.channel == channel, { vm.filter(channel = channel) },
                                 enabled = state.workflows.any { it.channel == channel }, label = { Text(tr(comfyChannelResource(channel))) })
                         }
                     }
