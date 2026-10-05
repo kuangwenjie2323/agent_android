@@ -106,6 +106,6 @@ private fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> 
 @Composable
 private fun SettingsRow(title: String, subtitle: String? = null, enabled: Boolean = true, badge: Boolean = false,
     position: RowPosition = RowPosition.ONLY, onClick: () -> Unit) {
-    ListRow(title, subtitle, position, enabled, leading = if (badge) ({ Avatar(title.take(1).uppercase()) }) else null,
-        trailing = { AppIcon(R.drawable.aw_chevron) }, onClick = onClick)
+    ListRow(title, subtitle, position, enabled, leading = if (badge) ({ Avatar(title.take(1).uppercase(), accent = true) }) else null,
+        trailing = { Box(Modifier.size(20.dp)) { AppIcon(R.drawable.aw_chevron) } }, grouped = true, onClick = onClick)
 }

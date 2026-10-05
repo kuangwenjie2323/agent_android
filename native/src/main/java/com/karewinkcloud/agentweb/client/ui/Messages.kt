@@ -93,8 +93,9 @@ fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String?
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (message.role == "user") {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Surface(modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth(.9f), color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)) {
+                    Spacer(Modifier.weight(.15f))
+                    Surface(modifier = Modifier.weight(.85f, fill = false).widthIn(max = 560.dp), color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)) {
                         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) { BlockContent(message.blocks, live) }
                     }
                 }

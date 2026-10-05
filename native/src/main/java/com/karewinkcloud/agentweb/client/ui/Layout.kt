@@ -52,9 +52,12 @@ internal fun GroupLabel(title: String, detail: String? = null) {
 
 /** Circular initials badge used for models and accounts. */
 @Composable
-internal fun Avatar(text: String) {
-    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer) {
-        Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { Text(text, style = MaterialTheme.typography.labelMedium) }
+internal fun Avatar(text: String, accent: Boolean = false) {
+    // Rounded-square artwork, like album covers in a library list; the account uses the accent.
+    Surface(shape = if (accent) CircleShape else RoundedCornerShape(10.dp),
+        color = if (accent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = if (accent) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant) {
+        Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) { Text(text, style = MaterialTheme.typography.titleSmall) }
     }
 }
 
@@ -62,15 +65,19 @@ internal fun Avatar(text: String) {
 @Composable
 internal fun ListRow(title: String, subtitle: String? = null, position: RowPosition = RowPosition.ONLY, enabled: Boolean = true,
     titleLines: Int = 1, leading: (@Composable () -> Unit)? = null, trailing: (@Composable () -> Unit)? = null,
-    extra: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
-    val radius = 16.dp
+    extra: (@Composable () -> Unit)? = null, grouped: Boolean = false, onClick: () -> Unit) {
+    // Plain rows (Apple Music library lists) by default; inset grouped cards for settings.
+    val radius = if (grouped) 12.dp else 0.dp
     val top = if (position == RowPosition.ONLY || position == RowPosition.FIRST) radius else 0.dp
     val bottom = if (position == RowPosition.ONLY || position == RowPosition.LAST) radius else 0.dp
-    Surface(onClick, enabled = enabled, shape = RoundedCornerShape(top, top, bottom, bottom), color = MaterialTheme.colorScheme.surface,
+    val first = position == RowPosition.ONLY || position == RowPosition.FIRST
+    Surface(onClick, enabled = enabled, shape = RoundedCornerShape(top, top, bottom, bottom),
+        color = if (grouped) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.background,
         modifier = Modifier.fillMaxWidth()) {
         Column {
-            if (top == 0.dp) HorizontalDivider(Modifier.padding(start = if (leading != null) 68.dp else 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
-            Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 12.dp),
+            if (!first) HorizontalDivider(Modifier.padding(start = if (leading != null) (if (grouped) 68.dp else 56.dp) else 16.dp),
+                thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+            Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = if (grouped) 16.dp else 4.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 leading?.invoke()
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -146,8 +153,8 @@ internal fun ComposerSurface(maxHeight: Dp = 320.dp, actions: (@Composable () ->
 @Composable
 internal fun ComposerChip(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false) {
     Surface(onClick, modifier = modifier.heightIn(min = 40.dp), shape = RoundedCornerShape(12.dp),
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
-        contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant) {
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        contentColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium,

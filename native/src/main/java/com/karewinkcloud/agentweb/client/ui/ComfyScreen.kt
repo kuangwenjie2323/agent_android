@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.focusRequester
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.draw.clip
@@ -113,7 +114,8 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
             CreationComposer(state, prompt, { prompt = it; vm.prompt(it.text, it.composition != null) }, vm::filter,
                 { settingsOpen = true }, { focus.clearFocus(); keyboard?.hide(); vm.submit(); composerOpen = false }, vm::choose, vm::size,
                 composerHeight.coerceAtLeast(260.dp), { galleryOpen = true },
-                onStyle = { vm.replacePrompt(applyStyle(prompt.text, it)) }, onInspire = { vm.replacePrompt(comfyInspirations.random()) })
+                onStyle = { vm.replacePrompt(applyStyle(prompt.text, it)) }, onInspire = { vm.replacePrompt(comfyInspirations.random()) },
+                autoFocus = true)
         }
     }
     if (allOpen) AllCreations(jobs, ::titleOf, vm, showFailed, { showFailed = it }, openJob) { allOpen = false }
@@ -430,7 +432,9 @@ private fun CreationDetail(state: ComfyState, vm: ComfyViewModel, onEdit: () -> 
 internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPrompt: (TextFieldValue) -> Unit,
     onFilter: (String, String) -> Unit, onSettings: () -> Unit, onSubmit: () -> Unit,
     onSuggestion: (String) -> Unit = {}, onSize: (ComfySize) -> Unit = {}, maxHeight: Dp = 320.dp, onGallery: () -> Unit = onSettings,
-    onStyle: (ComfyStyle) -> Unit = {}, onInspire: () -> Unit = {}) {
+    onStyle: (ComfyStyle) -> Unit = {}, onInspire: () -> Unit = {}, autoFocus: Boolean = false) {
+    val promptFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    if (autoFocus) LaunchedEffect(Unit) { delay(250); runCatching { promptFocus.requestFocus() } }
     var kindMenu by remember { mutableStateOf(false) }
     var sizeMenu by remember { mutableStateOf(false) }
     // The prompt scrolls; the workflow and action rows stay pinned (the channel lives in the gallery and settings).
@@ -458,7 +462,7 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
             }
         }
     }) {
-        TextField(prompt, onPrompt, Modifier.fillMaxWidth(), placeholder = { Text(tr(S.creation_hint)) }, minLines = 2, maxLines = 4,
+        TextField(prompt, onPrompt, Modifier.fillMaxWidth().focusRequester(promptFocus), placeholder = { Text(tr(S.creation_hint)) }, minLines = 2, maxLines = 4,
             colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
                 focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
         if (state.kind != "audio") LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = 4.dp)) {

@@ -96,10 +96,12 @@ fun AgentWebApp(vm: AgentViewModel, settings: SettingsViewModel, studio: ComfyVi
 internal fun AppNavigation(selected: AppTab, onSelect: (AppTab) -> Unit) {
     Column {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp, windowInsets = WindowInsets(0, 0, 0, 0)) {
+        NavigationBar(Modifier.height(64.dp), containerColor = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp,
+            windowInsets = WindowInsets(0, 0, 0, 0)) {
             AppTab.entries.forEach { tab ->
-                NavigationBarItem(selected == tab, { onSelect(tab) }, icon = { AppIcon(tabIcon(tab)) },
-                    label = { Text(tabLabel(tab), maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium) })
+                NavigationBarItem(selected == tab, { onSelect(tab) }, icon = { AppIcon(tabIcon(tab, selected == tab)) },
+                    label = { Text(tabLabel(tab), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall) },
+                    colors = appNavColors())
             }
         }
     }
@@ -111,7 +113,7 @@ internal fun AppNavigationRail(selected: AppTab, onSelect: (AppTab) -> Unit) {
         NavigationRail(containerColor = MaterialTheme.colorScheme.surface, windowInsets = WindowInsets(0, 0, 0, 0)) {
             Spacer(Modifier.weight(1f))
             AppTab.entries.forEach { tab ->
-                NavigationRailItem(selected == tab, { onSelect(tab) }, icon = { AppIcon(tabIcon(tab)) },
+                NavigationRailItem(selected == tab, { onSelect(tab) }, icon = { AppIcon(tabIcon(tab, selected == tab)) },
                     label = { Text(tabLabel(tab), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium) })
             }
             Spacer(Modifier.weight(1f))
@@ -123,8 +125,18 @@ internal fun AppNavigationRail(selected: AppTab, onSelect: (AppTab) -> Unit) {
 @Composable
 private fun tabLabel(tab: AppTab) = when (tab) { AppTab.CONVERSATIONS -> tr(S.conversations); AppTab.CREATE -> tr(S.studio)
     AppTab.CLAUDE -> "Claude Code"; AppTab.SETTINGS -> tr(S.settings) }
-private fun tabIcon(tab: AppTab) = when (tab) { AppTab.CONVERSATIONS -> R.drawable.aw_chat; AppTab.CREATE -> R.drawable.aw_create
-    AppTab.CLAUDE -> R.drawable.aw_terminal; AppTab.SETTINGS -> R.drawable.aw_settings }
+private fun tabIcon(tab: AppTab, selected: Boolean) = when (tab) {
+    AppTab.CONVERSATIONS -> if (selected) R.drawable.aw_chat_fill else R.drawable.aw_chat
+    AppTab.CREATE -> if (selected) R.drawable.aw_create_fill else R.drawable.aw_create
+    AppTab.CLAUDE -> if (selected) R.drawable.aw_terminal_fill else R.drawable.aw_terminal
+    AppTab.SETTINGS -> if (selected) R.drawable.aw_gear_fill else R.drawable.aw_gear
+}
+
+@Composable
+private fun appNavColors() = NavigationBarItemDefaults.colors(
+    selectedIconColor = MaterialTheme.colorScheme.primary, selectedTextColor = MaterialTheme.colorScheme.primary,
+    indicatorColor = Color.Transparent, unselectedIconColor = MaterialTheme.colorScheme.outline,
+    unselectedTextColor = MaterialTheme.colorScheme.outline)
 
 @Composable
 internal fun Toolbar(title: String, subtitle: String? = null, onBack: (() -> Unit)? = null, onSettings: (() -> Unit)? = null,
@@ -149,6 +161,10 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
     val visibleIds by remember { derivedStateOf { list.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String } } }
     LaunchedEffect(visibleIds, state.conversations) { vm.loadPreviews(visibleIds) }
     ScreenTitle(tr(S.conversations)) {
+        if (state.creating) Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) }
+        else IconButton({ vm.newChat() }, colors = IconButtonDefaults.iconButtonColors(contentColor = MaterialTheme.colorScheme.primary)) {
+            AppIcon(R.drawable.aw_plus, tr(S.new_chat))
+        }
         Box {
             ActionIcon(R.drawable.aw_more, tr(S.more)) { menu = true }
             DropdownMenu(menu, { menu = false }) {
@@ -159,16 +175,16 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
         }
     }
     TextField(state.search, vm::search, Modifier.fillMaxWidth().padding(horizontal = PageGutter), singleLine = true,
-        shape = RoundedCornerShape(24.dp), placeholder = { Text(tr(S.search_conversations), style = MaterialTheme.typography.bodyMedium) },
+        shape = RoundedCornerShape(12.dp), placeholder = { Text(tr(S.search_conversations), style = MaterialTheme.typography.bodyMedium) },
         leadingIcon = { AppIcon(R.drawable.aw_search) },
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-        colors = TextFieldDefaults.colors(focusedContainerColor = MaterialTheme.colorScheme.surface, unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+        colors = TextFieldDefaults.colors(focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer, unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
             focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent),
         trailingIcon = { if (state.search.isNotEmpty()) ActionIcon(R.drawable.aw_close, tr(S.clear_search)) { vm.search("") } })
     Box(Modifier.weight(1f)) {
         PullToRefreshBox(state.refreshing, vm::refresh) {
-            LazyColumn(state = list, contentPadding = PaddingValues(start = PageGutter, end = PageGutter, bottom = 96.dp),
+            LazyColumn(state = list, contentPadding = PaddingValues(start = PageGutter, end = PageGutter, bottom = 24.dp),
                 modifier = Modifier.fillMaxSize()) {
                 if (state.error != null) item("error") { ErrorBlock(state.error, vm::refresh, tr(S.refresh)) }
                 if (state.sections.isEmpty() && state.refreshing) item("loading") { LoadingState(tr(S.loading)) }
@@ -189,9 +205,6 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
                 }
             }
         }
-        ExtendedFloatingActionButton(onClick = { if (!state.creating) vm.newChat() }, icon = { if (state.creating) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp) else AppIcon(R.drawable.aw_plus) },
-            text = { Text(tr(if (state.creating) S.loading else S.new_chat)) }, containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp))
     }
 }
 
