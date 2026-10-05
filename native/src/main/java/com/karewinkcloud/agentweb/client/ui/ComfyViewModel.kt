@@ -367,9 +367,12 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
     /** The original file, needed only to save, share or open full screen. */
     suspend fun output(job: ComfyJob, output: ComfyOutput): File = cached(job, output, edge = 0)
     /** A JPEG preview (512 for tiles, 1280 for the detail view); falls back to the original when the server has none. */
-    suspend fun preview(job: ComfyJob, output: ComfyOutput, edge: Int = 512): File =
-        if (!output.mime.startsWith("image/")) output(job, output)
-        else try { cached(job, output, edge) } catch (e: CancellationException) { throw e } catch (_: ComfyFailure) { output(job, output) }
+    suspend fun preview(job: ComfyJob, output: ComfyOutput, edge: Int = 512): File {
+        val image = output.mime.startsWith("image/")
+        if (!image && output.thumbUrl == null && output.previewUrl == null) return output(job, output)
+        return try { cached(job, output, edge) } catch (e: CancellationException) { throw e }
+            catch (failure: ComfyFailure) { if (image) output(job, output) else throw failure }  // a poster never pulls the whole video
+    }
     private suspend fun cached(job: ComfyJob, output: ComfyOutput, edge: Int): File = synchronized(mediaLocks) {
         mediaLocks.getOrPut("${job.requestId}-${output.index}-$edge") { Mutex() }
     }.withLock {

@@ -71,7 +71,7 @@ private fun mediaState(job: ComfyJob, output: ComfyOutput, vm: ComfyViewModel, s
 
 @Composable
 internal fun ComfyThumbnail(job: ComfyJob, vm: ComfyViewModel, modifier: Modifier = Modifier) {
-    val output = job.outputs.firstOrNull { it.mime.startsWith("image/") }
+    val output = job.outputs.firstOrNull { it.mime.startsWith("image/") } ?: job.outputs.firstOrNull { it.thumbUrl != null || it.previewUrl != null }
     val bitmap = if (output != null) mediaState(job, output, vm, 480, preview = 512).value.bitmap else null
     Box(modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh),
         contentAlignment = Alignment.Center) {
@@ -88,7 +88,11 @@ internal fun ComfyThumbnail(job: ComfyJob, vm: ComfyViewModel, modifier: Modifie
 internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewModel) {
     var revision by remember(job.requestId, output.index) { mutableIntStateOf(0) }
     val image = output.mime.startsWith("image/")
-    val media by mediaState(job, output, vm, 1280, revision, preview = if (image) 1280 else 0)
+    val video = output.mime.startsWith("video/")
+    // Images and posters display a preview; the original downloads only when an action needs it.
+    val usesPreview = image || output.previewUrl != null || output.thumbUrl != null
+    val media by mediaState(job, output, vm, 1280, revision, preview = if (usesPreview) 1280 else 0)
+    var playing by remember(job.requestId, output.index) { mutableStateOf(false) }
     // Images display a preview; the original is downloaded only when an action needs it.
     var original by remember(job.requestId, output.index) { mutableStateOf<File?>(null) }
     var fetching by remember(job.requestId, output.index) { mutableStateOf(false) }
@@ -107,7 +111,7 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
     @Suppress("DEPRECATION") val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     var saving by remember { mutableStateOf(false) }
     val file = media.file
-    suspend fun originalFile(): File = original ?: (if (image) vm.output(job, output) else requireNotNull(file)).also { original = it }
+    suspend fun originalFile(): File = original ?: (if (usesPreview) vm.output(job, output) else requireNotNull(file)).also { original = it }
     fun withOriginal(block: suspend (File) -> Unit) = scope.launch {
         fetching = true
         val source = try { originalFile() } catch (e: CancellationException) { throw e } catch (_: Exception) { null } finally { fetching = false }
@@ -141,6 +145,8 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
         } catch (_: Exception) { actionMessage = S.output_open_failed }
     }
     if (viewing) media.bitmap?.let { ZoomViewer(it.asImageBitmap()) { viewing = false } }
+    // Videos stream from cloud storage when they have a link, otherwise from the downloaded file.
+    if (playing) VideoPlayer(output.originalUrl?.let(android.net.Uri::parse) ?: original?.let(android.net.Uri::fromFile)) { playing = false }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         when {
             media.failed -> TextButton({ revision++ }, Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(tr(S.output_failed)) }
@@ -153,10 +159,17 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
                 if (preview != null) Image(preview.asImageBitmap(), tr(S.output_preview), Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
                 CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
             } }
+            video && media.bitmap != null -> Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                .clickable(onClickLabel = tr(S.open_video)) {
+                    if (output.originalUrl != null) playing = true else withOriginal { playing = true }
+                }, contentAlignment = Alignment.Center) {
+                Image(media.bitmap!!.asImageBitmap(), tr(S.output_preview), Modifier.fillMaxWidth().heightIn(max = 480.dp), contentScale = ContentScale.Fit)
+                PlayBadge()
+            }
             media.bitmap != null -> Image(media.bitmap!!.asImageBitmap(), tr(S.output_preview),
                 Modifier.fillMaxWidth().heightIn(max = 480.dp).clip(RoundedCornerShape(16.dp))
                     .clickable(onClickLabel = tr(S.output_open)) { viewing = true }, contentScale = ContentScale.Fit)
-            output.mime.startsWith("video/") -> FilledTonalButton({ mediaIntent(Intent.ACTION_VIEW, file) }, Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
+            video -> FilledTonalButton({ original = file; playing = true }, Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
                 AppIcon(R.drawable.aw_play); Spacer(Modifier.width(8.dp)); Text(tr(S.open_video))
             }
             else -> AudioOutput(file)
@@ -228,6 +241,41 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
         actionMessage?.let { Text(tr(it), style = MaterialTheme.typography.bodySmall) }
         if (actionMessage == S.public_link_copied) publicLink?.let { Text(it, style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2) }
+    }
+}
+
+@Composable
+private fun PlayBadge() {
+    Surface(shape = androidx.compose.foundation.shape.CircleShape, color = androidx.compose.ui.graphics.Color.Black.copy(alpha = .55f),
+        contentColor = androidx.compose.ui.graphics.Color.White) {
+        Box(Modifier.size(64.dp), contentAlignment = Alignment.Center) { AppIcon(R.drawable.aw_play) }
+    }
+}
+
+/** In-app full-screen player: streams the video (sound on, loops) with the system transport controls. */
+@Composable
+private fun VideoPlayer(uri: android.net.Uri?, onClose: () -> Unit) {
+    androidx.compose.ui.window.Dialog(onClose, androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        var ready by remember(uri) { mutableStateOf(false) }
+        var failed by remember(uri) { mutableStateOf(uri == null) }
+        Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black), contentAlignment = Alignment.Center) {
+            if (uri != null) androidx.compose.ui.viewinterop.AndroidView({ context ->
+                android.widget.VideoView(context).apply {
+                    val controls = android.widget.MediaController(context)
+                    controls.setAnchorView(this)
+                    setMediaController(controls)
+                    setOnPreparedListener { player -> player.isLooping = true; ready = true; start(); controls.show(2500) }
+                    setOnErrorListener { _, _, _ -> failed = true; true }
+                    setVideoURI(uri)
+                }
+            }, Modifier.fillMaxWidth(), onRelease = { it.stopPlayback() })
+            if (!ready && !failed) CircularProgressIndicator(color = androidx.compose.ui.graphics.Color.White)
+            if (failed) Text(tr(S.output_failed), color = androidx.compose.ui.graphics.Color.White)
+            IconButton(onClose, Modifier.align(Alignment.TopEnd).windowInsetsPadding(WindowInsets.safeDrawing).padding(8.dp),
+                colors = IconButtonDefaults.iconButtonColors(contentColor = androidx.compose.ui.graphics.Color.White)) {
+                AppIcon(R.drawable.aw_close, tr(S.close))
+            }
+        }
     }
 }
 

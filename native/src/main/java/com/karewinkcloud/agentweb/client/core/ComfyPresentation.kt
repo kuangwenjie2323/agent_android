@@ -21,7 +21,7 @@ fun ComfyWorkflow.modelFamily(): String {
     val source = (inputs.mapNotNull { it.family }.filter { it != "unknown" }.joinToString(" ") + " $id $title").lowercase()
     return listOf("sdxl" to "SDXL", "flux" to "FLUX", "qwen" to "Qwen", "seedance" to "Seedance",
         "seedream" to "Seedream", "seed-audio" to "Seed Audio", "wan" to "Wan", "hunyuan" to "Hunyuan",
-        "fasth3" to "Hunyuan", "ltx" to "LTX", "z-image" to "Z-Image", "nano-banana" to "Nano Banana",
+        "fasth3" to "MiniMax", "minimax" to "MiniMax", "ltx" to "LTX", "z-image" to "Z-Image", "nano-banana" to "Nano Banana",
         "gemini" to "Gemini", "gpt-image" to "GPT Image", "grok" to "Grok", "recraft" to "Recraft",
         "ideogram" to "Ideogram", "kling" to "Kling", "luma" to "Luma", "vidu" to "Vidu", "pruna" to "Pruna",
         "elevenlabs" to "ElevenLabs", "bria" to "Bria", "topaz" to "Topaz").firstOrNull { (key, _) -> source.contains(key) }?.second.orEmpty()
@@ -29,7 +29,8 @@ fun ComfyWorkflow.modelFamily(): String {
 data class ComfyGalleryGroup(val channel: String, val family: String, val workflows: List<ComfyWorkflow>)
 fun comfyGalleryGroups(workflows: List<ComfyWorkflow>, kind: String, query: String): List<ComfyGalleryGroup> {
     val needle = query.trim().lowercase()
-    return workflows.filter { it.kind == kind && (needle.isEmpty() ||
+    // A search spans every media type; browsing stays within the selected one.
+    return workflows.filter { (needle.isNotEmpty() || it.kind == kind) && (needle.isEmpty() ||
         listOf(it.id, it.title, it.description, it.modelFamily()).any { text -> text.lowercase().contains(needle) }) }
         .groupBy { it.channel to it.modelFamily() }.map { (key, entries) -> ComfyGalleryGroup(key.first, key.second, entries) }
         .sortedWith(compareBy<ComfyGalleryGroup> { when (it.channel) { "kaggle_gpu" -> 0; "runpod_gpu" -> 1; "cloud_gpu" -> 2; "partner_api" -> 3; else -> 4 } }

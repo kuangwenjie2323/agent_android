@@ -76,7 +76,8 @@ class HttpComfyRepository(private val http: HttpAgentRepository) : ComfyReposito
         http.download("/api/comfy/jobs/$requestId/outputs/${output.index}", destination, output.mime, limit, onProgress)
     }
     override suspend fun thumbnail(requestId: String, output: ComfyOutput, destination: File, edge: Int) = operation {
-        require(validComfyId(requestId) && output.index in 0..63 && output.mime.startsWith("image/") && edge in setOf(512, 1280))
+        require(validComfyId(requestId) && output.index in 0..63 && edge in setOf(512, 1280) &&
+            (output.mime.startsWith("image/") || output.thumbUrl != null || output.previewUrl != null))
         if (output.originalUrl != null) {
             // Cloud-stored: previews made on the GPU live beside the original; without one, use the original.
             val link = (if (edge == 512) output.thumbUrl ?: output.previewUrl else output.previewUrl) ?: throw ComfyFailure("unavailable")
