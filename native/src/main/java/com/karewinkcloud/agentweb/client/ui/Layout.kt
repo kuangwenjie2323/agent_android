@@ -10,6 +10,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.res.painterResource
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.style.TextAlign
@@ -110,15 +112,17 @@ internal fun EmptyState(icon: Int, title: String, message: String? = null,
     actionLabel: String? = null, onAction: (() -> Unit)? = null) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer) {
-            Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) { AppIcon(icon) }
+        // A large grey symbol, as in Apple's empty libraries.
+        Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
+            CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.outline) {
+                Icon(painterResource(icon), null, Modifier.size(52.dp))
+            }
         }
         Text(title, Modifier.widthIn(max = 400.dp).semantics { heading() },
             style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
         if (message != null) Text(message, Modifier.widthIn(max = 400.dp), textAlign = TextAlign.Center,
             style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (onAction != null && actionLabel != null) FilledTonalButton(onAction, Modifier.heightIn(min = 48.dp)) { Text(actionLabel) }
+        if (onAction != null && actionLabel != null) AppleButton(onAction) { Text(actionLabel) }
     }
 }
 

@@ -26,11 +26,15 @@ import kotlinx.coroutines.delay
 
 @Composable
 fun ErrorBlock(error: ClientError, onRetry: (() -> Unit)? = null, action: String? = null) {
-    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.errorContainer,
-        contentColor = MaterialTheme.colorScheme.onErrorContainer) {
+    // A grey card with a red mark, like Apple's inline alerts; the text stays readable.
+    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainer,
+        contentColor = MaterialTheme.colorScheme.onSurface) {
         Column(Modifier.fillMaxWidth().padding(16.dp).semantics { liveRegion = LiveRegionMode.Polite },
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(tr(S.error_title), style = MaterialTheme.typography.titleSmall)
+            verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.size(20.dp)) { CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.error) { AppIcon(R.drawable.aw_error) } }
+                Text(tr(S.error_title), style = MaterialTheme.typography.titleSmall)
+            }
             Text(when (error.code) {
                 "stream_mismatch" -> tr(S.chat_stream_error)
                 "fork_project_required", "project_not_found" -> tr(S.fork_project_required)
@@ -44,8 +48,8 @@ fun ErrorBlock(error: ClientError, onRetry: (() -> Unit)? = null, action: String
                 else -> localMessage(error.message)
             }, style = MaterialTheme.typography.bodyMedium)
             if (error.retryable == false) Text(tr(S.not_retried), style = MaterialTheme.typography.bodySmall)
-            if (onRetry != null) TextButton(onClick = onRetry, modifier = Modifier.heightIn(min = 48.dp),
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onErrorContainer)) { Text(action ?: tr(S.reconnect)) }
+            if (onRetry != null) TextButton(onClick = onRetry, modifier = Modifier.heightIn(min = 40.dp),
+                contentPadding = PaddingValues(horizontal = 0.dp)) { Text(action ?: tr(S.reconnect), fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold) }
         }
     }
 }

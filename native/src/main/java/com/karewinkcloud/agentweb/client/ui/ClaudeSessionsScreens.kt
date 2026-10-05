@@ -105,11 +105,12 @@ internal fun ColumnScope.ClaudeHistoryScreen(preview: ClaudePreviewState, vm: Ag
             }
             if (session.historyLimited) Text(tr(S.history_limited), style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                FilledTonalButton(onClick = vm::refreshClaudePreview, enabled = !preview.loading && !preview.adopting,
-                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text(tr(S.refresh)) }
+                AppleButton(vm::refreshClaudePreview, Modifier.weight(1f), enabled = !preview.loading && !preview.adopting) {
+                    Box(Modifier.size(18.dp)) { AppIcon(R.drawable.aw_refresh) }; Spacer(Modifier.width(6.dp)); Text(tr(S.refresh))
+                }
                 Button(onClick = vm::continueClaudeSession,
                     enabled = preview.canAdopt || (!preview.loading && !preview.adopting && session.linkedConversationId != null),
-                    modifier = Modifier.weight(2f).heightIn(min = 48.dp), shape = RoundedCornerShape(16.dp)) {
+                    modifier = Modifier.weight(2f).heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) {
                     Text(if (preview.adopting) tr(S.linking) else if (session.linkedConversationId != null) tr(S.open_existing) else tr(S.continue_here))
                 }
             }
