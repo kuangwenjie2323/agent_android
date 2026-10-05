@@ -144,6 +144,8 @@
     <string name="channel_kaggle_hint">按需启动，首次生成需要等待。</string>
     <string name="channel_kaggle_terms">仅限个人非商业用途。</string>
     <string name="status_kaggle_starting">正在启动免费 GPU…</string>
+    <string name="status_runpod_waiting_gpu">正在等 RunPod 分配空闲显卡…</string>
+    <string name="status_runpod_starting">RunPod 显卡启动中（冷启动约 3–6 分钟）…</string>
     <string name="kaggle_queue_position">队列第 %1$d 位</string>
     <string name="error_kaggle_launch">免费 GPU 启动失败。可选择 Comfy Cloud 后新建任务。</string>
     <string name="error_kaggle_quota">本周免费 GPU 剩余额度不足。可选择 Comfy Cloud 后新建任务。</string>

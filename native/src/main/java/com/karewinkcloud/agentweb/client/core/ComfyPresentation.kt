@@ -83,7 +83,7 @@ fun ComfyInput.sliderRange(): ComfySliderRange? {
 
 enum class ComfyJobPhase { STARTING, QUEUED, RUNNING, FINISHING, COMPLETE, FAILED, UNKNOWN }
 fun ComfyJob.phase(): ComfyJobPhase = when {
-    billingChannel == "kaggle_gpu" && workerState == "launching" && status in setOf("pending", "submitting", "queued") -> ComfyJobPhase.STARTING
+    billingChannel in setOf("kaggle_gpu", "runpod_gpu") && workerState == "launching" && status in setOf("pending", "submitting", "queued") -> ComfyJobPhase.STARTING
     status in setOf("pending", "submitting", "queued") -> ComfyJobPhase.QUEUED
     status in setOf("running", "canceling") -> ComfyJobPhase.RUNNING
     status == "succeeded" && (outputs.isEmpty() || errorCode == "output_unavailable") -> ComfyJobPhase.FINISHING

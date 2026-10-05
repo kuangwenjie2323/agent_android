@@ -134,7 +134,7 @@ data class ComfyJob(val requestId: String, val workflowId: String, val status: S
                 j.obj("error")?.string("code"), j.string("job_id"), (j["progress"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it in 0.0..1.0 },
                 j.string("billing_channel"), j.string("worker_state"),
                 (j["queue_position"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull?.takeIf { it in 1..Int.MAX_VALUE.toLong() }?.toInt(),
-                j.string("worker_stage")?.takeIf { it in setOf("starting", "installing", "models", "comfy", "ready", "first_image") })
+                j.string("worker_stage")?.takeIf { it in setOf("starting", "installing", "models", "comfy", "ready", "first_image", "waiting_gpu") })
         }
     }
 }

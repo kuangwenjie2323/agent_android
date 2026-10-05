@@ -64,7 +64,9 @@ internal fun comfyChannelHintResource(channel: String) = when (channel) {
     "runpod_gpu" -> S.channel_runpod_hint; else -> S.channel_unknown
 }
 internal fun comfyProgressResource(job: ComfyJob) = if (job.status == "canceling") S.status_canceling else when (job.phase()) {
-    ComfyJobPhase.STARTING -> when (job.workerStage) {
+    ComfyJobPhase.STARTING -> if (job.billingChannel == "runpod_gpu") {
+        if (job.workerStage == "waiting_gpu") S.status_runpod_waiting_gpu else S.status_runpod_starting
+    } else when (job.workerStage) {
         "installing" -> S.status_kaggle_installing
         "models" -> S.status_kaggle_models
         "comfy", "ready", "first_image" -> S.status_kaggle_comfy
