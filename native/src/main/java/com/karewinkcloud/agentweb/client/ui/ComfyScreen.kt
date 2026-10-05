@@ -391,7 +391,7 @@ private fun CreationDetail(state: ComfyState, vm: ComfyViewModel, onEdit: () -> 
                     Column(Modifier.fillMaxWidth().padding(start = 12.dp, top = 12.dp, end = 4.dp)) {
                         Text(jobPrompt, Modifier.padding(end = 8.dp), maxLines = 6, overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.bodyMedium)
-                        TextButton({ clipboard.setText(AnnotatedString(jobPrompt)); copied = true }, Modifier.align(Alignment.End)) {
+                        TextButton({ clipboard.setText(AnnotatedString(jobPrompt)); copied = true }, Modifier.align(Alignment.End), colors = quietButton()) {
                             Text(tr(if (copied) S.copied else S.copy_prompt))
                         }
                     }
@@ -399,10 +399,12 @@ private fun CreationDetail(state: ComfyState, vm: ComfyViewModel, onEdit: () -> 
             }
             item("actions") {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton({ if (vm.again(job)) onClose() else actionFailed = true },
-                        Modifier.weight(1f), enabled = blockedReason == null) { Text(tr(S.creation_again)) }
-                    OutlinedButton({ if (vm.edit(job)) onEdit() else actionFailed = true },
-                        Modifier.weight(1f), enabled = editBlocked == null) { Text(tr(S.creation_edit)) }
+                    AppleButton({ if (vm.again(job)) onClose() else actionFailed = true }, Modifier.weight(1f), enabled = blockedReason == null) {
+                        Box(Modifier.size(18.dp)) { AppIcon(R.drawable.aw_refresh) }; Spacer(Modifier.width(6.dp)); Text(tr(S.creation_again))
+                    }
+                    AppleButton({ if (vm.edit(job)) onEdit() else actionFailed = true }, Modifier.weight(1f), enabled = editBlocked == null) {
+                        Box(Modifier.size(18.dp)) { AppIcon(R.drawable.aw_settings) }; Spacer(Modifier.width(6.dp)); Text(tr(S.creation_edit))
+                    }
                 }
                 (blockedReason ?: editBlocked)?.let { Text(it, Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant) }

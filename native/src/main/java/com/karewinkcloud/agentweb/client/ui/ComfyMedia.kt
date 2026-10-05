@@ -170,7 +170,7 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
             media.bitmap != null -> Image(media.bitmap!!.asImageBitmap(), tr(S.output_preview),
                 Modifier.fillMaxWidth().heightIn(max = 480.dp).clip(RoundedCornerShape(16.dp))
                     .clickable(onClickLabel = tr(S.output_open)) { viewing = true }, contentScale = ContentScale.Fit)
-            video -> FilledTonalButton({ original = file; playing = true }, Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
+            video -> AppleButton({ original = file; playing = true }, Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
                 AppIcon(R.drawable.aw_play); Spacer(Modifier.width(8.dp)); Text(tr(S.open_video))
             }
             else -> AudioOutput(file)
@@ -181,7 +181,7 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
             if (percent != null) LinearProgressIndicator(progress = { percent / 100f }, modifier = Modifier.weight(1f))
         }
         if (file != null) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
-            FilledTonalButton(onClick = {
+            AppleButton(onClick = {
                 if (Build.VERSION.SDK_INT < 29) withOriginal { file ->
                     try { saver.launch("AgentWeb-${job.requestId.take(8)}-${output.index}.${file.extension}") }
                     catch (_: Exception) { actionMessage = S.save_failed }
@@ -220,11 +220,11 @@ internal fun ComfyOutputView(job: ComfyJob, output: ComfyOutput, vm: ComfyViewMo
                 AppIcon(R.drawable.aw_save); Spacer(Modifier.width(8.dp)); Text(tr(when { saving -> S.saving; saved -> S.output_saved_to_gallery; else -> S.save_output }))
             }
             Spacer(Modifier.width(8.dp))
-            OutlinedButton({ withOriginal { mediaIntent(Intent.ACTION_SEND, it) } }, Modifier.weight(1f), enabled = !fetching) {
+            AppleButton({ withOriginal { mediaIntent(Intent.ACTION_SEND, it) } }, Modifier.weight(1f), enabled = !fetching) {
                 AppIcon(R.drawable.aw_share); Spacer(Modifier.width(8.dp)); Text(tr(S.share_output))
             }
         }
-        if (file != null) TextButton(onClick = {
+        if (file != null) TextButton(colors = quietButton(), onClick = {
             scope.launch {
                 publishing = true
                 try {

@@ -157,6 +157,13 @@ internal fun ComposerSurface(maxHeight: Dp = 320.dp, actions: (@Composable () ->
     }
 }
 
+/** Apple Music's "Play / Shuffle" button: grey container, accent label. */
+@Composable
+internal fun AppleButton(onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, content: @Composable RowScope.() -> Unit) =
+    FilledTonalButton(onClick, modifier.heightIn(min = 48.dp), enabled = enabled, shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = MaterialTheme.colorScheme.primary), content = content)
+
 /** Apple-style pill: grey when idle, inverted (black/white) when selected. */
 @Composable
 internal fun PillChip(selected: Boolean, onClick: () -> Unit, label: @Composable () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) =

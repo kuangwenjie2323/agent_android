@@ -6,6 +6,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -124,16 +127,27 @@ internal fun CreationSettings(state: ComfyState, vm: ComfyViewModel, onGallery: 
                     }
                 }
                 item("workflow") {
-                    FilledTonalButton(onGallery, Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
-                        Column(Modifier.weight(1f)) {
-                            Text(tr(S.workflow), style = MaterialTheme.typography.labelMedium)
-                            Text(workflow?.title ?: tr(S.select_value), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    // The chosen workflow as a cover row, like a "now playing" track.
+                    Surface(onGallery, Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
+                        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Box(Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
+                                RemoteImage(workflow?.coverUrl, vm, Modifier.fillMaxSize()) { AppIcon(R.drawable.aw_create) }
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text(workflow?.title?.substringBefore(" · ") ?: tr(S.select_value), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodyLarge, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface)
+                                Text(workflow?.let { tr(comfyChannelResource(it.channel)) } ?: tr(S.workflow), style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Box(Modifier.size(20.dp)) { CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant) { AppIcon(R.drawable.aw_chevron) } }
                         }
-                        AppIcon(R.drawable.aw_down)
                     }
                     workflow?.let {
-                        Text(tr(comfyChannelHintResource(it.channel)), Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall)
-                        if (it.channel == "kaggle_gpu") Text(tr(S.channel_kaggle_terms), Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall)
+                        Text(tr(comfyChannelHintResource(it.channel)), Modifier.padding(top = 8.dp, start = 4.dp), style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (it.channel == "kaggle_gpu") Text(tr(S.channel_kaggle_terms), Modifier.padding(top = 2.dp, start = 4.dp), style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                         val availability = it.availability(state.resources)
                         availabilityLabel(availability).takeIf { it.isNotEmpty() }?.let { Text(it, style = MaterialTheme.typography.bodySmall,
                             color = if (availability.kind == ComfyAvailabilityKind.AVAILABLE) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error) }
@@ -161,8 +175,14 @@ internal fun CreationSettings(state: ComfyState, vm: ComfyViewModel, onGallery: 
                 if (!groups?.advanced.isNullOrEmpty()) {
                     item("advanced") {
                         val description = tr(if (advanced) S.expanded else S.collapsed)
-                        OutlinedButton({ advanced = !advanced }, Modifier.fillMaxWidth().semantics { stateDescription = description }) {
-                            Text(tr(S.advanced_group), Modifier.weight(1f)); Text(tr(if (advanced) S.collapse else S.creation_expand))
+                        Surface({ advanced = !advanced }, Modifier.fillMaxWidth().heightIn(min = 52.dp).semantics { stateDescription = description },
+                            shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
+                            Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(tr(S.advanced_group), Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                                Box(Modifier.size(20.dp).graphicsLayer { rotationZ = if (advanced) 90f else 0f }) {
+                                    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant) { AppIcon(R.drawable.aw_chevron) }
+                                }
+                            }
                         }
                     }
                     if (advanced) items(groups?.advanced.orEmpty().filter { it.key !in sizeKeys }, key = { "advanced-${workflow?.id}-${it.key}" }) { input ->
@@ -191,15 +211,17 @@ private fun SchemaField(input: ComfyInput, value: String, state: ComfyState, vm:
             Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
             Switch(value.toBoolean(), { onChange(it.toString()) }, Modifier.semantics { contentDescription = title })
         }
+        input.key == "seed" -> NumericEntry(input, value, state, onChange)  // nobody drags to a seed
         range != null -> {
-            var exact by remember(input.key) { mutableStateOf(input.key == "seed") }
+            var exact by remember(input.key) { mutableStateOf(false) }
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                    Text(value, style = MaterialTheme.typography.labelLarge)
-                    TextButton({ exact = !exact }) { Text(tr(if (exact) S.done else S.creation_exact)) }
+                    Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                    Text(value, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton({ exact = !exact }, colors = quietButton()) { Text(tr(if (exact) S.done else S.creation_exact), style = MaterialTheme.typography.labelLarge) }
                 }
-                Slider(range.fraction(value), { onChange(range.value(it)) }, Modifier.fillMaxWidth().semantics { contentDescription = title })
+                Slider(range.fraction(value), { onChange(range.value(it)) }, Modifier.fillMaxWidth().semantics { contentDescription = title },
+                    colors = appSliderColors())
                 if (exact || state.invalidField == input.key) NumericEntry(input, value, state, onChange)
             }
         }
@@ -209,7 +231,10 @@ private fun SchemaField(input: ComfyInput, value: String, state: ComfyState, vm:
 
 @Composable
 private fun NumericEntry(input: ComfyInput, value: String, state: ComfyState, onChange: (String) -> Unit) {
-    OutlinedTextField(value, onChange, Modifier.fillMaxWidth(), label = { Text(fieldLabel(input)) }, shape = RoundedCornerShape(16.dp),
+    TextField(value, onChange, Modifier.fillMaxWidth(), label = { Text(fieldLabel(input)) }, shape = RoundedCornerShape(12.dp),
+        colors = TextFieldDefaults.colors(focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer, errorContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+            focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent, unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent),
         isError = state.invalidField == input.key, minLines = 1, maxLines = if (input.type == "string") 4 else 1,
         keyboardOptions = KeyboardOptions(keyboardType = if ((input.min ?: 0.0) < 0) KeyboardType.Text else if (input.type == "integer") KeyboardType.Number else if (input.type == "number") KeyboardType.Decimal else KeyboardType.Text),
         supportingText = {
@@ -292,14 +317,24 @@ internal fun SizeSheet(sizes: List<ComfySize>, selected: String?, onPick: (Comfy
 /** The tonal field button used for every setting in the creation sheet. */
 @Composable
 internal fun PickerButton(title: String, value: String, enabled: Boolean = true, onClick: () -> Unit) {
-    FilledTonalButton(onClick, Modifier.fillMaxWidth().heightIn(min = 56.dp), enabled = enabled, shape = RoundedCornerShape(16.dp)) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.labelMedium)
-            Text(value, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+    // A settings row: name on the left, current value on the right, then a chevron.
+    Surface(onClick, Modifier.fillMaxWidth().heightIn(min = 52.dp), enabled = enabled, shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer) {
+        Row(Modifier.padding(start = 16.dp, end = 10.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+            Text(value, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.End)
+            Box(Modifier.size(20.dp)) { CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant) { AppIcon(R.drawable.aw_chevron) } }
         }
-        AppIcon(R.drawable.aw_down)
     }
 }
+
+/** Grey track with an accent fill, white thumb. */
+@Composable
+internal fun appSliderColors() = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary,
+    activeTrackColor = MaterialTheme.colorScheme.primary, inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+    activeTickColor = androidx.compose.ui.graphics.Color.Transparent, inactiveTickColor = androidx.compose.ui.graphics.Color.Transparent)
 
 @Composable
 private fun ValuePicker(title: String, value: String, options: List<Pair<String, String>>, enabled: Boolean = true, onChange: (String) -> Unit) {
