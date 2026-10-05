@@ -267,7 +267,7 @@ class RepositoryTest {
     @Test fun historyPagingUsesFortyAndExclusiveCursor() = runBlocking {
         server.enqueue(json("""{"conversation":{"id":"conversation","title":"Chat","agent":"agent","model":"model","pinned":1,"active":false,"project":{"name":"Project"}},"messages":[],"queued":[],"queuePaused":true,"messagePage":{"olderCount":41,"nextCursor":"123","limit":40,"compactionCount":0}}"""))
         val detail = repo.detail("conversation", "456")
-        assertEquals("/api/chat/conversations/conversation?messageLimit=40&messageCursor=456", next().path)
+        assertEquals("/api/chat/conversations/conversation?compact=1&messageLimit=40&messageCursor=456", next().path)
         assertTrue(detail.conversation.pinned)
         assertTrue(detail.queuePaused)
         assertEquals("Project", detail.conversation.project)

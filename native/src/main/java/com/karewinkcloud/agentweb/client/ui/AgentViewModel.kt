@@ -95,6 +95,15 @@ class AgentViewModel(
     private val drafts = mutableMapOf<String, String>()
     private val attachmentDrafts = mutableMapOf<String, List<Attachment>>()
     private val unresolvedSends = mutableMapOf<String, SendRequest>()
+    /** Last seen history per conversation: reopening shows it at once while a refresh runs. */
+    private data class CachedChat(val messages: List<ChatMessage>, val olderCount: Int, val nextCursor: String?)
+    private val chatCache = java.util.concurrent.ConcurrentHashMap<String, CachedChat>()
+    private var prefetchJob: Job? = null
+    private fun cacheChat() {
+        state.value.chat?.takeIf { !it.loading && it.error == null }?.let { chat ->
+            chatCache[chat.conversation.id] = CachedChat(chat.messages.filterNot { it.id.startsWith("pending-") }, chat.olderCount, chat.nextCursor)
+        }
+    }
     private val unresolvedQueues = mutableMapOf<String, QueueRequest>()
 
     init { observeAuthentication(); refresh() }
@@ -112,7 +121,7 @@ class AgentViewModel(
         generation++; attachmentScope = newControlId(); epoch++; livePresentation.value = null
         // Close followers and pending client requests; never send Stop or replay mutations.
         viewModelScope.coroutineContext.cancelChildren()
-        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear()
+        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear(); chatCache.clear()
         previews.clear(); messageModels.clear(); messageUsage.clear(); lineages.clear(); unresolvedForks.clear(); forkRuns.clear(); lineageTitleReads.clear()
         mutable.value = ClientState(choice = state.value.choice, tab = state.value.tab, signInRequired = true, error = signInRequiredError)
     }
@@ -121,7 +130,7 @@ class AgentViewModel(
         generation++; attachmentScope = newControlId(); epoch++; livePresentation.value = null
         viewModelScope.coroutineContext.cancelChildren()
         repository = newRepository
-        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear()
+        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear(); chatCache.clear()
         previews.clear(); messageModels.clear(); messageUsage.clear(); lineages.clear(); unresolvedForks.clear(); forkRuns.clear(); lineageTitleReads.clear()
         // An open PC-session scope belongs to the old server; clear it on replacement.
         val tab = if (state.value.claudeVisible) AppTab.CONVERSATIONS else state.value.tab
@@ -195,6 +204,24 @@ class AgentViewModel(
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { /* Unknown is visible; a failed read never hides a conversation. */ }
             } } }.joinAll() }
+        }
+        prefetchRecent(owner)
+    }
+
+    /** Warm the history cache for the few most recent chats, so their first open is instant. */
+    private fun prefetchRecent(owner: Long) {
+        if (prefetchJob?.isActive == true) return
+        val source = repository
+        // The rows actually shown (empty placeholder chats are hidden), most recent first.
+        val ids = state.value.sections.flatMap { it.conversations }.map { it.id }.filterNot { chatCache.containsKey(it) }.take(3)
+        prefetchJob = viewModelScope.launch {
+            for (id in ids) {
+                if (owner != epoch || state.value.chat?.conversation?.id == id) continue
+                try {
+                    val detail = source.detail(id)
+                    if (owner == epoch && !chatCache.containsKey(id)) chatCache[id] = CachedChat(detail.messages, detail.olderCount, detail.nextCursor)
+                } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+            }
         }
     }
 
@@ -275,17 +302,19 @@ class AgentViewModel(
         livePresentation.value = initial
         val owner = ++generation
         sessionJob?.cancel()
+        val cached = chatCache[conversation.id]
         mutable.update { it.copy(tab = if (it.claudeVisible) AppTab.CLAUDE else AppTab.CONVERSATIONS, claudePreview = null, chat = ChatState(withLineage(conversation), draft = drafts[conversation.id].orEmpty(),
+            messages = cached?.messages.orEmpty(), olderCount = cached?.olderCount ?: 0, nextCursor = cached?.nextCursor,
             live = initial,
             connection = if (conversation.running) Connection.CONNECTING else null,
             attachments = attachmentDrafts[conversation.id].orEmpty(),
-            pendingQueue = unresolvedQueues[conversation.id], queueUncertain = unresolvedQueues.containsKey(conversation.id), loading = !fresh)) }
+            pendingQueue = unresolvedQueues[conversation.id], queueUncertain = unresolvedQueues.containsKey(conversation.id), loading = !fresh && cached == null)) }
         // Creation only stores agent/model; its empty detail has default effort and
         // permissions. Keep the user's selection for the first send in a fresh chat.
         sessionJob = viewModelScope.launch { loadAndFollow(owner, applyChoice = !fresh) }
     }
     fun back() {
-        saveDraft(); generation++; attachmentScope = newControlId(); sessionJob?.cancel()
+        cacheChat(); saveDraft(); generation++; attachmentScope = newControlId(); sessionJob?.cancel()
         val current = state.value
         mutable.update { it.copy(chat = null, claudePreview = null,
             claudeVisible = current.claudeVisible && (current.chat != null || current.claudePreview != null),
@@ -462,9 +491,15 @@ class AgentViewModel(
             while (owned(owner)) {
                 val detail = repository.detail(id)
                 if (!owned(owner)) return
-                val unresolved = unresolvedSends[id]
+                var unresolved = unresolvedSends[id]
                 val forkRun = forkRuns[id]
                 val priorChat = state.value.chat
+                // A send whose stream dropped is settled once the server has saved its message and
+                // nothing runs: a later (queued) turn may own the stream now, so following the old
+                // run would fail forever with "run changed" and keep the chat looking busy.
+                if (unresolved != null && !detail.conversation.running && unresolvedSettled(unresolved, detail.messages, priorChat?.beforeSendId ?: 0)) {
+                    unresolvedSends.remove(id); unresolved = null
+                }
                 val prior = priorChat?.live
                 // Attribute only a completed locally observed turn to its captured send model.
                 // The API does not persist models for all historical messages.
@@ -490,6 +525,7 @@ class AgentViewModel(
                         } ?: prior?.takeIf { detail.conversation.running && !it.done && it.runId.isBlank() },
                         connection = null, stopRequested = false, revealing = false)
                 }
+                cacheChat()
                 resolveParentTitle(owner)
                 if (applyChoice && first) {
                     val choice = detail.conversation.choice
@@ -518,11 +554,21 @@ class AgentViewModel(
             if (allowReconcile && owned(owner)) {
                 editChat(owner) { it.copy(live = null) }
                 loadAndFollow(owner, allowReconcile = false)
-            } else editChat(owner) { it.copy(loading = false, error = problem(e)) }
+            } else {
+                // Reconciling failed too: stop following, so the chat is usable again instead of spinning.
+                state.value.chat?.conversation?.id?.let { unresolvedSends.remove(it) }
+                editChat(owner) { it.copy(loading = false, error = problem(e), live = null, connection = null) }
+            }
         }
         catch (e: Exception) {
             editChat(owner) { it.copy(loading = false, error = problem(e)) }
         }
+    }
+
+    private fun unresolvedSettled(send: SendRequest, messages: List<ChatMessage>, beforeSendId: Long): Boolean {
+        val text = send.text.trim()
+        return messages.any { message -> message.role == "user" && (message.id.toLongOrNull() ?: 0) > beforeSendId &&
+            (text.isEmpty() || message.text.contains(text)) }
     }
 
     private suspend fun follow(owner: Long, id: String, run: String?, send: SendRequest? = null, previous: TurnState? = null) = coroutineScope {

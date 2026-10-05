@@ -181,6 +181,46 @@ class AgentViewModelTest {
         assertEquals(1, repo.sendCalls)
         assertEquals("", vm.state.value.chat!!.draft)
     }
+    @Test fun droppedSendIsSettledOnceItsMessageIsSavedAndALaterTurnOwnsTheStream() = modelTest {
+        vm.open(conversation("one")); runCurrent()
+        repo.followFlow = { _, _, send, _ -> flow {
+            if (send != null) throw IOException("stream dropped mid-turn")
+            throw StreamProtocolException("The run changed. Reloading saved history is required.")
+        } }
+        vm.draft("do work"); vm.send(); runCurrent()
+        assertFalse(vm.state.value.chat!!.canSend)
+        // The server finished that turn (and a queued follow-up); nothing runs now.
+        repo.getDetail = { id, _ -> ConversationDetail(conversation(id), listOf(
+            ChatMessage("5", "user", listOf(ChatBlock.Text("do work"))), message("6")), emptyList(), false, 0, null) }
+        val follows = repo.followCalls.size
+        vm.reload(); runCurrent()
+        val chat = vm.state.value.chat!!
+        assertTrue(chat.canSend)
+        assertNull(chat.live)
+        assertNull(chat.error)
+        assertEquals(follows, repo.followCalls.size)  // the stale run is not followed again
+    }
+    @Test fun failedReconcileStopsSpinning() = modelTest {
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        repo.followFlow = { _, _, _, _ -> flow { throw StreamProtocolException("The run changed.") } }
+        vm.open(conversation("one", true)); runCurrent()
+        val chat = vm.state.value.chat!!
+        assertEquals("stream_mismatch", chat.error?.code)
+        assertNull(chat.live)
+        assertNull(chat.connection)
+    }
+    @Test fun reopeningShowsCachedHistoryWhileRefreshing() = modelTest {
+        repo.getDetail = { id, _ -> ConversationDetail(conversation(id), listOf(message("1"), message("2")), emptyList(), false, 0, null) }
+        vm.open(conversation("one")); runCurrent()
+        vm.back(); runCurrent()
+        val gate = CompletableDeferred<Unit>()
+        repo.getDetail = { id, _ -> gate.await(); ConversationDetail(conversation(id), listOf(message("1"), message("2"), message("3")), emptyList(), false, 0, null) }
+        vm.open(conversation("one")); runCurrent()
+        assertFalse(vm.state.value.chat!!.loading)
+        assertEquals(listOf("1", "2"), vm.state.value.chat!!.messages.map { it.id })
+        gate.complete(Unit); runCurrent()
+        assertEquals(listOf("1", "2", "3"), vm.state.value.chat!!.messages.map { it.id })
+    }
     @Test fun preStreamNegotiatedRejectionRestoresDraft() = modelTest {
         vm.open(conversation("one")); runCurrent()
         repo.followFlow = { _, _, _, _ -> flow { throw ApiException(409, ClientError("Incompatible protocol"), directSendRejected = true) } }

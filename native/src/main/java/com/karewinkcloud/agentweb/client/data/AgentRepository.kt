@@ -240,12 +240,12 @@ class HttpAgentRepository(
     }
     override suspend fun detail(id: String, cursor: String?): ConversationDetail {
         require(cursor == null || (cursor.isNotEmpty() && cursor.all { it in '0'..'9' }))
-        return ConversationDetail.from(json("/api/chat/conversations/${segment(id)}?messageLimit=40" +
+        return ConversationDetail.from(json("/api/chat/conversations/${segment(id)}?compact=1&messageLimit=40" +
             (cursor?.let { "&messageCursor=$it" } ?: "")))
     }
     override suspend fun fork(request: ForkRequest) = ForkResponse.from(
         json("/api/chat/conversations/${segment(request.conversationId)}/forks", request.json()))
-    override suspend fun preview(id: String) = ConversationDetail.from(json("/api/chat/conversations/${segment(id)}?messageLimit=1"))
+    override suspend fun preview(id: String) = ConversationDetail.from(json("/api/chat/conversations/${segment(id)}?compact=1&messageLimit=1"))
     override suspend fun stop(conversationId: String, controlId: String) = json("/api/chat/stop", buildJsonObject {
         put("conversationId", conversationId); put("expectedControlId", controlId)
     })
