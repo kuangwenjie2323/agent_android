@@ -184,7 +184,7 @@
     <string name="status_unknown">状态待确认</string>
     <string name="status_query_failed">状态查询失败</string>
     <string name="output_preview">生成的图片</string>
-    <string name="open_video">在播放器中打开视频</string>
+    <string name="open_video">播放视频</string>
     <string name="play_audio">播放音频</string>
     <string name="pause_audio">暂停音频</string>
     <string name="save_output">保存作品</string>

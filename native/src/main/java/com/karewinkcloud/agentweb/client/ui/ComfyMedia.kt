@@ -60,7 +60,8 @@ private fun mediaState(job: ComfyJob, output: ComfyOutput, vm: ComfyViewModel, s
                 value = MediaState()
                 try {
                     val file = if (preview > 0) vm.preview(job, output, preview) else vm.output(job, output)
-                    val bitmap = if (output.mime.startsWith("image/")) withContext(Dispatchers.IO) { decodePreview(file, size) } else null
+                    // A preview is always a JPEG (an image or a video poster); originals decode only when they are images.
+                    val bitmap = if (preview > 0 || output.mime.startsWith("image/")) withContext(Dispatchers.IO) { runCatching { decodePreview(file, size) }.getOrNull() } else null
                     value = MediaState(file, bitmap)
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { value = MediaState(failed = true) }

@@ -188,7 +188,7 @@
     <string name="status_unknown">Awaiting confirmation</string>
     <string name="status_query_failed">Status check failed</string>
     <string name="output_preview">Generated image</string>
-    <string name="open_video">Open video in player</string>
+    <string name="open_video">Play video</string>
     <string name="play_audio">Play audio</string>
     <string name="pause_audio">Pause audio</string>
     <string name="save_output">Save output</string>
