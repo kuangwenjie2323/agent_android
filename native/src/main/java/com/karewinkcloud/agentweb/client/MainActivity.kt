@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
                 AgentViewModel(HttpAgentRepository(preferences.origin, settings.store, listCacheDir = listCacheDir), preferences.choice,
                     connection.signInRequired, settings.store::saveChoice).also { it.appliedConnection = connection }
             })
+            LaunchedEffect(chat) { chat.preloadClaudeSessions() }
             LaunchedEffect(connection) {
                 // The epoch survives Activity recreation along with the chat ViewModel.
                 if (chat.appliedConnection != connection) {
@@ -54,14 +55,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
             val studio: ComfyViewModel = viewModel(factory = factory {
-                ComfyViewModel(HttpComfyRepository(HttpAgentRepository(connection.origin, settings.store)),
+                ComfyViewModel(HttpComfyRepository(HttpAgentRepository(connection.origin, settings.store, listCacheDir = listCacheDir)),
                     AndroidComfyPendingStore(applicationContext, connection.origin, settings.store),
                     java.io.File(cacheDir, "comfy-output"), connection.signInRequired).also { it.appliedConnection = connection }
             })
+            LaunchedEffect(studio) { studio.preload() }
             LaunchedEffect(connection) {
                 if (studio.appliedConnection != connection) {
                     studio.appliedConnection = connection
-                    studio.changeConnection(HttpComfyRepository(HttpAgentRepository(connection.origin, settings.store)),
+                    studio.changeConnection(HttpComfyRepository(HttpAgentRepository(connection.origin, settings.store, listCacheDir = listCacheDir)),
                         AndroidComfyPendingStore(applicationContext, connection.origin, settings.store), connection.signInRequired)
                 }
             }

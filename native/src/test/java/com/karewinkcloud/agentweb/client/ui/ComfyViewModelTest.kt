@@ -44,6 +44,19 @@ class ComfyViewModelTest {
         response.complete(ComfyJob(request.requestId, "image", "succeeded")); runCurrent()
         assertNull(pending.id); assertNull(vm.state.value.pending); assertTrue(vm.state.value.canSubmit)
     }
+    @Test fun savedHistoryShowsBeforeTheFirstLoadButCannotSubmit() = modelTest {
+        val fresh = FakeComfy(); val gate = CompletableDeferred<Unit>()
+        val saved = ComfyJob(id, "image", "succeeded")
+        fresh.savedJobs = listOf(saved); fresh.savedWorkflows = listOf(workflow)
+        fresh.history = listOf(saved, ComfyJob("22345678-1234-1234-1234-123456789012", "image", "succeeded"))
+        fresh.onHistory = { gate.await(); fresh.history }
+        val cold = create(fresh, Pending()); cold.preload(); runCurrent()
+        assertEquals(listOf(saved), cold.state.value.jobs)
+        assertEquals(listOf(workflow), cold.state.value.workflows)
+        assertFalse(cold.state.value.initialized); assertFalse(cold.state.value.canSubmit)
+        gate.complete(Unit); runCurrent()
+        assertEquals(2, cold.state.value.jobs.size); assertTrue(cold.state.value.initialized)
+    }
     @Test fun failedPersistenceNeverDispatches() = modelTest {
         runCurrent(); pending.failWrite = true; vm.prompt("mountain"); vm.submit(); runCurrent()
         assertEquals("storage", vm.state.value.error); assertTrue(repo.submissions.isEmpty())
@@ -343,6 +356,9 @@ class ComfyViewModelTest {
         var history = emptyList<ComfyJob>()
         var onHistory: (suspend () -> List<ComfyJob>)? = null
         override suspend fun jobs() = onHistory?.invoke() ?: history
+        var savedJobs = emptyList<ComfyJob>(); var savedWorkflows = emptyList<ComfyWorkflow>()
+        override suspend fun cachedJobs() = savedJobs
+        override suspend fun cachedWorkflows() = savedWorkflows
         override suspend fun job(requestId: String): ComfyJob { reads += requestId; return onJob(requestId) }
         override suspend fun resources(refresh: Boolean): ComfyResources { resourceCalls++; return inventory }
         override suspend fun download(requestId: String, output: ComfyOutput, destination: File, onProgress: (Long, Long) -> Unit) { downloads++; destination.writeText("test") }

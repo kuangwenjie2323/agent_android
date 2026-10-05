@@ -42,6 +42,7 @@ interface AgentRepository {
     /** The last list saved on this device for the current server and account; empty when none. */
     suspend fun cachedConversations(): List<Conversation> = emptyList()
     suspend fun saveConversations(rows: List<Conversation>) {}
+    suspend fun cachedClaudeSessions(): ClaudeSessionPage? = null
     fun clearConversationCache() {}
     suspend fun createConversation(choice: ModelChoice): Conversation
     suspend fun createConversation(choice: ModelChoice, projectId: String?): Conversation = createConversation(choice)
@@ -207,31 +208,36 @@ class HttpAgentRepository(
         } catch (e: Exception) { destination.delete(); throw e }
     }
     override suspend fun conversations() = json("/api/chat/conversations").objects("conversations").map(Conversation::from)
-    // One file per server + credential, so another account never sees this list; older files are removed.
-    private fun listCacheFile(): java.io.File? = listCacheDir?.let { dir ->
+    // Last-known responses, one folder per server + credential so another account never sees
+    // them; other accounts' folders are removed on save. Only lists are kept, never history.
+    private fun snapshotDir(): java.io.File? = listCacheDir?.let { dir ->
         val token = tokens.tokenFor(origin)?.takeIf { it.isNotBlank() } ?: return null
         val key = java.security.MessageDigest.getInstance("SHA-256").digest((origin + "\n" + token).toByteArray())
             .joinToString("") { "%02x".format(it) }.take(32)
-        java.io.File(dir, "$key.json")
+        java.io.File(dir, key)
     }
-    override suspend fun cachedConversations(): List<Conversation> = withContext(Dispatchers.IO) {
+    internal suspend fun snapshot(name: String): JsonObject? = withContext(Dispatchers.IO) {
         runCatching {
-            val file = listCacheFile()?.takeIf { it.isFile } ?: return@runCatching emptyList()
-            Json.parseToJsonElement(file.readText()).jsonObject.objects("conversations").map(Conversation::from)
-        }.getOrDefault(emptyList())
+            val file = snapshotDir()?.let { java.io.File(it, "$name.json") }?.takeIf { it.isFile } ?: return@runCatching null
+            Json.parseToJsonElement(file.readText()).jsonObject
+        }.getOrNull()
     }
-    override fun clearConversationCache() { listCacheDir?.listFiles()?.forEach { it.delete() } }
-    override suspend fun saveConversations(rows: List<Conversation>) = withContext(Dispatchers.IO) {
-        val file = listCacheFile() ?: return@withContext
+    internal suspend fun saveSnapshot(name: String, value: JsonObject) = withContext(Dispatchers.IO) {
+        val dir = snapshotDir() ?: return@withContext
         runCatching {
-            file.parentFile?.mkdirs()
-            val temp = java.io.File(file.parentFile, file.name + ".tmp")
-            temp.writeText(buildJsonObject { put("conversations", JsonArray(rows.take(200).map { it.cacheJson() })) }.toString())
+            dir.mkdirs()
+            dir.parentFile?.listFiles()?.filter { it != dir }?.forEach { it.deleteRecursively() }
+            val file = java.io.File(dir, "$name.json"); val temp = java.io.File(dir, "$name.json.tmp")
+            temp.writeText(value.toString())
             if (!temp.renameTo(file)) temp.delete()
-            file.parentFile?.listFiles()?.filter { it.name != file.name }?.forEach { it.delete() }
         }
         Unit
     }
+    override suspend fun cachedConversations(): List<Conversation> =
+        snapshot("conversations")?.objects("conversations")?.map(Conversation::from).orEmpty()
+    override fun clearConversationCache() { listCacheDir?.listFiles()?.forEach { it.deleteRecursively() } }
+    override suspend fun saveConversations(rows: List<Conversation>) =
+        saveSnapshot("conversations", buildJsonObject { put("conversations", JsonArray(rows.take(200).map { it.cacheJson() })) })
     override suspend fun createConversation(choice: ModelChoice) = createConversation(choice, null)
     override suspend fun createConversation(choice: ModelChoice, projectId: String?) = Conversation.from(json("/api/chat/conversations", buildJsonObject {
         put("title", "New Chat")
@@ -255,7 +261,11 @@ class HttpAgentRepository(
     }
     override suspend fun claudeSessions(cursor: String?, project: String?): ClaudeSessionPage {
         val result = json(query("/api/claude-sessions", mapOf("cursor" to cursor, "project" to project)))
+        if (cursor == null && project == null) saveSnapshot("claude-sessions", result)
         return ClaudeSessionPage(result.objects("sessions").map(ClaudeSession::from), result.string("nextCursor"))
+    }
+    override suspend fun cachedClaudeSessions(): ClaudeSessionPage? = snapshot("claude-sessions")?.let { result ->
+        runCatching { ClaudeSessionPage(result.objects("sessions").map(ClaudeSession::from), result.string("nextCursor")) }.getOrNull()
     }
     override suspend fun claudeHistory(id: String, cursor: String?): ClaudeSessionHistory {
         val result = json(query("/api/claude-sessions/${segment(id)}", mapOf("cursor" to cursor)))

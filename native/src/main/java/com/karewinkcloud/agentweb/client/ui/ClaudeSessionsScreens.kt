@@ -28,7 +28,8 @@ internal fun ColumnScope.ClaudeSessionsScreen(state: ClaudeListState, vm: AgentV
         ActionIcon(R.drawable.aw_refresh, tr(S.refresh), !state.loading) { vm.refreshClaudeSessions() }
     }
     LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(start = PageGutter, end = PageGutter, bottom = 24.dp)) {
-        if (state.loading) item("loading") { LoadingState(tr(S.loading)) }
+        // Known sessions stay on screen while they refresh; the loading row is for an empty first load.
+        if (state.loading && state.sessions.isEmpty()) item("loading") { LoadingState(tr(S.loading)) }
         if (state.error != null) item("error") { ErrorBlock(state.error, { vm.refreshClaudeSessions() }, tr(S.retry)) }
         if (!state.loading && state.error == null && state.sessions.isEmpty()) item("empty") {
             EmptyState(R.drawable.aw_terminal, tr(S.claude_empty), tr(S.claude_empty_hint))
@@ -68,8 +69,9 @@ internal fun ColumnScope.ClaudeHistoryScreen(preview: ClaudePreviewState, vm: Ag
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     val scroll = rememberLazyListState()
     var landed by remember(session.id) { mutableStateOf(false) }
-    LaunchedEffect(preview.loading, session.id) {
-        if (!preview.loading && !landed && preview.messages.isNotEmpty()) {
+    // Land at the end once history shows (a saved copy may show first), and follow the refresh if still there.
+    LaunchedEffect(preview.loading, preview.messages.size, session.id) {
+        if (preview.messages.isNotEmpty() && (!landed || !scroll.canScrollForward)) {
             withFrameNanos { }
             landed = true
             scroll.scrollToItem((scroll.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
@@ -84,7 +86,7 @@ internal fun ColumnScope.ClaudeHistoryScreen(preview: ClaudePreviewState, vm: Ag
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (preview.loading) item("loading") {
+        if (preview.loading && preview.messages.isEmpty()) item("loading") {
             LoadingState(tr(S.loading_chat))
         }
         if (preview.nextCursor != null) item("older") {

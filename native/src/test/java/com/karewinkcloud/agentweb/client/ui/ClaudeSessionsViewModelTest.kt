@@ -80,6 +80,33 @@ class ClaudeSessionsViewModelTest {
         return await { it.claudePreview?.loading == false }
     }
 
+    @Test fun savedSessionListShowsWhenTheServerIsSlowOrDown() = runBlocking {
+        val folder = java.nio.file.Files.createTempDirectory("snapshots").toFile()
+        try {
+            val origin = server.url("/").toString().trimEnd('/')
+            val first = withContext(main) { AgentViewModel(HttpAgentRepository(origin, TokenProvider { "synthetic-token" }, listCacheDir = folder), ModelChoice("claude", "sonnet")) { } }
+            withContext(main) { first.showClaudeSessions() }
+            withTimeout(5000) { first.state.first { it.claude.sessions.isNotEmpty() && !it.claude.loading } }
+            listStatus = 503
+            val cold = withContext(main) { AgentViewModel(HttpAgentRepository(origin, TokenProvider { "synthetic-token" }, listCacheDir = folder), ModelChoice("claude", "sonnet")) { } }
+            withContext(main) { cold.showClaudeSessions() }
+            val shown = withTimeout(5000) { cold.state.first { !it.claude.loading && it.claude.error != null } }
+            assertEquals(listOf(id), shown.claude.sessions.map { it.id })  // the saved page stays visible beside the error
+            val stranger = withContext(main) { AgentViewModel(HttpAgentRepository(origin, TokenProvider { "other-token" }, listCacheDir = folder), ModelChoice("claude", "sonnet")) { } }
+            withContext(main) { stranger.showClaudeSessions() }
+            assertTrue(withTimeout(5000) { stranger.state.first { !it.claude.loading && it.claude.error != null } }.claude.sessions.isEmpty())
+            withContext(main) { ViewModelStore().apply { put("a", first); put("b", cold); put("c", stranger) }.clear() }
+        } finally { folder.deleteRecursively() }
+    }
+    @Test fun reopenedSessionShowsItsHistoryWhileRefreshing() = runBlocking {
+        val loaded = openPreview()
+        act { vm.back() }
+        val reopened = withContext(main) { vm.openClaudeSession(loaded.claudePreview!!.session); vm.state.value }
+        assertTrue(reopened.claudePreview!!.loading)
+        assertEquals(listOf("3", "4"), reopened.claudePreview!!.messages.map { it.id })
+        await { it.claudePreview?.loading == false }
+        Unit
+    }
     @Test fun activeSessionShowsReadOnlyHistoryAndNeverAdopts() = runBlocking {
         active = true
         val preview = openPreview().claudePreview!!

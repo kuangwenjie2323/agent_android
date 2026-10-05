@@ -98,6 +98,8 @@ class AgentViewModel(
     /** Last seen history per conversation: reopening shows it at once while a refresh runs. */
     private data class CachedChat(val messages: List<ChatMessage>, val olderCount: Int, val nextCursor: String?)
     private val chatCache = java.util.concurrent.ConcurrentHashMap<String, CachedChat>()
+    // Read-only PC session history from this app run, shown at once while it refreshes.
+    private val claudeHistoryCache = java.util.concurrent.ConcurrentHashMap<String, ClaudePreviewState>()
     private var prefetchJob: Job? = null
     private fun cacheChat() {
         state.value.chat?.takeIf { !it.loading && it.error == null }?.let { chat ->
@@ -122,7 +124,7 @@ class AgentViewModel(
         repository.clearConversationCache()
         // Close followers and pending client requests; never send Stop or replay mutations.
         viewModelScope.coroutineContext.cancelChildren()
-        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear(); chatCache.clear()
+        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear(); chatCache.clear(); claudeHistoryCache.clear()
         previews.clear(); messageModels.clear(); messageUsage.clear(); lineages.clear(); unresolvedForks.clear(); forkRuns.clear(); lineageTitleReads.clear()
         mutable.value = ClientState(choice = state.value.choice, tab = state.value.tab, signInRequired = true, error = signInRequiredError)
     }
@@ -131,7 +133,7 @@ class AgentViewModel(
         generation++; attachmentScope = newControlId(); epoch++; livePresentation.value = null
         viewModelScope.coroutineContext.cancelChildren()
         repository = newRepository
-        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear(); chatCache.clear()
+        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear(); chatCache.clear(); claudeHistoryCache.clear()
         previews.clear(); messageModels.clear(); messageUsage.clear(); lineages.clear(); unresolvedForks.clear(); forkRuns.clear(); lineageTitleReads.clear()
         // An open PC-session scope belongs to the old server; clear it on replacement.
         val tab = if (state.value.claudeVisible) AppTab.CONVERSATIONS else state.value.tab
@@ -416,6 +418,9 @@ class AgentViewModel(
         refreshClaudeSessions()
     }
 
+    /** Load the PC session list before the Claude Code tab is first opened. */
+    fun preloadClaudeSessions() { if (state.value.claude.sessions.isEmpty()) refreshClaudeSessions() }
+
     fun refreshClaudeSessions(older: Boolean = false) {
         if (state.value.signInRequired) return
         if (claudeListJob?.isActive == true) return
@@ -425,6 +430,9 @@ class AgentViewModel(
         mutable.update { it.copy(claude = it.claude.copy(loading = true, error = null)) }
         claudeListJob = viewModelScope.launch {
             try {
+                if (!older && state.value.claude.sessions.isEmpty()) source.cachedClaudeSessions()?.let { saved ->
+                    if (owner == epoch) mutable.update { if (it.claude.sessions.isEmpty()) it.copy(claude = it.claude.copy(sessions = saved.sessions, nextCursor = saved.nextCursor)) else it }
+                }
                 val page = source.claudeSessions(cursor)
                 if (owner == epoch) mutable.update { it.copy(claude = ClaudeListState(
                     (if (older) it.claude.sessions + page.sessions else page.sessions).distinctBy { s -> s.id }, page.nextCursor)) }
@@ -443,7 +451,9 @@ class AgentViewModel(
         livePresentation.value = null
         val owner = ++generation
         sessionJob?.cancel()
-        mutable.update { it.copy(chat = null, claudeVisible = true, claudePreview = ClaudePreviewState(session)) }
+        val saved = claudeHistoryCache[session.id]
+        mutable.update { it.copy(chat = null, claudeVisible = true, claudePreview = ClaudePreviewState(session,
+            saved?.messages.orEmpty(), saved?.nextCursor, saved?.olderCount ?: 0)) }
         val source = repository
         sessionJob = viewModelScope.launch { loadClaudePreview(source, owner, session.id) }
     }
@@ -458,6 +468,7 @@ class AgentViewModel(
             editPreview(owner) { it.copy(session = result.session,
                 messages = if (cursor == null) result.messages else (result.messages + it.messages).distinctBy { m -> m.id },
                 nextCursor = result.nextCursor, olderCount = result.olderCount, loading = false, loadingOlder = false, error = null) }
+            if (cursor == null) state.value.claudePreview?.takeIf { owner == generation && it.session.id == id }?.let { claudeHistoryCache[id] = it }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) { editPreview(owner) { it.copy(loading = false, loadingOlder = false, error = problem(e)) } }
     }

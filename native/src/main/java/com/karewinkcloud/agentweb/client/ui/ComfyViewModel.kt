@@ -99,6 +99,8 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
         observeAuth()
         if (foreground) refresh()
     }
+    /** Load the catalog and history before the tab is first opened. */
+    fun preload() { if (!state.value.initialized) refresh() }
     fun setForeground(value: Boolean) {
         foreground = value
         if (!value) { stopPolling(user = false); recommendationJob?.cancel(); resourceJob?.cancel()
@@ -116,6 +118,11 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
         mutable.update { it.copy(loading = true, error = null) }
         loadingJob = viewModelScope.launch {
             try {
+                // Show the last saved catalog and history at once; submitting still waits for the fresh load.
+                if (!state.value.initialized && state.value.workflows.isEmpty() && state.value.jobs.isEmpty()) {
+                    val workflows = source.cachedWorkflows(); val jobs = source.cachedJobs()
+                    if (owner == epoch) mutable.update { if (it.workflows.isEmpty() && it.jobs.isEmpty()) it.copy(workflows = workflows, jobs = jobs) else it }
+                }
                 val pending = try { persistence.read() }
                     catch (e: CancellationException) { throw e }
                     catch (_: Exception) { throw ComfyFailure("storage") }

@@ -12,6 +12,9 @@ interface ComfyRepository {
     suspend fun recommend(prompt: String, channel: String): List<ComfySuggestion>
     suspend fun submit(request: ComfySubmission): ComfyJob
     suspend fun jobs(): List<ComfyJob>
+    /** Last-known catalog and history saved on this device; empty when none. */
+    suspend fun cachedWorkflows(): List<ComfyWorkflow> = emptyList()
+    suspend fun cachedJobs(): List<ComfyJob> = emptyList()
     suspend fun job(requestId: String): ComfyJob
     suspend fun resources(refresh: Boolean = false): ComfyResources
     suspend fun download(requestId: String, output: ComfyOutput, destination: File, onProgress: (Long, Long) -> Unit = { _, _ -> })
@@ -37,8 +40,14 @@ class HttpComfyRepository(private val http: HttpAgentRepository) : ComfyReposito
     override suspend fun workflows() = operation {
         val data = http.json("/api/comfy/workflows", timeoutSeconds = 90)
         require(data["workflows"] is JsonArray)
-        data.objects("workflows").map(ComfyWorkflow::from)
+        data.objects("workflows").map(ComfyWorkflow::from).also { http.saveSnapshot("comfy-workflows", data) }
     }
+    override suspend fun cachedWorkflows() = runCatching {
+        http.snapshot("comfy-workflows")?.objects("workflows")?.map(ComfyWorkflow::from).orEmpty()
+    }.getOrDefault(emptyList())
+    override suspend fun cachedJobs() = runCatching {
+        http.snapshot("comfy-jobs")?.objects("jobs")?.map(ComfyJob::from)?.distinctBy { it.requestId }?.take(50).orEmpty()
+    }.getOrDefault(emptyList())
     override suspend fun recommend(prompt: String, channel: String): List<ComfySuggestion> = operation {
         val data = http.json("/api/comfy/recommend", buildJsonObject { put("prompt", prompt); put("billing_channel", channel) }, 15)
         if (data.boolean("available") != true) emptyList() else data.objects("suggestions").mapNotNull {
@@ -55,7 +64,7 @@ class HttpComfyRepository(private val http: HttpAgentRepository) : ComfyReposito
     override suspend fun jobs() = operation {
         val data = http.json("/api/comfy/jobs")
         require(data["jobs"] is JsonArray)
-        data.objects("jobs").map(ComfyJob::from).distinctBy { it.requestId }.take(50)
+        data.objects("jobs").map(ComfyJob::from).distinctBy { it.requestId }.take(50).also { http.saveSnapshot("comfy-jobs", data) }
     }
     override suspend fun job(requestId: String) = operation {
         require(validComfyId(requestId))
