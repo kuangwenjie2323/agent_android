@@ -392,6 +392,10 @@
     <string name="asset_uploading">正在上传…</string>
     <string name="asset_photo_choose">选一张照片</string>
     <string name="asset_photo_selected">已选 · 相册照片</string>
+    <string name="asset_from_videos">从相册选视频</string>
+    <string name="asset_from_audio">选择音频文件</string>
+    <string name="asset_optional">可选，不选就不用</string>
+    <string name="asset_material_selected">已选好</string>
     <string name="status_canceling">正在取消</string>
     <string name="create_public_link">生成公开链接</string>
     <string name="copy_public_link">复制公开链接</string>

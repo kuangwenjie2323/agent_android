@@ -99,6 +99,23 @@ internal suspend fun readPhoto(context: Context, uri: Uri): Pair<String, ByteArr
     } finally { source.delete() }
 }
 
+/** A reference video or audio clip, sent as it is: (MIME type, bytes) for a type the server accepts. */
+internal suspend fun readReference(context: Context, uri: Uri, media: String): Pair<String, ByteArray> = withContext(Dispatchers.IO) {
+    val declared = context.contentResolver.getType(uri)?.lowercase().orEmpty()
+    val mime = when (declared) {
+        "audio/x-m4a", "audio/m4a", "audio/aac-mp4" -> "audio/mp4"
+        "audio/x-flac" -> "audio/flac"
+        "audio/mp3" -> "audio/mpeg"
+        else -> declared
+    }
+    val allowed = if (media == "video") setOf("video/mp4", "video/quicktime", "video/webm")
+        else setOf("audio/mpeg", "audio/wav", "audio/x-wav", "audio/mp4", "audio/ogg", "audio/flac")
+    require(mime in allowed) { "unsupported reference type" }
+    val limit = if (media == "video") 100 * 1024 * 1024 else 30 * 1024 * 1024
+    val bytes = context.contentResolver.openInputStream(uri)?.use { it.boundedBytes(limit) } ?: error("unreadable reference")
+    mime to bytes
+}
+
 internal fun decodeChatBitmap(file: File, size: Int): Bitmap {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeFile(file.absolutePath, bounds)

@@ -30,6 +30,7 @@ import com.karewinkcloud.agentweb.client.R.string as S
 import com.karewinkcloud.agentweb.client.core.*
 import com.karewinkcloud.agentweb.client.data.decodeChatBitmap
 import com.karewinkcloud.agentweb.client.data.readPhoto
+import com.karewinkcloud.agentweb.client.data.readReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
@@ -266,14 +267,20 @@ private fun NumericEntry(input: ComfyInput, value: String, state: ComfyState, on
 @Composable
 private fun ReferenceImagePicker(input: ComfyInput, value: String, state: ComfyState, vm: ComfyViewModel, onChange: (String) -> Unit) {
     val context = LocalContext.current
-    val options = state.jobs.filter { it.canReferenceInCloud(state.workflows) }.flatMap { job ->
+    val options = if (input.media != "image") emptyList() else state.jobs.filter { it.canReferenceInCloud(state.workflows) }.flatMap { job ->
         job.outputs.filter { it.mime.startsWith("image/") }.map { output -> job to output }
     }
     val chosen = runCatching { wireJson.parseToJsonElement(value).jsonObject }.getOrNull()
     val uploadId = chosen?.string("upload_id")?.takeIf(::validUploadId)
     val uploading = state.uploading == input.key
+    val media = input.media
     val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) vm.uploadReference(input.key) { readPhoto(context.applicationContext, uri) }
+        if (uri != null) vm.uploadReference(input.key) {
+            if (media == "image") readPhoto(context.applicationContext, uri) else readReference(context.applicationContext, uri, media)
+        }
+    }
+    val audioFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.uploadReference(input.key) { readReference(context.applicationContext, uri, "audio") }
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(fieldLabel(input), style = MaterialTheme.typography.bodyMedium)
@@ -288,7 +295,11 @@ private fun ReferenceImagePicker(input: ComfyInput, value: String, state: ComfyS
                     this.value = uploadId?.let { id -> withContext(Dispatchers.IO) { runCatching { decodeChatBitmap(vm.referenceFile(id), 360) }.getOrNull() } }
                 }
                 ReferenceTile(selected = uploadId != null, onClick = {
-                    if (!uploading) runCatching { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+                    if (!uploading) runCatching { when (media) {
+                        "video" -> photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+                        "audio" -> audioFiles.launch(arrayOf("audio/*"))
+                        else -> photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    } }
                 }) {
                     Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp))
                         .background(MaterialTheme.colorScheme.surfaceContainerHigh), contentAlignment = Alignment.Center) {
@@ -296,13 +307,20 @@ private fun ReferenceImagePicker(input: ComfyInput, value: String, state: ComfyS
                         when {
                             uploading -> CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
                             uploadId != null && image != null -> Image(image.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            media == "video" -> AppIcon(R.drawable.aw_play)
+                            media == "audio" -> AppIcon(R.drawable.aw_file)
                             else -> AppIcon(R.drawable.aw_photos)
                         }
                     }
-                    Text(tr(if (uploading) S.asset_uploading else S.asset_from_photos), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.labelSmall)
-                    Text(tr(if (uploadId != null) S.asset_photo_selected else S.asset_photo_choose), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.labelSmall)
+                    Text(tr(when {
+                        uploading -> S.asset_uploading
+                        media == "video" -> S.asset_from_videos
+                        media == "audio" -> S.asset_from_audio
+                        else -> S.asset_from_photos
+                    }), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
+                    Text(tr(if (uploadId != null) (if (media == "image") S.asset_photo_selected else S.asset_material_selected)
+                        else if (input.required) S.asset_photo_choose else S.asset_optional),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
                 }
             }
             items(options, key = { "${it.first.requestId}-${it.second.index}" }) { (job, output) ->

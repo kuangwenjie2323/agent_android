@@ -18,6 +18,8 @@ data class ComfyInput(val key: String, val spec: JsonObject) {
     val title get() = spec.string("title") ?: key
     val required get() = spec.boolean("required") == true || (spec.long("min_length") ?: 0) > 0
     val resource get() = spec.string("resource")
+    /** For a reference (asset) input: image, video or audio. */
+    val media get() = spec.string("media") ?: "image"
     val family get() = spec.string("family")
     val options get() = spec.array("enum")
     val default get() = spec["default"]?.let { if (it is JsonPrimitive) it.contentOrNull else it.toString() }.orEmpty()

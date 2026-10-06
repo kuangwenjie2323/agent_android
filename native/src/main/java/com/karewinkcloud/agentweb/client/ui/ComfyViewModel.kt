@@ -214,7 +214,7 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
                 val (mime, bytes) = try { read() } catch (e: CancellationException) { throw e }
                     catch (_: Exception) { throw ComfyFailure("reference_unreadable") }
                 val id = source.uploadInput(bytes, mime)
-                withContext(io) {
+                if (mime.startsWith("image/")) withContext(io) {
                     val directory = File(mediaDirectory, "references").apply { mkdirs() }
                     File(directory, id).writeBytes(bytes)
                     directory.listFiles()?.sortedByDescending { it.lastModified() }?.drop(24)?.forEach { it.delete() }

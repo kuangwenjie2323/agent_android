@@ -396,6 +396,10 @@
     <string name="asset_uploading">Uploading…</string>
     <string name="asset_photo_choose">Choose a photo</string>
     <string name="asset_photo_selected">Selected · your photo</string>
+    <string name="asset_from_videos">Videos</string>
+    <string name="asset_from_audio">Audio file</string>
+    <string name="asset_optional">Optional</string>
+    <string name="asset_material_selected">Selected</string>
     <string name="status_canceling">Canceling</string>
     <string name="create_public_link">Create public link</string>
     <string name="copy_public_link">Copy public link</string>
