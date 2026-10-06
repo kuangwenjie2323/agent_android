@@ -149,7 +149,7 @@
     <string name="channel_kaggle_terms">Personal, non-commercial use only.</string>
     <string name="status_kaggle_starting">Starting free GPU…</string>
     <string name="status_runpod_waiting_gpu">Waiting for RunPod to free a GPU…</string>
-    <string name="status_runpod_starting">RunPod GPU starting (a cold start takes 3–6 min)…</string>
+    <string name="status_runpod_starting">RunPod is preparing a GPU (a fresh machine can take over 10 min)…</string>
     <string name="kaggle_queue_position">Queue position: %1$d</string>
     <string name="error_kaggle_launch">The free GPU could not start. You can choose Comfy Cloud and submit a new job.</string>
     <string name="error_kaggle_quota">The weekly free GPU quota is too low. You can choose Comfy Cloud and submit a new job.</string>
