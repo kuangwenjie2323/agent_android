@@ -97,10 +97,13 @@ data class ComfyWorkflow(val id: String, val title: String, val description: Str
                     "number" -> JsonPrimitive(raw.toDoubleOrNull()?.takeIf { it.isFinite() } ?: invalid())
                     "boolean" -> JsonPrimitive(if (raw.isEmpty()) false else raw.toBooleanStrictOrNull() ?: invalid())
                     "asset" -> runCatching { wireJson.parseToJsonElement(raw).jsonObject }.getOrNull()?.takeIf {
-                        it.keys == setOf("job_id", "output_index") &&
+                        (it.keys == setOf("job_id", "output_index") &&
                             (it["job_id"] as? JsonPrimitive)?.isString == true &&
                             (it["output_index"] as? JsonPrimitive)?.isString == false &&
-                            validComfyJobId(it.string("job_id").orEmpty()) && it.long("output_index")?.let { index -> index in 0..63 } == true
+                            validComfyJobId(it.string("job_id").orEmpty()) && it.long("output_index")?.let { index -> index in 0..63 } == true) ||
+                            // A photo the user uploaded from this device (see ComfyRepository.uploadInput).
+                            (it.keys == setOf("upload_id") && (it["upload_id"] as? JsonPrimitive)?.isString == true &&
+                                validUploadId(it.string("upload_id").orEmpty()))
                     } ?: invalid()
                     "string" -> JsonPrimitive(raw)
                     else -> invalid()
@@ -145,6 +148,8 @@ data class ComfySuggestion(val workflowId: String, val probability: Double)
 data class ComfyOutput(val index: Int, val mime: String, val bytes: Long, val durationSeconds: Double? = null, val publicUrl: String? = null,
     /** Cloud-storage (R2) links for the original, the 1280 preview and the 512 tile. */
     val originalUrl: String? = null, val previewUrl: String? = null, val thumbUrl: String? = null)
+/** Server-issued id of an uploaded reference photo: 32 lowercase hex digits. */
+fun validUploadId(value: String) = value.length == 32 && value.all { it in '0'..'9' || it in 'a'..'f' }
 /** HTTPS links without embedded credentials; they are fetched without any of ours. */
 fun storageUrl(value: String?): String? = value?.takeIf {
     it.length <= 2048 && runCatching { java.net.URI(it) }.getOrNull()?.let { uri ->

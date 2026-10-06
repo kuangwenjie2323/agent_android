@@ -210,7 +210,7 @@
     <string name="resource_compatibility">Family is inferred from the name; compatibility is not guaranteed.</string>
     <string name="resource_empty">No matching resources</string>
     <string name="select_value">Select</string>
-    <string name="asset_hint">Choose a completed Comfy Cloud image.</string>
+    <string name="asset_hint">Choose a photo from your gallery, or a completed Comfy Cloud image.</string>
     <string name="field_prompt">Prompt</string>
     <string name="field_negative_prompt">Negative prompt</string>
     <string name="field_seed">Seed</string>
@@ -372,7 +372,7 @@
     <string name="copy_prompt">Copy prompt</string>
     <string name="status_finishing">Preparing outputs</string>
     <string name="job_progress">Server progress: %1$d%%</string>
-    <string name="asset_empty">Generate an image with Comfy Cloud first, then use it here. Kaggle images and device uploads are not supported as references yet.</string>
+    <string name="asset_empty">Choose a photo from your gallery, or generate an image with Comfy Cloud first and pick it here. Kaggle and RunPod images cannot be used as references yet.</string>
     <string name="asset_selected_number">Selected · Output %1$d</string>
     <string name="field_image_weight">Image influence</string>
     <string name="field_creativity">Creativity</string>
@@ -391,6 +391,10 @@
     <string name="field_thinking">Reasoning</string>
     <string name="channel_unknown">Other channel</string>
     <string name="asset_retained">Saved reference retained. It is outside the recent image list.</string>
+    <string name="asset_from_photos">Photos</string>
+    <string name="asset_uploading">Uploading…</string>
+    <string name="asset_photo_choose">Choose a photo</string>
+    <string name="asset_photo_selected">Selected · your photo</string>
     <string name="status_canceling">Canceling</string>
     <string name="create_public_link">Create public link</string>
     <string name="copy_public_link">Copy public link</string>
@@ -425,6 +429,10 @@
     <string name="error_runpod_rejected">RunPod refused the job. Check the endpoint and the account balance.</string>
     <string name="error_runpod_failed">The RunPod GPU job failed. Try again or choose another workflow.</string>
     <string name="error_runpod_no_capacity">RunPod had no GPU ready for this job for too long, so it was canceled (nothing was billed). Try again later.</string>
+    <string name="error_upload_failed">The photo could not be uploaded. Check the connection and try again.</string>
+    <string name="error_reference_unreadable">This photo could not be read. Choose a JPEG, PNG or WebP image.</string>
+    <string name="error_input_unavailable">The reference photo is missing or has expired. Choose it again.</string>
+    <string name="error_cloud_rejected">Comfy Cloud refused this workflow, so nothing was charged. The workflow needs an update.</string>
     <string name="style_inspire">Inspire me</string>
     <string name="style_portrait">Portrait</string>
     <string name="style_fashion">Fashion</string>

@@ -115,4 +115,13 @@ class ComfyPresentationTest {
             try { item.parameters(mapOf("image" to value), null); fail() } catch (e: ComfyFailure) { assertEquals("image", e.field) }
         }
     }
+    @Test fun uploadedPhotoIsAcceptedOnlyAsAServerUploadId() {
+        val item = workflow(fields = """{"image":{"type":"asset","required":true}}""")
+        val upload = "0123456789abcdef0123456789abcdef"
+        assertEquals(upload, item.parameters(mapOf("image" to """{"upload_id":"$upload"}"""), null).obj("image")?.string("upload_id"))
+        for (value in listOf("""{"upload_id":"0123456789ABCDEF0123456789ABCDEF"}""", """{"upload_id":"abc"}""", """{"upload_id":123}""",
+                "{\"upload_id\":\"$upload\",\"job_id\":\"ok\"}", """{"upload_id":"../../0123456789abcdef0123456789"}""")) {
+            try { item.parameters(mapOf("image" to value), null); fail(value) } catch (e: ComfyFailure) { assertEquals("image", e.field) }
+        }
+    }
 }

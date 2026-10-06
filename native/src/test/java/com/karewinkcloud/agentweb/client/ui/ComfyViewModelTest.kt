@@ -57,6 +57,30 @@ class ComfyViewModelTest {
         gate.complete(Unit); runCurrent()
         assertEquals(2, cold.state.value.jobs.size); assertTrue(cold.state.value.initialized)
     }
+    @Test fun uploadedPhotoBecomesTheImageReferenceAndFailuresStayOnTheField() = modelTest {
+        val upload = "0123456789abcdef0123456789abcdef"
+        val gate = CompletableDeferred<String>()
+        repo.onUpload = { bytes, mime -> repo.uploads += mime to bytes.size; gate.await() }
+        runCurrent(); vm.prompt("山水图像")
+        vm.uploadReference("image") { "image/jpeg" to byteArrayOf(1, 2, 3) }; runCurrent()
+        assertEquals("image", vm.state.value.uploading); assertFalse(vm.state.value.canSubmit)
+        vm.uploadReference("image") { error("a second pick while uploading is ignored") }; runCurrent()
+        gate.complete(upload); runCurrent()
+        assertNull(vm.state.value.uploading); assertEquals(listOf("image/jpeg" to 3), repo.uploads)
+        assertEquals(upload, wireJson.parseToJsonElement(vm.state.value.values.getValue("image")).jsonObject.string("upload_id"))
+        assertArrayEquals(byteArrayOf(1, 2, 3), vm.referenceFile(upload).readBytes())
+        vm.uploadReference("image") { throw java.io.IOException("unreadable") }; runCurrent()
+        assertEquals("image" to "reference_unreadable", vm.state.value.uploadError)
+        repo.onUpload = { _, _ -> throw ComfyFailure("network") }
+        vm.uploadReference("image") { "image/jpeg" to byteArrayOf(1) }; runCurrent()
+        assertEquals("image" to "upload_failed", vm.state.value.uploadError); assertNull(vm.state.value.uploading)
+        vm.refresh(); runCurrent()  // an unrelated reload must not wipe the photo error
+        assertEquals("image" to "upload_failed", vm.state.value.uploadError)
+        repo.onUpload = { _, _ -> throw ComfyFailure("auth") }
+        vm.uploadReference("image") { "image/jpeg" to byteArrayOf(1) }; runCurrent()
+        assertEquals("image" to "auth", vm.state.value.uploadError)
+        assertEquals(upload, wireJson.parseToJsonElement(vm.state.value.values.getValue("image")).jsonObject.string("upload_id"))
+    }
     @Test fun failedPersistenceNeverDispatches() = modelTest {
         runCurrent(); pending.failWrite = true; vm.prompt("mountain"); vm.submit(); runCurrent()
         assertEquals("storage", vm.state.value.error); assertTrue(repo.submissions.isEmpty())
@@ -377,5 +401,8 @@ class ComfyViewModelTest {
         override suspend fun download(requestId: String, output: ComfyOutput, destination: File, onProgress: (Long, Long) -> Unit) { downloads++; destination.writeText("test") }
         val deletions = mutableListOf<String>(); var deleteFails: String? = null
         override suspend fun delete(requestId: String) { deleteFails?.let { throw ComfyFailure(it) }; deletions += requestId }
+        val uploads = mutableListOf<Pair<String, Int>>()
+        var onUpload: suspend (ByteArray, String) -> String = { _, _ -> throw ComfyFailure("unavailable") }
+        override suspend fun uploadInput(bytes: ByteArray, mime: String) = onUpload(bytes, mime)
     }
 }

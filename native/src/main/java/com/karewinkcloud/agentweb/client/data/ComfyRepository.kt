@@ -26,6 +26,8 @@ interface ComfyRepository {
     suspend fun image(url: String, destination: File): Unit = throw ComfyFailure("unavailable")
     /** Deletes a finished creation on the server, including its public R2 copy. */
     suspend fun delete(requestId: String): Unit = throw ComfyFailure("unavailable")
+    /** Sends one reference photo straight to cloud storage; returns the upload id an image input accepts. */
+    suspend fun uploadInput(bytes: ByteArray, mime: String): String = throw ComfyFailure("unavailable")
 }
 
 class HttpComfyRepository(private val http: HttpAgentRepository) : ComfyRepository {
@@ -107,6 +109,14 @@ class HttpComfyRepository(private val http: HttpAgentRepository) : ComfyReposito
     override suspend fun delete(requestId: String) = operation {
         require(validComfyId(requestId))
         require(http.delete("/api/comfy/jobs/$requestId", 90).string("deleted") == requestId.lowercase())
+    }
+    override suspend fun uploadInput(bytes: ByteArray, mime: String) = operation {
+        require(mime in setOf("image/jpeg", "image/png", "image/webp") && bytes.isNotEmpty())
+        val created = requireNotNull(http.json("/api/comfy/inputs", buildJsonObject { put("mime", mime); put("bytes", bytes.size) }, 30).obj("input"))
+        val id = requireNotNull(created.string("upload_id")?.takeIf(::validUploadId))
+        // The presigned link points at cloud storage, so none of our credentials go with it.
+        http.uploadStorage(requireNotNull(storageUrl(created.string("put_url"))), bytes, created.string("content_type") ?: mime)
+        id
     }
 }
 val mediaExtensions = mapOf("image/png" to "png", "image/jpeg" to "jpg", "image/jpg" to "jpg", "image/webp" to "webp", "image/gif" to "gif",

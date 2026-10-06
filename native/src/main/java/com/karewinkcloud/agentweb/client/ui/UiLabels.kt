@@ -93,6 +93,8 @@ internal fun comfyErrorResource(code: String) = when(code) {
     "insufficient_credits" -> S.error_insufficient_credits
     "runpod_unavailable" -> S.error_runpod_unavailable; "runpod_rejected" -> S.error_runpod_rejected; "runpod_failed" -> S.error_runpod_failed
     "runpod_no_capacity" -> S.error_runpod_no_capacity
+    "upload_failed" -> S.error_upload_failed; "reference_unreadable" -> S.error_reference_unreadable
+    "input_unavailable" -> S.error_input_unavailable; "cloud_rejected" -> S.error_cloud_rejected
     "network", "timeout" -> S.error_network; "invalid_parameters", "invalid_request", "validation_error" -> S.error_invalid_parameters
     "invalid_workflow", "workflow_not_found" -> S.workflow_unavailable; "storage" -> S.error_storage
     "busy", "capacity", "rate_limited" -> S.error_busy; "configuration_required", "client_setup_failed" -> S.error_config

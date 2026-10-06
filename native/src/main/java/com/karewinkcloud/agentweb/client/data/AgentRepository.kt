@@ -154,6 +154,12 @@ class HttpAgentRepository(
         onProgress: (Long, Long) -> Unit = { _, _ -> }): Unit =
         fetch(Request.Builder().url(url).header("Connection", "close").build(), destination, mime, maxBytes, onProgress)
 
+    /** PUT to a presigned cloud-storage link: no Authorization, no cookies, no redirects, never replayed. */
+    internal suspend fun uploadStorage(url: String, bytes: ByteArray, contentType: String): Unit = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(url).header("Connection", "close").put(bytes.toRequestBody(contentType.toMediaType())).build()
+        execute(request, 300, 60) { response -> if (!response.isSuccessful) throw IOException("Upload refused (${response.code})") }
+    }
+
     private suspend fun fetch(request: Request, destination: java.io.File, mime: String, maxBytes: Long,
         onProgress: (Long, Long) -> Unit): Unit = withContext(Dispatchers.IO) {
         val owner = currentCoroutineContext()

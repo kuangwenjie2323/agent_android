@@ -206,7 +206,7 @@
     <string name="resource_compatibility">系列由名称推断，仅供参考，不保证兼容。</string>
     <string name="resource_empty">没有匹配的资源</string>
     <string name="select_value">选择</string>
-    <string name="asset_hint">选择之前通过 Comfy Cloud 生成的图片。</string>
+    <string name="asset_hint">从相册选一张照片，或选择之前通过 Comfy Cloud 生成的图片。</string>
     <string name="field_prompt">创作描述</string>
     <string name="field_negative_prompt">不希望出现的内容</string>
     <string name="field_seed">随机种子</string>
@@ -368,7 +368,7 @@
     <string name="copy_prompt">复制提示词</string>
     <string name="status_finishing">正在整理结果</string>
     <string name="job_progress">服务器进度：%1$d%%</string>
-    <string name="asset_empty">请先通过 Comfy Cloud 生成一张图片，再在这里选择。暂不支持 Kaggle 图片和手机上传作为参考。</string>
+    <string name="asset_empty">从相册选一张照片，或先通过 Comfy Cloud 生成一张图片再来这里选。暂不支持用 Kaggle 和 RunPod 生成的图片作参考。</string>
     <string name="asset_selected_number">已选 · 结果 %1$d</string>
     <string name="field_image_weight">参考图影响程度</string>
     <string name="field_creativity">创意程度</string>
@@ -387,6 +387,10 @@
     <string name="field_thinking">推理</string>
     <string name="channel_unknown">其他通道</string>
     <string name="asset_retained">已保留原任务的参考图，该图片不在最近作品列表中。</string>
+    <string name="asset_from_photos">从相册选择</string>
+    <string name="asset_uploading">正在上传…</string>
+    <string name="asset_photo_choose">选一张照片</string>
+    <string name="asset_photo_selected">已选 · 相册照片</string>
     <string name="status_canceling">正在取消</string>
     <string name="create_public_link">生成公开链接</string>
     <string name="copy_public_link">复制公开链接</string>
@@ -421,6 +425,10 @@
     <string name="error_runpod_rejected">RunPod 拒绝了任务，请检查 endpoint 和账户余额。</string>
     <string name="error_runpod_failed">RunPod GPU 任务失败，请重试或换一个工作流。</string>
     <string name="error_runpod_no_capacity">RunPod 长时间没有准备好的显卡，任务已取消（没有扣费），请稍后再试。</string>
+    <string name="error_upload_failed">照片上传失败，请检查网络后重试。</string>
+    <string name="error_reference_unreadable">无法读取这张照片，请选择 JPEG、PNG 或 WebP 图片。</string>
+    <string name="error_input_unavailable">参考图不见了或已过期，请重新选一次。</string>
+    <string name="error_cloud_rejected">Comfy Cloud 拒绝了这个工作流（没有扣费），需要更新工作流。</string>
     <string name="style_inspire">来点灵感</string>
     <string name="style_portrait">写实人像</string>
     <string name="style_fashion">时尚大片</string>

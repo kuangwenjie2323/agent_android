@@ -1,6 +1,9 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package com.karewinkcloud.agentweb.client.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -15,6 +18,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -22,6 +28,10 @@ import androidx.compose.ui.unit.dp
 import com.karewinkcloud.agentweb.client.R
 import com.karewinkcloud.agentweb.client.R.string as S
 import com.karewinkcloud.agentweb.client.core.*
+import com.karewinkcloud.agentweb.client.data.decodeChatBitmap
+import com.karewinkcloud.agentweb.client.data.readPhoto
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 
 @Composable
@@ -255,33 +265,71 @@ private fun NumericEntry(input: ComfyInput, value: String, state: ComfyState, on
 
 @Composable
 private fun ReferenceImagePicker(input: ComfyInput, value: String, state: ComfyState, vm: ComfyViewModel, onChange: (String) -> Unit) {
+    val context = LocalContext.current
     val options = state.jobs.filter { it.canReferenceInCloud(state.workflows) }.flatMap { job ->
         job.outputs.filter { it.mime.startsWith("image/") }.map { output -> job to output }
     }
     val chosen = runCatching { wireJson.parseToJsonElement(value).jsonObject }.getOrNull()
+    val uploadId = chosen?.string("upload_id")?.takeIf(::validUploadId)
+    val uploading = state.uploading == input.key
+    val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) vm.uploadReference(input.key) { readPhoto(context.applicationContext, uri) }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(fieldLabel(input), style = MaterialTheme.typography.bodyMedium)
         Text(tr(if (options.isEmpty()) S.asset_empty else S.asset_hint), style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (chosen != null && options.none { (job, output) -> chosen.string("job_id") == job.jobId && chosen.long("output_index") == output.index.toLong() })
+        if (chosen != null && uploadId == null && options.none { (job, output) -> chosen.string("job_id") == job.jobId && chosen.long("output_index") == output.index.toLong() })
             Text(tr(S.asset_retained), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-        if (options.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            item(key = "photos") {
+                // A photo from this device: picked, shrunk to 2048 px, then sent straight to cloud storage.
+                val photo by produceState<android.graphics.Bitmap?>(null, uploadId) {
+                    this.value = uploadId?.let { id -> withContext(Dispatchers.IO) { runCatching { decodeChatBitmap(vm.referenceFile(id), 360) }.getOrNull() } }
+                }
+                ReferenceTile(selected = uploadId != null, onClick = {
+                    if (!uploading) runCatching { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+                }) {
+                    Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh), contentAlignment = Alignment.Center) {
+                        val image = photo
+                        when {
+                            uploading -> CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
+                            uploadId != null && image != null -> Image(image.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            else -> AppIcon(R.drawable.aw_photos)
+                        }
+                    }
+                    Text(tr(if (uploading) S.asset_uploading else S.asset_from_photos), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.labelSmall)
+                    Text(tr(if (uploadId != null) S.asset_photo_selected else S.asset_photo_choose), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.labelSmall)
+                }
+            }
             items(options, key = { "${it.first.requestId}-${it.second.index}" }) { (job, output) ->
                 val selected = chosen?.string("job_id") == job.jobId && chosen?.long("output_index") == output.index.toLong()
-                Surface(onClick = {
+                ReferenceTile(selected, onClick = {
                     onChange(buildJsonObject { put("job_id", job.jobId); put("output_index", output.index) }.toString())
-                }, shape = RoundedCornerShape(16.dp), border = BorderStroke(if (selected) 2.dp else 1.dp,
-                    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
-                    modifier = Modifier.width(132.dp).semantics { this.selected = selected }) {
-                    Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        ComfyThumbnail(job.copy(outputs = listOf(output)), vm, Modifier.fillMaxWidth().aspectRatio(1f))
-                        Text(state.workflows.find { it.id == job.workflowId }?.title ?: job.workflowId,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
-                        Text(tr(if (selected) S.asset_selected_number else S.output_number, output.index + 1), style = MaterialTheme.typography.labelSmall)
-                    }
+                }) {
+                    ComfyThumbnail(job.copy(outputs = listOf(output)), vm, Modifier.fillMaxWidth().aspectRatio(1f))
+                    Text(state.workflows.find { it.id == job.workflowId }?.title ?: job.workflowId,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
+                    Text(tr(if (selected) S.asset_selected_number else S.output_number, output.index + 1), style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
+        state.uploadError?.takeIf { !uploading && it.first == input.key }?.let { (_, code) ->
+            Text(comfyError(code), Modifier.semantics { liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+@Composable
+private fun ReferenceTile(selected: Boolean, onClick: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    Surface(onClick = onClick, shape = RoundedCornerShape(16.dp), border = BorderStroke(if (selected) 2.dp else 1.dp,
+        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.width(132.dp).semantics { this.selected = selected }) {
+        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp), content = content)
     }
 }
 

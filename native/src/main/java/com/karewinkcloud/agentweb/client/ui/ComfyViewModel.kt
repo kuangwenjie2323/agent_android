@@ -10,6 +10,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.io.File
 
 // Unknown submission identity survives process death; drafts and downloaded output do not enter Bundles.
@@ -24,11 +26,15 @@ data class ComfyState(
     val initialized: Boolean = false, val loading: Boolean = false, val submitting: Boolean = false,
     val checking: Boolean = false, val polling: Boolean = false, val pollingPaused: Boolean = false,
     val error: String? = null, val invalidField: String? = null, val signInRequired: Boolean = false,
+    /** Key of the image input whose reference photo is uploading. */
+    val uploading: String? = null,
+    /** Input key and error code of the last failed photo upload, shown under that picker until the next attempt. */
+    val uploadError: Pair<String, String>? = null,
 ) {
     val workflow get() = workflows.find { it.id == workflowId }
     val choices get() = workflows.filter { it.kind == kind && it.channel == channel }
     val needsResources get() = workflow?.let { it.channel == "cloud_gpu" && (it.requiredModels.isNotEmpty() || it.inputs.any { field -> field.resource != null }) } == true
-    val canSubmit get() = initialized && !signInRequired && !loading && !submitting && pending == null &&
+    val canSubmit get() = initialized && !signInRequired && !loading && !submitting && pending == null && uploading == null &&
         workflow != null && workflow?.availability(resources)?.kind == ComfyAvailabilityKind.AVAILABLE &&
         workflow?.inputs.orEmpty().filter { it.resource != null }.all { field ->
             val value = values[field.key] ?: field.default
@@ -196,6 +202,31 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
     }
     fun parameter(key: String, value: String) { mutable.update { it.copy(values = it.values + (key to value), error = null, invalidField = null) } }
     fun size(value: ComfySize) { mutable.update { it.copy(values = it.values + value.parameters, error = null, invalidField = null) } }
+    /** This device's copy of an uploaded reference photo, kept only for its thumbnail. */
+    fun referenceFile(uploadId: String) = File(mediaDirectory, "references/$uploadId")
+    /** Reads one photo ([read] returns its MIME type and bytes), uploads it, then selects it for the image input [key]. */
+    fun uploadReference(key: String, read: suspend () -> Pair<String, ByteArray>) {
+        if (state.value.uploading != null || state.value.signInRequired) return
+        val owner = epoch; val source = repository
+        mutable.update { it.copy(uploading = key, uploadError = null) }
+        viewModelScope.launch {
+            try {
+                val (mime, bytes) = try { read() } catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { throw ComfyFailure("reference_unreadable") }
+                val id = source.uploadInput(bytes, mime)
+                withContext(io) {
+                    val directory = File(mediaDirectory, "references").apply { mkdirs() }
+                    File(directory, id).writeBytes(bytes)
+                    directory.listFiles()?.sortedByDescending { it.lastModified() }?.drop(24)?.forEach { it.delete() }
+                }
+                if (owner == epoch) parameter(key, buildJsonObject { put("upload_id", id) }.toString())
+            } catch (e: CancellationException) { throw e }
+            catch (e: ComfyFailure) {
+                if (owner == epoch) mutable.update { it.copy(uploadError = key to if (e.code in setOf("unavailable", "invalid_response", "network")) "upload_failed" else e.code) }
+            } catch (_: Exception) { if (owner == epoch) mutable.update { it.copy(uploadError = key to "upload_failed") } }
+            finally { if (owner == epoch) mutable.update { it.copy(uploading = null) } }
+        }
+    }
     private fun scheduleRecommendations() {
         recommendationJob?.cancel()
         val current = state.value; val prompt = current.prompt.trim()
