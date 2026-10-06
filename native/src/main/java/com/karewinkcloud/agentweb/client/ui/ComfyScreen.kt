@@ -68,6 +68,9 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
     val jobs = (if (pendingJob != null && state.jobs.none { it.requestId == pendingJob.requestId }) listOf(pendingJob) else emptyList()) +
         state.jobs.map { job -> pendingJob?.takeIf { it.requestId == job.requestId } ?: job }
     val recent = jobs.filter { it.phase() != ComfyJobPhase.FAILED }
+    val recentRow = rememberLazyListState()
+    // A new job lands first in the list; keep it in view instead of one card off-screen to the left.
+    LaunchedEffect(recent.firstOrNull()?.requestId) { if (recent.isNotEmpty()) recentRow.animateScrollToItem(0) }
     fun titleOf(job: ComfyJob) = state.workflows.find { it.id == job.workflowId }?.title ?: job.workflowId
     val openJob: (ComfyJob) -> Unit = { vm.open(it); detailOpen = true }
     ScreenTitle(tr(S.studio)) { ActionIcon(R.drawable.aw_refresh, tr(S.refresh), !state.loading && !state.submitting, vm::refresh) }
@@ -82,7 +85,7 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
         item("recent") {
             ShelfHeader(tr(S.recent_works), if (jobs.isNotEmpty()) tr(S.see_all) else null) { allOpen = true }
             when {
-                recent.isNotEmpty() -> LazyRow(contentPadding = PaddingValues(horizontal = PageGutter), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                recent.isNotEmpty() -> LazyRow(state = recentRow, contentPadding = PaddingValues(horizontal = PageGutter), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     items(recent.take(20), key = { it.requestId }) { job -> CreationCard(job, titleOf(job), vm) { openJob(job) } }
                 }
                 state.loading -> LoadingState(tr(S.loading))
@@ -218,7 +221,7 @@ private fun MiniComposer(state: ComfyState, prompt: String, pending: ComfyJob?, 
             Column(Modifier.weight(1f)) {
                 Text(prompt.ifBlank { tr(S.creation_hint) }, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium,
                     color = if (prompt.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
-                Text(pending?.let { comfyStatus(it.status) } ?: state.workflow?.title ?: tr(S.workflow), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                Text(pending?.let { if (it.needsPolling()) tr(comfyProgressResource(it)) else comfyStatus(it.status) } ?: state.workflow?.title ?: tr(S.workflow), maxLines = 1, overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             val description = tr(if (state.submitting) S.submitting else S.generate)
