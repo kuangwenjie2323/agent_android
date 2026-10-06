@@ -444,6 +444,25 @@ class AgentViewModelTest {
         assertEquals(AppTab.SETTINGS, observed.last().tab)
     }
 
+    @Test fun reenteringARunningChatContinuesTheReplyInsteadOfReplayingIt() = modelTest {
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        repo.followFlow = { id, run, _, previous -> flow {
+            emit(TurnSnapshot(previous?.takeIf { it.lastSequence > 0 } ?: TurnState(id, run!!, 3, listOf(ChatBlock.Text("first part")), startedAt = 1), Connection.LIVE))
+            awaitCancellation()
+        } }
+        vm.open(conversation("one", true)); runCurrent(); advanceTimeBy(1000); runCurrent()
+        assertEquals(0L, repo.previousTurns.last()?.lastSequence ?: 0L)  // the first visit follows from the start
+        vm.back(); runCurrent()
+        vm.open(conversation("one", true))
+        assertEquals("first part", vm.state.value.chat!!.live!!.text)  // shown at once, not rebuilt
+        runCurrent()
+        val resumed = repo.previousTurns.last()!!
+        assertEquals(3L, resumed.lastSequence); assertEquals(CONTROL, resumed.runId)  // continues after event 3
+        // A different run on return starts fresh rather than reusing the old reply.
+        vm.back(); runCurrent()
+        vm.open(conversation("one", true).copy(controlId = "fedcba0987654321fedcba0987654321"))
+        assertNull(vm.state.value.chat!!.live!!.text.takeIf { it.isNotEmpty() })
+    }
     @Test fun disposedActivityFrameClockDoesNotCancelTheFollower() = modelTest {
         vm.frameClock = object : androidx.compose.runtime.MonotonicFrameClock {
             override suspend fun <R> withFrameNanos(onFrame: (Long) -> R): R = throw CancellationException("disposed clock")

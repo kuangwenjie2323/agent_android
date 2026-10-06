@@ -96,14 +96,16 @@ class AgentViewModel(
     private val attachmentDrafts = mutableMapOf<String, List<Attachment>>()
     private val unresolvedSends = mutableMapOf<String, SendRequest>()
     /** Last seen history per conversation: reopening shows it at once while a refresh runs. */
-    private data class CachedChat(val messages: List<ChatMessage>, val olderCount: Int, val nextCursor: String?)
+    /** History, and a reply still streaming when the chat was left (resumed from its last event, not replayed). */
+    private data class CachedChat(val messages: List<ChatMessage>, val olderCount: Int, val nextCursor: String?, val live: TurnState? = null)
     private val chatCache = java.util.concurrent.ConcurrentHashMap<String, CachedChat>()
     // Read-only PC session history from this app run, shown at once while it refreshes.
     private val claudeHistoryCache = java.util.concurrent.ConcurrentHashMap<String, ClaudePreviewState>()
     private var prefetchJob: Job? = null
     private fun cacheChat() {
         state.value.chat?.takeIf { !it.loading && it.error == null }?.let { chat ->
-            chatCache[chat.conversation.id] = CachedChat(chat.messages.filterNot { it.id.startsWith("pending-") }, chat.olderCount, chat.nextCursor)
+            chatCache[chat.conversation.id] = CachedChat(chat.messages.filterNot { it.id.startsWith("pending-") }, chat.olderCount, chat.nextCursor,
+                chat.live?.takeIf { !it.done && it.runId.isNotBlank() })
         }
     }
     private val unresolvedQueues = mutableMapOf<String, QueueRequest>()
@@ -313,11 +315,14 @@ class AgentViewModel(
         if (state.value.signInRequired) return
         saveDraft()
         attachmentScope = newControlId()
-        val initial = if (conversation.running) TurnState(conversation.id, conversation.controlId.orEmpty(), startedAt = monotonicMillis()) else null
+        val cached = chatCache[conversation.id]
+        // A reply that was streaming when this chat was left shows as it was and continues from its last
+        // event; starting empty made the follower replay and rebuild the whole turn.
+        val resumed = cached?.live?.takeIf { conversation.running && (conversation.controlId == null || it.runId == conversation.controlId) }
+        val initial = resumed ?: if (conversation.running) TurnState(conversation.id, conversation.controlId.orEmpty(), startedAt = monotonicMillis()) else null
         livePresentation.value = initial
         val owner = ++generation
         sessionJob?.cancel()
-        val cached = chatCache[conversation.id]
         mutable.update { it.copy(tab = if (it.claudeVisible) AppTab.CLAUDE else AppTab.CONVERSATIONS, claudePreview = null, chat = ChatState(withLineage(conversation), draft = drafts[conversation.id].orEmpty(),
             messages = cached?.messages.orEmpty(), olderCount = cached?.olderCount ?: 0, nextCursor = cached?.nextCursor,
             live = initial,
