@@ -421,7 +421,7 @@
     <string name="error_runpod_unavailable">The RunPod GPU channel is not configured or not reachable. Try again later.</string>
     <string name="error_runpod_rejected">RunPod refused the job. Check the endpoint and the account balance.</string>
     <string name="error_runpod_failed">The RunPod GPU job failed. Try again or choose another workflow.</string>
-    <string name="error_runpod_no_capacity">No RunPod GPU became free within 30 minutes, so the job was canceled (nothing was billed). Try again later.</string>
+    <string name="error_runpod_no_capacity">RunPod had no GPU ready for this job for too long, so it was canceled (nothing was billed). Try again later.</string>
     <string name="style_inspire">Inspire me</string>
     <string name="style_portrait">Portrait</string>
     <string name="style_fashion">Fashion</string>
