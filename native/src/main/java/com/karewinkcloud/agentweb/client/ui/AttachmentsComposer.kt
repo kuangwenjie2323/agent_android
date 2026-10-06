@@ -71,23 +71,27 @@ internal fun AttachmentPicker(chat: ChatState, supportsImages: Boolean, vm: Agen
             shape = MaterialTheme.shapes.large, containerColor = MaterialTheme.colorScheme.surface,
             tonalElevation = 0.dp, shadowElevation = 8.dp,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
-            if (supportsImages) {
-                DropdownMenuItem(text = { Text(tr(S.photos), style = MaterialTheme.typography.bodyMedium) },
-                    leadingIcon = { AppIcon(R.drawable.aw_photos) }, onClick = {
-                    expanded = false; pickerOwner = vm.attachmentOwner()
-                    try { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
-                    catch (_: Exception) { vm.attachmentFailure(pickerOwner, "无法打开照片选择器") }
-                })
-                DropdownMenuItem(text = { Text(tr(S.take_photo), style = MaterialTheme.typography.bodyMedium) },
-                    leadingIcon = { AppIcon(R.drawable.aw_camera) }, onClick = {
-                    expanded = false; pickerOwner = vm.attachmentOwner()
-                    try {
-                        val file = File(File(context.cacheDir, "chat-camera").apply { mkdirs() }, "${newControlId()}.jpg")
-                        cameraPath = file.absolutePath
-                        camera.launch(FileProvider.getUriForFile(context, "${context.packageName}.comfy-output", file))
-                    } catch (_: Exception) { cameraPath?.let { File(it).delete() }; cameraPath = null; vm.attachmentFailure(pickerOwner, "无法打开相机") }
-                })
+            // Always listed so the menu looks the same everywhere; a text-only model greys them out and says why.
+            @Composable fun imageItemText(label: Int) = Column {
+                Text(tr(label), style = MaterialTheme.typography.bodyMedium)
+                if (!supportsImages) Text(tr(S.model_cannot_read_images), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            DropdownMenuItem(text = { imageItemText(S.photos) }, enabled = supportsImages,
+                leadingIcon = { AppIcon(R.drawable.aw_photos) }, onClick = {
+                expanded = false; pickerOwner = vm.attachmentOwner()
+                try { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+                catch (_: Exception) { vm.attachmentFailure(pickerOwner, "无法打开照片选择器") }
+            })
+            DropdownMenuItem(text = { imageItemText(S.take_photo) }, enabled = supportsImages,
+                leadingIcon = { AppIcon(R.drawable.aw_camera) }, onClick = {
+                expanded = false; pickerOwner = vm.attachmentOwner()
+                try {
+                    val file = File(File(context.cacheDir, "chat-camera").apply { mkdirs() }, "${newControlId()}.jpg")
+                    cameraPath = file.absolutePath
+                    camera.launch(FileProvider.getUriForFile(context, "${context.packageName}.comfy-output", file))
+                } catch (_: Exception) { cameraPath?.let { File(it).delete() }; cameraPath = null; vm.attachmentFailure(pickerOwner, "无法打开相机") }
+            })
             DropdownMenuItem(text = { Text(tr(S.files), style = MaterialTheme.typography.bodyMedium) },
                 leadingIcon = { AppIcon(R.drawable.aw_file) }, onClick = {
                 expanded = false; pickerOwner = vm.attachmentOwner()

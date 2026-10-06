@@ -27,8 +27,12 @@ data class Agent(
     val contextKinds: Map<String, String> = emptyMap(),
     val effortLevels: Map<String, List<String>> = emptyMap(),
     val supportsImages: Boolean = false,
+    /** Per-model image support; older servers send only [supportsImages]. */
+    val modelImages: Map<String, Boolean> = emptyMap(),
 ) {
     fun label(model: String) = labels[model] ?: model.substringAfterLast('/')
+    /** Whether [model] reads attached photos (DeepSeek V4.1 Flash does, V4 Pro does not). */
+    fun readsImages(model: String?) = model?.let { modelImages[it] } ?: supportsImages
     fun resumeModel(model: String): String = if (model in models || id != "claude") model else
         models.firstOrNull { it in setOf("opus", "sonnet", "haiku") && model.startsWith("claude-$it-") } ?: model
     companion object {
@@ -42,6 +46,7 @@ data class Agent(
             j.obj("contextKinds")?.mapValues { (_, v) -> (v as? JsonPrimitive)?.contentOrNull.orEmpty() }.orEmpty(),
             j.obj("modelEffortLevels")?.mapValues { (_, v) -> (v as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty() }.orEmpty(),
             j.boolean("supportsImages") == true,
+            j.obj("modelSupportsImages")?.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.booleanOrNull?.let { k to it } }?.toMap().orEmpty(),
         )
     }
 }

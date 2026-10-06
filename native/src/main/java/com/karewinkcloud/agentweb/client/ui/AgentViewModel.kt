@@ -369,7 +369,7 @@ class AgentViewModel(
         val chat = state.value.chat ?: return false
         val combined = chat.attachments + items
         val error = attachmentError(combined.map { it.size }) ?: if (combined.any { it.kind == AttachmentKind.IMAGE } &&
-            state.value.agents.find { it.id == state.value.choice.agent }?.supportsImages != true) "当前模型不支持图片，请切换模型或移除图片" else null
+            !modelReadsImages()) "当前模型不支持图片，请切换模型或移除图片" else null
         if (error != null) { attachmentFailure(owner, error); return false }
         // Bound in-memory drafts across conversations as well as per-message limits.
         val otherBytes = attachmentDrafts.filterKeys { it != chat.conversation.id }.values.flatten().sumOf { it.size.toLong() }
@@ -379,10 +379,12 @@ class AgentViewModel(
         mutable.update { it.copy(chat = it.chat?.copy(attachments = combined, attachmentLoading = false, error = null)) }; saveDraft()
         return true
     }
+    private fun modelReadsImages() = state.value.choice.let { choice ->
+        state.value.agents.find { it.id == choice.agent }?.readsImages(choice.model) == true }
     fun removeAttachment(id: String) { mutable.update { it.copy(chat = it.chat?.copy(attachments = it.chat.attachments.filterNot { a -> a.id == id })) }; saveDraft() }
     private fun validAttachments(chat: ChatState): Boolean {
         if (chat.attachmentLoading) return false
-        if (chat.attachments.any { it.kind == AttachmentKind.IMAGE } && state.value.agents.find { it.id == state.value.choice.agent }?.supportsImages != true) {
+        if (chat.attachments.any { it.kind == AttachmentKind.IMAGE } && !modelReadsImages()) {
             attachmentFailure(attachmentScope, "当前模型不支持图片，请切换模型或移除图片"); return false
         }
         return true

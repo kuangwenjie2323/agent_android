@@ -358,7 +358,7 @@ private fun Composer(chat: ChatState, state: ClientState, vm: AgentViewModel, ma
     ComposerSurface(maxHeight, actions = {
         if (!chat.conversation.nativeControl) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                AttachmentPicker(chat, agent?.supportsImages == true, vm)
+                AttachmentPicker(chat, agent?.readsImages(state.choice.model) == true, vm)
                 ComposerChip(agent?.label(state.choice.model)?.let { label -> composerModelLabel(compactModelLabel(label),
                     state.choice.effort?.takeIf { agent.supportsEffort }?.let { effortLabel(it) },
                     state.choice.permission.takeIf { it != "auto" }?.let { permissionLabel(it) }) } ?: tr(S.choose_model),

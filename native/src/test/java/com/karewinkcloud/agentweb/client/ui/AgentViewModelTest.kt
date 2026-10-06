@@ -91,6 +91,23 @@ class AgentViewModelTest {
         assertTrue(vm.state.value.chat!!.attachments.isEmpty())
         assertEquals(file.name, vm.state.value.chat!!.messages.last().blocks.filterIsInstance<ChatBlock.Media>().single().items.single().name)
     }
+    @Test fun photosFollowTheSelectedModelNotTheWholeProvider() = modelTest {
+        repo.models = listOf("model", "pro"); repo.images = mapOf("model" to true, "pro" to false)
+        vm.open(conversation("one")); runCurrent()
+        val image = encodeAttachment("a.png", "image/png", byteArrayOf(1), AttachmentKind.IMAGE)
+        assertTrue(vm.addAttachments(vm.attachmentOwner(), listOf(image)))
+        vm.removeAttachment(image.id)
+        vm.choose(ModelChoice("a", "pro")); runCurrent()
+        assertFalse(vm.addAttachments(vm.attachmentOwner(), listOf(image)))
+        assertTrue(vm.state.value.chat!!.error!!.message.contains("不支持图片"))
+        val parsed = Agent.from(buildJsonObject {
+            put("id", "deepseek"); put("supportsImages", true)
+            putJsonObject("modelSupportsImages") { put("deepseek-flash", true); put("deepseek-v4-pro", false) }
+        })
+        assertTrue(parsed.readsImages("deepseek-flash")); assertFalse(parsed.readsImages("deepseek-v4-pro"))
+        assertTrue(parsed.readsImages("unlisted"))  // older servers: the provider-wide flag
+        assertFalse(Agent.from(buildJsonObject { put("id", "grok") }).readsImages("grok-4.5"))
+    }
     @Test fun pickerReturnSurvivesForegroundReloadAndReadingKeepsSendDisabled() = modelTest {
         vm.open(conversation("one")); runCurrent()
         val owner = vm.attachmentOwner()
@@ -612,6 +629,7 @@ class AgentViewModelTest {
         var readCalls = 0
         var list = emptyList<Conversation>()
         var models = listOf("model")
+        var images = emptyMap<String, Boolean>()
         var projectList = emptyList<Project>()
         var createdProject: String? = null
         override suspend fun projects() = projectList
@@ -636,7 +654,7 @@ class AgentViewModelTest {
         val stopCalls = mutableListOf<Pair<String, String>>()
         val queueCalls = mutableListOf<QueueRequest>()
         val resumeCalls = mutableListOf<Pair<String, String>>()
-        override suspend fun agents(): List<Agent> { readCalls++; return listOf(Agent("a", "Agent", models, emptyMap(), "model", true, true)) }
+        override suspend fun agents(): List<Agent> { readCalls++; return listOf(Agent("a", "Agent", models, emptyMap(), "model", true, true, modelImages = images)) }
         override suspend fun conversations(): List<Conversation> { readCalls++; listGate?.await(); return list }
         var listGate: CompletableDeferred<Unit>? = null
         var cached = emptyList<Conversation>()
