@@ -292,6 +292,9 @@
     <string name="job_time_queue">等显卡 %1$s</string>
     <string name="job_time_run">生成 %1$s</string>
     <string name="minutes_seconds">%1$d 分 %2$d 秒</string>
+    <string name="quick_settings">常用设置</string>
+    <string name="server_restarted">服务器在这一轮回复中途重启了，这一轮没有完成。看一下有没有需要重做的，再发一条消息继续。</string>
+    <string name="server_restarted_queue">服务器在这一轮回复中途重启了，这一轮没有完成。排队的消息已暂停，点输入框上方的「继续队列」就会接着发送。</string>
     <string name="job_detail">作品详情</string>
     <string name="overflow_empty">显示空对话</string>
     <string name="passkey_none">未找到通行密钥，可使用浏览器登录。</string>

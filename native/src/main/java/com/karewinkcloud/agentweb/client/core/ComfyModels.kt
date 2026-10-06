@@ -26,6 +26,17 @@ data class ComfyInput(val key: String, val spec: JsonObject) {
 }
 data class ComfySize(val label: String, val parameters: Map<String, String>)
 
+/** A parameter offered as a composer shortcut, with the values to choose from. */
+data class ComfyQuickChoice(val input: ComfyInput, val values: List<String>)
+fun ComfyInput.enumValues() = options.mapNotNull { (it as? JsonPrimitive)?.content }
+/** The enum, or for a numeric range a few round values inside it (a 0.5-30 s duration offers 3, 5, 8, 10, 15, 30). */
+fun ComfyInput.choiceValues(): List<String> = enumValues().ifEmpty {
+    val low = min ?: return emptyList(); val high = max ?: return emptyList()
+    listOf(3L, 5L, 8L, 10L, 15L, 30L).filter { it.toDouble() in low..high }.map { it.toString() }
+}
+/** Two values that mean the same number ("5" and "5.0") count as the same choice. */
+fun sameChoice(a: String?, b: String?) = a == b || (a?.toDoubleOrNull() != null && a.toDoubleOrNull() == b?.toDoubleOrNull())
+
 /** Familiar video frame shapes, most common first; 1344 × 768 reads as 16:9 rather than 7:4. */
 private val VideoRatios = listOf(16 to 9, 9 to 16, 1 to 1, 4 to 3, 3 to 4, 21 to 9)
 private fun videoRatio(width: Int, height: Int): String? = VideoRatios.firstOrNull { (a, b) ->
@@ -38,6 +49,17 @@ data class ComfyWorkflow(val id: String, val title: String, val description: Str
     fun defaults() = inputs.associate { it.key to it.default }
     fun missingModels(resources: ComfyResources?) = if (channel != "cloud_gpu" || resources?.ready != true) emptyList() else
         requiredModels.filter { (category, name) -> resources.items.none { it.category == category && it.name == name } }.map { it.second }
+    /** Shortcuts for the composer: frame shape and duration for video, voice and duration for audio. */
+    fun quickChoices(): List<ComfyQuickChoice> {
+        fun pick(vararg keys: String) = inputs.firstOrNull { it.key in keys }
+        val keys = when (kind) {
+            "video" -> listOfNotNull(pick("aspect_ratio", "ratio").takeIf { sizes().isEmpty() }, pick("duration", "duration_seconds"))
+            "audio" -> listOfNotNull(pick("voice", "voice_id"), pick("duration", "duration_seconds"))
+            else -> emptyList()
+        }
+        return keys.map { ComfyQuickChoice(it, if (it.key in setOf("duration", "duration_seconds")) it.choiceValues() else it.enumValues()) }
+            .filter { it.values.size > 1 }
+    }
     fun sizes(): List<ComfySize> {
         val width = inputs.find { it.key == "width" }?.options.orEmpty()
         val height = inputs.find { it.key == "height" }?.options.orEmpty()

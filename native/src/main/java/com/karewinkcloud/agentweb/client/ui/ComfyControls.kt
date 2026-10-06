@@ -291,29 +291,30 @@ internal fun sizeIsUpscaled(label: String) = SizeLabel.matchEntire(label)?.group
 /** Size and aspect choice, styled like the model sheet: native and AI-upscaled groups of radio rows. */
 @Composable
 internal fun SizeSheet(sizes: List<ComfySize>, selected: String?, onPick: (ComfySize) -> Unit,
-    durations: List<String> = emptyList(), duration: String? = null, onDuration: (String) -> Unit = {}, onClose: () -> Unit) {
+    quick: List<ComfyQuickChoice> = emptyList(), current: (ComfyInput) -> String = { it.default },
+    onQuick: (String, String) -> Unit = { _, _ -> }, onClose: () -> Unit) {
     AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(tr(S.size), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                Text(tr(if (quick.isEmpty()) S.size else S.quick_settings), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
                 ActionIcon(R.drawable.aw_check, tr(S.done), onClick = onClose)
             }
             val (upscaled, native) = sizes.partition { sizeIsUpscaled(it.label) }
-            // A combined video sheet keeps open after a pick, so shape and duration can both be set.
-            val closeOnPick = durations.isEmpty()
+            // A combined sheet keeps open after a pick, so every shortcut can be set in one visit.
+            val closeOnPick = quick.isEmpty()
             LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (durations.isNotEmpty()) {
-                    item("title-duration") {
-                        Text(tr(S.field_duration), Modifier.padding(top = 12.dp, start = 4.dp).semantics { heading() },
+                quick.forEach { choice ->
+                    item("title-${choice.input.key}") {
+                        Text(fieldLabel(choice.input), Modifier.padding(top = 12.dp, start = 4.dp).semantics { heading() },
                             style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    items(durations, key = { "duration-$it" }) { value ->
-                        ChoiceRow(durationLabel(value), value == duration) { onDuration(value) }
+                    items(choice.values, key = { "${choice.input.key}-$it" }) { value ->
+                        ChoiceRow(quickLabel(choice.input, value), sameChoice(value, current(choice.input))) { onQuick(choice.input.key, value) }
                     }
-                    if (sizes.isNotEmpty()) item("title-frame") {
-                        Text(tr(S.size), Modifier.padding(top = 12.dp, start = 4.dp).semantics { heading() },
-                            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+                }
+                if (quick.isNotEmpty() && sizes.isNotEmpty()) item("title-frame") {
+                    Text(tr(S.size), Modifier.padding(top = 12.dp, start = 4.dp).semantics { heading() },
+                        style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 listOf(S.size_native to native, S.size_upscaled to upscaled).filter { it.second.isNotEmpty() }.forEach { (title, group) ->
                     if (upscaled.isNotEmpty()) item("title-$title") {

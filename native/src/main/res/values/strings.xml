@@ -296,6 +296,9 @@
     <string name="job_time_queue">waiting for a GPU %1$s</string>
     <string name="job_time_run">generating %1$s</string>
     <string name="minutes_seconds">%1$d min %2$d s</string>
+    <string name="quick_settings">Quick settings</string>
+    <string name="server_restarted">The server restarted in the middle of this reply, so it did not finish. Check whether anything needs redoing, then send a message to continue.</string>
+    <string name="server_restarted_queue">The server restarted in the middle of this reply, so it did not finish. Your queued messages are paused: tap Resume queue above the message box to send them.</string>
     <string name="job_detail">Creation details</string>
     <string name="overflow_empty">Show unused chats</string>
     <string name="passkey_none">No passkey found. Use browser sign-in to continue.</string>

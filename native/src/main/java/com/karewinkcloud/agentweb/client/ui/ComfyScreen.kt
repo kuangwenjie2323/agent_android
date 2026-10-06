@@ -464,20 +464,26 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
                 } }
             }
             Box(Modifier.weight(1f)) {
-                val sizes = state.workflow?.sizes().orEmpty()
+                val workflow = state.workflow
+                val sizes = workflow?.sizes().orEmpty()
                 val size = sizes.firstOrNull { it.parameters.all { (key, value) -> state.values[key] == value } }
-                // On a narrow phone the row has room for one more button: video folds its frame shape
-                // and duration into it ("16:9 · 5 s"), and the sheet offers both.
-                val duration = state.workflow?.inputs?.find { it.key == "duration" && it.options.isNotEmpty() }
-                val durationValue = duration?.let { state.values[it.key] ?: it.default }
-                val label = if (state.workflow?.kind == "video" && duration != null)
-                    listOfNotNull(size?.label?.substringBefore(" · "), durationLabel(durationValue.orEmpty())).joinToString(" · ")
-                else size?.label?.let(::sizeChipLabel)
-                    ?: listOfNotNull(state.values["size"], state.values["aspect_ratio"], state.values["resolution"]).joinToString(" · ").ifBlank { tr(S.size) }
-                ComposerChip(label, { if (sizes.isEmpty() && duration == null) onSettings() else sizeMenu = true }, arrow = duration == null)
-                if (sizeMenu) SizeSheet(sizes, size?.label, onSize,
-                    durations = duration?.options?.mapNotNull { (it as? JsonPrimitive)?.content }.orEmpty(), duration = durationValue,
-                    onDuration = { onParameter("duration", it) }) { sizeMenu = false }
+                // On a narrow phone the row has room for one more button: video and audio fold their
+                // shortcuts into it ("16:9 · 5 s", "Roger") and the sheet offers each of them.
+                val quick = workflow?.quickChoices().orEmpty()
+                val current = { input: ComfyInput -> state.values[input.key] ?: input.default }
+                val parts = buildList {
+                    if (workflow?.kind == "video") size?.let { add(it.label.substringBefore(" · ")) }
+                    quick.forEach { add(quickLabel(it.input, current(it.input))) }
+                }
+                val label = if (workflow?.kind in setOf("video", "audio") && parts.isNotEmpty()) parts.joinToString(" · ")
+                    else size?.label?.let(::sizeChipLabel)
+                        ?: listOfNotNull(state.values["size"], state.values["aspect_ratio"], state.values["resolution"]).joinToString(" · ").ifBlank { tr(S.size) }
+                // Audio has no frame size: without a shortcut the button would only name a photo setting.
+                if (!(workflow?.kind == "audio" && quick.isEmpty())) {
+                    ComposerChip(label, { if (sizes.isEmpty() && quick.isEmpty()) onSettings() else sizeMenu = true }, arrow = quick.isEmpty())
+                }
+                if (sizeMenu) SizeSheet(sizes, size?.label, onSize, quick = quick, current = current,
+                    onQuick = { key, value -> onParameter(key, value) }) { sizeMenu = false }
             }
             ActionIcon(R.drawable.aw_settings, tr(S.creation_settings), onClick = onSettings)
             val submitDescription = tr(if (state.submitting) S.submitting else S.generate)

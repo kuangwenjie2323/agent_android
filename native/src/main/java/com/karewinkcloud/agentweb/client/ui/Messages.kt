@@ -37,6 +37,8 @@ fun ErrorBlock(error: ClientError, onRetry: (() -> Unit)? = null, action: String
             }
             Text(when (error.code) {
                 "stream_mismatch" -> tr(S.chat_stream_error)
+                // The server notes whether follow-ups were waiting; say what to tap in either case.
+                "server_restarted" -> tr(if ("Queued" in error.message) S.server_restarted_queue else S.server_restarted)
                 "fork_project_required", "project_not_found" -> tr(S.fork_project_required)
                 "fork_source_busy" -> tr(S.fork_source_busy)
                 "fork_invalid_anchor" -> tr(S.fork_invalid_anchor)

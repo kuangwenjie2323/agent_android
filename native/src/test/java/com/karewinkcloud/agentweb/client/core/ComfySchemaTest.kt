@@ -52,6 +52,26 @@ class ComfySchemaTest {
         assertNull(junk.createdAt); assertNull(junk.finishedAt); assertNull(junk.totalSeconds); assertNull(junk.queueMs); assertNull(junk.runMs)
         assertNull(job(""","created_at":1791213494,"finished_at":1791212704""").totalSeconds)  // never negative
     }
+    @Test fun quickChoicesFollowTheKindOfWorkflow() {
+        fun wf(kind: String, inputs: String) = ComfyWorkflow.from(wireJson.parseToJsonElement("""{"id":"q","kind":"$kind","billing_channel":"partner_api","inputs":$inputs}""").jsonObject)
+        fun keys(w: ComfyWorkflow) = w.quickChoices().map { it.input.key to it.values }
+        // MiniMax H3 partner: the frame is named by ratio, so both shortcuts show.
+        val h3 = wf("video", """{"prompt":{"type":"string","required":true},"duration":{"type":"integer","default":5,"enum":[5,8,10,15]},
+            "aspect_ratio":{"type":"string","default":"16:9","enum":["16:9","9:16","1:1"]},"resolution":{"type":"string","default":"768P","enum":["480P","768P"]}}""")
+        assertEquals(listOf("aspect_ratio" to listOf("16:9", "9:16", "1:1"), "duration" to listOf("5", "8", "10", "15")), keys(h3))
+        // FastH3: width/height already give the frame; only the duration is a shortcut.
+        val fasth3 = wf("video", """{"duration":{"type":"integer","default":5,"enum":[5,8,10]},
+            "width":{"type":"integer","default":1344,"enum":[768,1344]},"height":{"type":"integer","default":768,"enum":[768,1344]}}""")
+        assertEquals(listOf("duration" to listOf("5", "8", "10")), keys(fasth3))
+        // A range offers round values inside it.
+        assertEquals(listOf("duration" to listOf("3", "5", "8", "10", "15")), keys(wf("video", """{"duration":{"type":"integer","default":6,"minimum":1,"maximum":15}}""")))
+        assertEquals(listOf("duration" to listOf("3", "5", "8", "10", "15", "30")), keys(wf("audio", """{"duration":{"type":"number","default":5.0,"minimum":0.5,"maximum":30}}""")))
+        assertEquals(listOf("voice" to listOf("Roger (male, american)", "Sarah (female, american)")),
+            keys(wf("audio", """{"voice":{"type":"string","default":"Roger (male, american)","enum":["Roger (male, american)","Sarah (female, american)"]}}""")))
+        assertTrue(keys(wf("audio", """{"speech_rate":{"type":"integer","default":0,"minimum":-50,"maximum":100}}""")).isEmpty())
+        assertTrue(keys(wf("image", """{"aspect_ratio":{"type":"string","enum":["1:1","16:9"]}}""")).isEmpty())
+        assertTrue(sameChoice("5", "5.0")); assertFalse(sameChoice("5", "8")); assertTrue(sameChoice("Roger", "Roger"))
+    }
     @Test fun unclassifiedBillingNeverBecomesCloudGpu() {
         val workflow = ComfyWorkflow.from(wireJson.parseToJsonElement("""{"id":"unknown","inputs":{}}""").jsonObject)
         assertEquals("unknown", workflow.channel)
