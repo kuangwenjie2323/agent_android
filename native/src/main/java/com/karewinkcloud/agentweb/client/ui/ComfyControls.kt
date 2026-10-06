@@ -159,7 +159,10 @@ internal fun CreationSettings(state: ComfyState, vm: ComfyViewModel, onGallery: 
                     PickerButton(tr(S.size), current ?: tr(S.select_value)) { sizeSheet = true }
                     if (sizeSheet) SizeSheet(sizes, current, vm::size) { sizeSheet = false }
                 }
-                items(groups?.basic.orEmpty().filter { it.key !in sizeKeys }, key = { "basic-${workflow?.id}-${it.key}" }) { input ->
+                // LoRA and its strength sit under the "Models & LoRA" heading with the other resources,
+                // not among the size and seed controls above it.
+                val (loraFields, basicFields) = groups?.basic.orEmpty().filter { it.key !in sizeKeys }.partition(ComfyInput::isLoraControl)
+                items(basicFields, key = { "basic-${workflow?.id}-${it.key}" }) { input ->
                     SchemaField(input, state.values[input.key] ?: input.default, state, vm) { vm.parameter(input.key, it) }
                 }
                 if (state.needsResources) item("resources") {
@@ -171,6 +174,9 @@ internal fun CreationSettings(state: ComfyState, vm: ComfyViewModel, onGallery: 
                     if (state.resourcesError || (state.resources?.ready != true && !state.resourcesLoading)) Text(tr(S.resources_failed), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     if (state.resources?.stale == true) Text(tr(S.resources_stale), style = MaterialTheme.typography.bodySmall)
                     Text(tr(S.resource_compatibility), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                items(loraFields, key = { "lora-${workflow?.id}-${it.key}" }) { input ->
+                    SchemaField(input, state.values[input.key] ?: input.default, state, vm) { vm.parameter(input.key, it) }
                 }
                 if (!groups?.advanced.isNullOrEmpty()) {
                     item("advanced") {

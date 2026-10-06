@@ -72,6 +72,15 @@ class ComfySchemaTest {
         assertTrue(keys(wf("image", """{"aspect_ratio":{"type":"string","enum":["1:1","16:9"]}}""")).isEmpty())
         assertTrue(sameChoice("5", "5.0")); assertFalse(sameChoice("5", "8")); assertTrue(sameChoice("Roger", "Roger"))
     }
+    @Test fun loraControlsAreBasicAndRecognisedForTheResourcesSection() {
+        val qwen = workflow("""{"prompt":{"type":"string","required":true},"diffusion_model":{"type":"string","resource":"diffusion_models","default":"m"},
+            "lora":{"type":"string","resource":"loras","default":"l"},"lora_strength":{"type":"number","default":1.0,"minimum":0,"maximum":2},
+            "steps":{"type":"integer","default":2,"minimum":1,"maximum":8},"seed":{"type":"integer","default":42}}""")
+        val groups = qwen.fieldGroups()
+        assertEquals(listOf("lora", "lora_strength"), groups.basic.filter { it.isLoraControl() }.map { it.key })
+        assertEquals(listOf("diffusion_model"), groups.advanced.map { it.key })  // base models stay under Advanced
+        assertFalse(groups.basic.first { it.key == "steps" }.isLoraControl())
+    }
     @Test fun unclassifiedBillingNeverBecomesCloudGpu() {
         val workflow = ComfyWorkflow.from(wireJson.parseToJsonElement("""{"id":"unknown","inputs":{}}""").jsonObject)
         assertEquals("unknown", workflow.channel)

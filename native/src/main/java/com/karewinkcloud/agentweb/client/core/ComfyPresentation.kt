@@ -38,6 +38,9 @@ fun comfyGalleryGroups(workflows: List<ComfyWorkflow>, kind: String, query: Stri
 }
 
 data class ComfyFieldGroups(val basic: List<ComfyInput>, val advanced: List<ComfyInput>)
+/** A LoRA picker or one of its strength controls. */
+fun ComfyInput.isLoraControl() = resource == "loras" || key.startsWith("lora_") || key in setOf("strength_model", "strength_clip")
+
 fun ComfyWorkflow.fieldGroups(): ComfyFieldGroups {
     val dimensions = setOf("width", "height", "size", "resolution", "aspect_ratio", "ratio")
     val creative = setOf("negative_prompt", "lyrics", "text", "style", "language", "language_code", "voice", "model",
