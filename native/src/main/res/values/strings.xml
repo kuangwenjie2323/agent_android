@@ -314,6 +314,8 @@
     <string name="photos">Photos</string>
     <string name="take_photo">Take photo</string>
     <string name="files">Files</string>
+    <string name="steer_label">Sent while working</string>
+    <string name="steer_send">Send to the running turn</string>
     <string name="model_cannot_read_images">This model cannot read images</string>
     <string name="default_project">Default workspace</string>
     <string name="project">Project</string>

@@ -366,10 +366,15 @@ private fun Composer(chat: ChatState, state: ClientState, vm: AgentViewModel, ma
                 if (chat.queueUncertain || (chat.running && chat.hasDraft)) ActionIcon(
                     if (chat.queueUncertain) R.drawable.aw_refresh else R.drawable.aw_queue,
                     tr(if (chat.queueUncertain) S.check_queue else S.queue), !chat.controlBusy && !chat.attachmentLoading, vm::queue)
-                FilledIconButton(onClick = if (chat.running) vm::stop else vm::send,
-                    enabled = if (chat.running) !chat.controlBusy && !chat.stopRequested && chat.controlId != null
+                // While the agent works, text in the box is sent into the running turn (it reads it at
+                // its next step); an empty box keeps the button as Stop.
+                val steering = chat.running && chat.hasDraft && !chat.conversation.nativeControl
+                FilledIconButton(onClick = if (steering) vm::steer else if (chat.running) vm::stop else vm::send,
+                    enabled = if (steering) !chat.controlBusy && chat.controlId != null && !chat.attachmentLoading
+                        else if (chat.running) !chat.controlBusy && !chat.stopRequested && chat.controlId != null
                         else chat.canSend && chat.hasDraft && agent?.available == true && !state.creating, modifier = Modifier.size(48.dp)) {
-                    AppIcon(if (chat.running) R.drawable.aw_stop else R.drawable.aw_send, tr(if (chat.running) S.stop else S.send))
+                    AppIcon(if (chat.running && !steering) R.drawable.aw_stop else R.drawable.aw_send,
+                        tr(if (steering) S.steer_send else if (chat.running) S.stop else S.send))
                 }
             }
         }

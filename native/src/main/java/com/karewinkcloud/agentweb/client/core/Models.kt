@@ -100,6 +100,8 @@ sealed interface ChatBlock {
         val status: StepStatus = StepStatus.RUNNING, val startedAt: Long = 0, val durationMs: Long? = null, val diff: String? = null) : ChatBlock
     data class Error(val problem: ClientError) : ChatBlock
     data class Notice(val content: String) : ChatBlock
+    /** A message the user sent into the running turn; the model read it at its next step. */
+    data class Steer(val content: String) : ChatBlock
     data class Media(val items: List<MessageMedia>) : ChatBlock
 }
 
@@ -118,6 +120,7 @@ fun historyBlocks(j: JsonObject): List<ChatBlock> {
                 durationMs = b.long("duration_ms")?.coerceAtLeast(0), diff = b.string("diff"),
             )
             "error" -> ChatBlock.Error(ClientError(b.string("content").orEmpty(), b.string("code"), b.boolean("retryable")))
+            "steer" -> ChatBlock.Steer(b.string("content").orEmpty())
             else -> null
         }
     }.toMutableList()

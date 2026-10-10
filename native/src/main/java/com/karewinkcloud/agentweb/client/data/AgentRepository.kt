@@ -54,6 +54,8 @@ interface AgentRepository {
     fun follow(conversationId: String, runId: String?, send: SendRequest? = null, previous: TurnState? = null): Flow<TurnSnapshot>
     suspend fun stop(conversationId: String, controlId: String): JsonObject
     suspend fun queue(request: QueueRequest): JsonObject
+    /** Sends [message] into the running turn; false when that turn cannot take it (queue it instead). */
+    suspend fun steer(conversationId: String, controlId: String, message: String): Boolean = false
     suspend fun resume(conversationId: String, headId: String): JsonObject
     suspend fun claudeSessions(cursor: String? = null, project: String? = null): ClaudeSessionPage
     suspend fun claudeHistory(id: String, cursor: String? = null): ClaudeSessionHistory
@@ -296,6 +298,12 @@ class HttpAgentRepository(
         put("conversationId", conversationId); put("expectedControlId", controlId)
     })
     override suspend fun queue(request: QueueRequest) = json("/api/chat/queue", request.json())
+    override suspend fun steer(conversationId: String, controlId: String, message: String): Boolean = try {
+        json("/api/chat/steer", buildJsonObject { put("conversationId", conversationId); put("controlId", controlId); put("message", message) })
+            .boolean("steered") == true
+    } catch (e: ApiException) {
+        if (e.status == 409 || e.status == 404) false else throw e
+    }
     override suspend fun resume(conversationId: String, headId: String) = json("/api/chat/queue/resume", buildJsonObject {
         put("conversationId", conversationId); put("expectedHeadItemId", headId)
     })

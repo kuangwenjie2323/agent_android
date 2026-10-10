@@ -323,6 +323,13 @@ class AgentViewModel(
         livePresentation.value = initial
         val owner = ++generation
         sessionJob?.cancel()
+        // Show this chat's own model and settings at once: waiting for its detail left the previous
+        // chat's choice in the composer for a moment, which read as the screen jumping.
+        if (!fresh) conversation.choice.takeIf { it.agent.isNotBlank() && it.model.isNotBlank() }?.let { choice ->
+            val agent = state.value.agents.firstOrNull { it.id == choice.agent }
+            mutable.update { it.copy(choice = choice.copy(model = agent?.resumeModel(choice.model) ?: choice.model,
+                effort = if (agent?.supportsEffort == true) choice.effort else null)) }
+        }
         mutable.update { it.copy(tab = if (it.claudeVisible) AppTab.CLAUDE else AppTab.CONVERSATIONS, claudePreview = null, chat = ChatState(withLineage(conversation), draft = drafts[conversation.id].orEmpty(),
             messages = cached?.messages.orEmpty(), olderCount = cached?.olderCount ?: 0, nextCursor = cached?.nextCursor,
             live = initial,
@@ -853,6 +860,26 @@ class AgentViewModel(
                 editChat(owner) { it.copy(controlBusy = false, error = problem(e)) }
                 if (e is ApiException && e.status == 409 && owned(owner)) reload()
             }
+        }
+    }
+
+    /** Like Claude Code: a message sent while the agent works reaches it at its next step. */
+    fun steer() {
+        val chat = state.value.chat ?: return
+        val control = chat.controlId ?: return
+        if (!chat.running || !chat.hasDraft || chat.controlBusy || chat.conversation.nativeControl || chat.attachments.isNotEmpty()) {
+            queue(); return
+        }
+        val owner = generation
+        val source = repository
+        val text = chat.draft
+        editChat(owner) { it.copy(controlBusy = true, error = null) }
+        viewModelScope.launch {
+            val steered = try { source.steer(chat.conversation.id, control, text) }
+                catch (e: Exception) { editChat(owner) { it.copy(controlBusy = false, error = problem(e)) }; return@launch }
+            editChat(owner) { it.copy(controlBusy = false, draft = if (steered && it.draft == text) "" else it.draft) }
+            if (owned(owner)) saveDraft()
+            if (!steered && owned(owner)) queue()
         }
     }
 

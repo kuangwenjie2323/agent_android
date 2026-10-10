@@ -1,5 +1,6 @@
 package com.karewinkcloud.agentweb.client.ui
 
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.graphics.graphicsLayer
 
 import androidx.compose.foundation.*
@@ -60,29 +61,6 @@ fun ErrorBlock(error: ClientError, onRetry: (() -> Unit)? = null, action: String
 @Composable
 internal fun quietButton() = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant)
 
-/** Observe the initial pass so nested selectable code cannot swallow whole-message copy. */
-private fun Modifier.messageLongPress(onLongPress: () -> Unit): Modifier = pointerInput(onLongPress) {
-    awaitEachGesture {
-        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-        val releasedOrDragged = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
-            var canceled = false
-            while (!canceled) {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
-                canceled = event.changes.none { it.pressed } || event.changes.any {
-                    (it.position - down.position).getDistance() > viewConfiguration.touchSlop
-                }
-            }
-            true
-        }
-        if (releasedOrDragged == null) {
-            onLongPress()
-            do {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
-                event.changes.forEach { it.consume() }
-            } while (event.changes.any { it.pressed })
-        }
-    }
-}
 
 @Suppress("DEPRECATION")
 @Composable
@@ -97,8 +75,9 @@ fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String?
     val copyLabel = tr(S.copy_message)
     val menuLabel = tr(S.message_actions)
     val copy = { clipboard.setText(AnnotatedString(message.text)); copied = true; menu = false }
-    val openMenu = remember(message.id) { { menu = true } }
-    Box(Modifier.fillMaxWidth().messageLongPress(openMenu).semantics {
+    // Long-press selects words like any text on Android (drag the handles to widen it); the copy and
+    // edit buttons stay below the message, and accessibility services still reach the menu.
+    Box(Modifier.fillMaxWidth().semantics {
         onLongClick(menuLabel) { menu = true; true }
         customActions = listOf(CustomAccessibilityAction(copyLabel) { copy(); true })
     }) {
@@ -108,7 +87,7 @@ fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String?
                     Spacer(Modifier.weight(.15f))
                     Surface(modifier = Modifier.weight(.85f, fill = false).widthIn(max = 560.dp), color = MaterialTheme.colorScheme.surfaceVariant,
                         contentColor = MaterialTheme.colorScheme.onSurface, shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)) {
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) { BlockContent(message.blocks, live) }
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) { SelectionContainer { BlockContent(message.blocks, live) } }
                     }
                 }
                 if (onEdit != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -120,7 +99,7 @@ fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String?
                 }
             } else {
                 (modelLabel ?: message.model)?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                BlockContent(message.blocks, live)
+                SelectionContainer { BlockContent(message.blocks, live) }
                 if (turn != null && !turn.done) WorkingIndicator(turn, connection)
                 else if (!live || turn?.done == true) TurnFooter(message)
                 if (!live) Row(verticalAlignment = Alignment.CenterVertically) {
@@ -163,6 +142,15 @@ private fun BlockContent(blocks: List<ChatBlock>, live: Boolean) {
                 is ChatBlock.Error -> ErrorBlock(block.problem)
                 is ChatBlock.Notice -> Text(localMessage(block.content), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 is ChatBlock.Media -> block.items.forEach { ChatMediaCard(it) }
+                is ChatBlock.Steer -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = MaterialTheme.shapes.large,
+                        modifier = Modifier.widthIn(max = 300.dp)) {
+                        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(tr(S.steer_label), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(block.content, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
                 else -> Unit
             }
         } }

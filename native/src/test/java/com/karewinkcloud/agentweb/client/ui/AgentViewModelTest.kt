@@ -264,6 +264,17 @@ class AgentViewModelTest {
         assertTrue(vm.state.value.chat!!.canSend)
         assertTrue(vm.state.value.chat!!.messages.isEmpty())
     }
+    @Test fun messageSentWhileWorkingSteersTheTurnOrQueuesWhenItCannot() = modelTest {
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        repo.admit = { buildJsonObject { put("pending", true) } }
+        vm.open(conversation("one", true)); runCurrent()
+        vm.draft("also check B"); vm.steer(); runCurrent()
+        assertEquals(listOf("also check B"), repo.steerCalls); assertTrue(repo.queueCalls.isEmpty())
+        assertEquals("", vm.state.value.chat!!.draft)
+        repo.steerAccepts = false  // the turn is finishing: the message waits for the next turn instead
+        vm.draft("next step"); vm.steer(); runCurrent()
+        assertEquals("next step", repo.queueCalls.single().text)
+    }
     @Test fun queueCheckReusesEntireRequestAndNeverClearsNewDraft() = modelTest {
         repo.getDetail = { id, _ -> detail(id, running = true) }
         vm.open(conversation("one", true)); runCurrent()
@@ -676,6 +687,9 @@ class AgentViewModelTest {
             return buildJsonObject { put("committed", true); put("status", "running") }
         }
         override suspend fun queue(request: QueueRequest): JsonObject { queueCalls += request; return admit(request) }
+        val steerCalls = mutableListOf<String>()
+        var steerAccepts = true
+        override suspend fun steer(conversationId: String, controlId: String, message: String): Boolean { steerCalls += message; return steerAccepts }
         override suspend fun resume(conversationId: String, headId: String): JsonObject {
             resumeCalls += conversationId to headId
             return resumeCall(conversationId, headId)

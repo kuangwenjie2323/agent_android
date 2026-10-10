@@ -64,6 +64,7 @@ object TurnReducer {
             }
             "error" -> blocks += ChatBlock.Error(ClientError(content(), j.string("code"), j.boolean("retryable")))
             "notice", "queued" -> blocks += ChatBlock.Notice(content())
+            "steer" -> blocks += ChatBlock.Steer(content())
             "artifacts" -> {
                 val media = j.objects("items").ifEmpty { j.objects("images") }.map(MessageMedia::from)
                 // User uploads already live in the optimistic/history user bubble.
