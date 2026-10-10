@@ -16,7 +16,7 @@ internal fun ProjectSheet(state: ClientState, vm: AgentViewModel, close: () -> U
     var name by remember { mutableStateOf("") }
     var registering by remember { mutableStateOf(false) }
     LaunchedEffect(state.creating) { if (state.creating) close() }
-    ModalBottomSheet(close, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+    AppModalBottomSheet(close, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).imePadding().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(tr(S.project), style = MaterialTheme.typography.titleLarge)
             Text(tr(S.project_hint), style = MaterialTheme.typography.bodySmall)

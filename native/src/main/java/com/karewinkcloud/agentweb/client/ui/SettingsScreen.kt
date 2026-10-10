@@ -31,12 +31,11 @@ internal fun ColumnScope.SettingsScreen(vm: SettingsViewModel, openBrowser: (Str
     var origin by rememberSaveable(prefs.origin) { mutableStateOf(prefs.origin) }
     val busy = saving || phase != SignInPhase.IDLE
     ScreenTitle(tr(S.settings))
-    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(start = PageGutter, end = PageGutter, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SettingsGroup(tr(S.account)) {
             SettingsRow(auth.accountName ?: tr(S.signed_out_row),
-                if (auth.signedIn) auth.deviceName.orEmpty() else tr(S.sign_in_explanation), !busy, badge = true) { editor = "account" }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            SettingsRow(tr(S.account_security), enabled = !busy) { openBrowser(vm.accountUrl()) }
+                if (auth.signedIn) auth.deviceName.orEmpty() else tr(S.sign_in_explanation), !busy, badge = true, position = RowPosition.FIRST) { editor = "account" }
+            SettingsRow(tr(S.account_security), enabled = !busy, position = RowPosition.LAST) { openBrowser(vm.accountUrl()) }
         }
         if (!auth.signedIn) Column {
             Button({ if (signInMethod(failure) == SignInMethod.BROWSER) vm.signIn(prefs.origin, prefs.theme, openBrowser)
@@ -49,18 +48,16 @@ internal fun ColumnScope.SettingsScreen(vm: SettingsViewModel, openBrowser: (Str
             }
         }
         if (phase != SignInPhase.IDLE) Column {
-            Text(tr(when (phase) { SignInPhase.PASSKEY -> S.passkey_waiting; SignInPhase.BROWSER -> S.sign_in_browser
-                SignInPhase.SIGNING_OUT -> S.signing_out; else -> S.sign_in_completing }))
+            StatusNotice(tr(when (phase) { SignInPhase.PASSKEY -> S.passkey_waiting; SignInPhase.BROWSER -> S.sign_in_browser
+                SignInPhase.SIGNING_OUT -> S.signing_out; else -> S.sign_in_completing }), busy = true)
             if (phase != SignInPhase.SIGNING_OUT) TextButton(vm::cancelPending, Modifier.heightIn(min = 48.dp)) { Text(tr(S.cancel_sign_in)) }
         }
         error?.let { ErrorBlock(ClientError(localMessage(it))) }
-        auth.message?.let { Text(localMessage(it), style = MaterialTheme.typography.bodySmall) }
+        auth.message?.let { StatusNotice(localMessage(it)) }
         SettingsGroup(tr(S.preferences_group)) {
-            SettingsRow(tr(S.appearance), tr(when (prefs.theme) { "light" -> S.light; "dark" -> S.dark; else -> S.system }), !busy) { editor = "theme" }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            SettingsRow(tr(S.default_model), model.ifBlank { tr(S.choose_model) }, !busy, onClick = onModels)
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            SettingsRow(tr(S.language), when (prefs.language) { "zh" -> "中文"; "en" -> "English"; else -> tr(S.language_system) }, !busy) { editor = "language" }
+            SettingsRow(tr(S.appearance), tr(when (prefs.theme) { "light" -> S.light; "dark" -> S.dark; else -> S.system }), !busy, position = RowPosition.FIRST) { editor = "theme" }
+            SettingsRow(tr(S.default_model), model.ifBlank { tr(S.choose_model) }, !busy, position = RowPosition.MIDDLE, onClick = onModels)
+            SettingsRow(tr(S.language), when (prefs.language) { "zh" -> "中文"; "en" -> "English"; else -> tr(S.language_system) }, !busy, position = RowPosition.LAST) { editor = "language" }
         }
         SettingsGroup(tr(S.advanced_group)) {
             SettingsRow(tr(S.server), prefs.origin.removePrefix("https://"), !busy) { editor = "server" }
@@ -100,24 +97,15 @@ internal fun ColumnScope.SettingsScreen(vm: SettingsViewModel, openBrowser: (Str
 
 @Composable
 private fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) { Column(content = content) }
+    Column {
+        GroupLabel(title)
+        Column(content = content)
     }
 }
 
 @Composable
-private fun SettingsRow(title: String, subtitle: String? = null, enabled: Boolean = true, badge: Boolean = false, onClick: () -> Unit) {
-    Surface(onClick, enabled = enabled, color = MaterialTheme.colorScheme.surface) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (badge) Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.primaryContainer) {
-                Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { Text(title.take(1).uppercase()) }
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(title, style = MaterialTheme.typography.bodyLarge)
-                if (!subtitle.isNullOrBlank()) Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            AppIcon(R.drawable.aw_chevron)
-        }
-    }
+private fun SettingsRow(title: String, subtitle: String? = null, enabled: Boolean = true, badge: Boolean = false,
+    position: RowPosition = RowPosition.ONLY, onClick: () -> Unit) {
+    ListRow(title, subtitle, position, enabled, leading = if (badge) ({ Avatar(title.take(1).uppercase(), accent = true) }) else null,
+        trailing = { Box(Modifier.size(20.dp)) { AppIcon(R.drawable.aw_chevron) } }, grouped = true, onClick = onClick)
 }

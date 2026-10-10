@@ -28,6 +28,7 @@ import com.karewinkcloud.agentweb.client.ui.*
 
 class MainActivity : ComponentActivity() {
     private lateinit var settings: SettingsViewModel
+    private val listCacheDir by lazy { java.io.File(noBackupFilesDir, "conversation-list") }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -42,25 +43,27 @@ class MainActivity : ComponentActivity() {
             val connection = ServerConnection(preferences.origin, authentication.revision,
                 phase == SignInPhase.SIGNING_OUT || (!settings.localTesting() && authentication.origin != preferences.origin))
             val chat: AgentViewModel = viewModel(factory = factory {
-                AgentViewModel(HttpAgentRepository(preferences.origin, settings.store), preferences.choice,
+                AgentViewModel(HttpAgentRepository(preferences.origin, settings.store, listCacheDir = listCacheDir), preferences.choice,
                     connection.signInRequired, settings.store::saveChoice).also { it.appliedConnection = connection }
             })
+            LaunchedEffect(chat) { chat.preloadClaudeSessions() }
             LaunchedEffect(connection) {
                 // The epoch survives Activity recreation along with the chat ViewModel.
                 if (chat.appliedConnection != connection) {
                     chat.appliedConnection = connection
-                    chat.changeServer(HttpAgentRepository(connection.origin, settings.store), settings.store.load().choice, connection.signInRequired)
+                    chat.changeServer(HttpAgentRepository(connection.origin, settings.store, listCacheDir = listCacheDir), settings.store.load().choice, connection.signInRequired)
                 }
             }
             val studio: ComfyViewModel = viewModel(factory = factory {
-                ComfyViewModel(HttpComfyRepository(HttpAgentRepository(connection.origin, settings.store)),
+                ComfyViewModel(HttpComfyRepository(HttpAgentRepository(connection.origin, settings.store, listCacheDir = listCacheDir)),
                     AndroidComfyPendingStore(applicationContext, connection.origin, settings.store),
                     java.io.File(cacheDir, "comfy-output"), connection.signInRequired).also { it.appliedConnection = connection }
             })
+            LaunchedEffect(studio) { studio.preload() }
             LaunchedEffect(connection) {
                 if (studio.appliedConnection != connection) {
                     studio.appliedConnection = connection
-                    studio.changeConnection(HttpComfyRepository(HttpAgentRepository(connection.origin, settings.store)),
+                    studio.changeConnection(HttpComfyRepository(HttpAgentRepository(connection.origin, settings.store, listCacheDir = listCacheDir)),
                         AndroidComfyPendingStore(applicationContext, connection.origin, settings.store), connection.signInRequired)
                 }
             }
@@ -79,11 +82,16 @@ class MainActivity : ComponentActivity() {
             }
             val passkey = remember(this) { AndroidPasskeyProvider(this) }
             val chatMedia = remember(connection) { ChatMediaStore(HttpAgentRepository(connection.origin, settings.store), cacheDir) }
-            CompositionLocalProvider(LocalContext provides localized, LocalConfiguration provides localized.resources.configuration, LocalActivity provides this,
+            CompositionLocalProvider(LocalContext provides localized, LocalConfiguration provides localized.resources.configuration,
+                LocalAppResources provides localized.resources, LocalActivity provides this,
                 // The localized context no longer resolves to this Activity, so the owners that
                 // Compose would otherwise find through LocalContext must be provided explicitly.
                 LocalActivityResultRegistryOwner provides this, LocalOnBackPressedDispatcherOwner provides this) {
-                AgentWebTheme(preferences.theme) { ChatMediaHost(chatMedia, ::openBrowser) { AgentWebApp(chat, settings, studio, ::openBrowser, passkey) } }
+                AgentWebTheme(preferences.theme) {
+                    ChatMediaHost(chatMedia, { url -> openBrowser(url, chat::browserUnavailable) }) {
+                        AgentWebApp(chat, settings, studio, { url -> openBrowser(url, settings::browserUnavailable) }, passkey)
+                    }
+                }
             }
         }
     }
@@ -102,13 +110,19 @@ class MainActivity : ComponentActivity() {
         if (callback != null) settings.callback(callback)
     }
 
-    private fun openBrowser(url: String) {
+    private fun openBrowser(url: String, onUnavailable: () -> Unit) {
+        val uri = Uri.parse(url)
         try {
             val browser = CustomTabsClient.getPackageName(this, listOf("com.android.chrome"))
-                ?: return settings.browserUnavailable()
-            CustomTabsIntent.Builder().setShowTitle(true).build().apply { intent.setPackage(browser) }
-                .launchUrl(this, Uri.parse(url))
-        } catch (_: Exception) { settings.browserUnavailable() }
+            if (browser != null) {
+                CustomTabsIntent.Builder().setShowTitle(true).build().apply { intent.setPackage(browser) }
+                    .launchUrl(this, uri)
+                return
+            }
+        } catch (_: Exception) { /* Try the default browser below. */ }
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
+        } catch (_: Exception) { onUnavailable() }
     }
 }
 

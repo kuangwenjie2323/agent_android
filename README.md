@@ -21,9 +21,11 @@ Install JDK 21 and Android SDK Platform 36 with Build Tools 36.1.0. Set `JAVA_HO
 ./gradlew :native:testDebugUnitTest :native:assembleDebug :native:lintDebug
 ```
 
+GitHub Actions runs the same command on every push and pull request (`.github/workflows/android.yml`) and uploads the debug APK and test and lint reports as workflow artifacts.
+
 The debug APK is `native/build/outputs/apk/debug/native-debug.apk`. Install it with `adb install -r native/build/outputs/apk/debug/native-debug.apk`.
 
-The Gradle wrapper uses Gradle 9.8.0 and the Android Gradle Plugin is pinned to 9.4.1. Initial builds need access to Google Maven and Maven Central. If your network requires a proxy, configure Gradle or pass its proxy properties for that build.
+The Gradle wrapper uses Gradle 9.8.0. Plugin and library versions, including the Android Gradle Plugin and Credential Manager, are pinned in [`gradle/libs.versions.toml`](gradle/libs.versions.toml). Initial builds need access to Google Maven and Maven Central. If your network requires a proxy, configure Gradle or pass its proxy properties for that build.
 
 ## Release signing
 

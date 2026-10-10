@@ -114,4 +114,14 @@ class SettingsViewModelTest {
         vm.signIn("http://evil.test", "system") { browser = it }; runCurrent()
         assertNull(browser); assertNotNull(vm.error.value)
     }
+    @Test fun unavailableBrowserKeepsSettingsErrorAndRejectsPendingSignInCallback() = runTest(dispatcher) {
+        begin(); runCurrent(); val pendingCallback = callback()
+        assertEquals(SignInPhase.BROWSER, vm.phase.value)
+        vm.browserUnavailable()
+        assertEquals("Could not open a browser. Install or enable a browser and try again.", vm.error.value)
+        assertEquals(SignInPhase.IDLE, vm.phase.value)
+        vm.callback(pendingCallback); runCurrent()
+        assertEquals(0, exchangeCalls)
+        assertFalse(vm.authentication.value.signedIn)
+    }
 }

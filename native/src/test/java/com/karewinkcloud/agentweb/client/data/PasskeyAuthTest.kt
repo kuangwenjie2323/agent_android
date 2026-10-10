@@ -6,6 +6,7 @@ import kotlinx.serialization.json.*
 import okhttp3.mockwebserver.*
 import org.junit.*
 import org.junit.Assert.*
+import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 
 internal val authenticationJson = """{"id":"credential-id","rawId":"cmF3","type":"public-key","response":{"clientDataJSON":"Y2xpZW50","authenticatorData":"YXV0aA","signature":"c2ln","userHandle":null},"clientExtensionResults":{}}"""
@@ -15,7 +16,13 @@ class PasskeyAuthTest {
     private lateinit var server: MockWebServer
     private lateinit var api: HttpNativeAuthApi
     private lateinit var origin: String
-    @Before fun setup() { server = MockWebServer().also { it.start() }; origin = server.url("/").toString().trimEnd('/'); api = HttpNativeAuthApi(clock = { 1000 }) }
+    // Pin to one loopback address: where "localhost" also resolves to ::1 (as on CI runners),
+    // OkHttp would try the other address after a failed call, and with connection retries
+    // disabled it would not fall back.
+    @Before fun setup() {
+        server = MockWebServer().also { it.start(InetAddress.getByName("127.0.0.1"), 0) }
+        origin = "http://127.0.0.1:${server.port}"; api = HttpNativeAuthApi(clock = { 1000 })
+    }
     @After fun close() { server.shutdown() }
     private fun response(body: String, status: Int = 200) = MockResponse().setResponseCode(status).setHeader("Content-Type", "application/json").setBody(body)
     private fun next() = server.takeRequest(2, TimeUnit.SECONDS)!!

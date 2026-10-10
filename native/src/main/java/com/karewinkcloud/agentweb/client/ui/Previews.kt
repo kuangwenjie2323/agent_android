@@ -146,3 +146,38 @@ private fun RichChatPreview() {
         }
     }
 }
+
+// Compact-width and large-type review fixtures. These are previews, not device screenshots.
+@Preview(name = "States · compact Chinese", locale = "zh", widthDp = 320, heightDp = 900, showBackground = true)
+@Preview(name = "States · dark English", locale = "en", widthDp = 360, heightDp = 900, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Preview(name = "States · large type", locale = "zh", widthDp = 360, heightDp = 1100, fontScale = 1.5f)
+@Composable
+private fun PageStatesPreview() {
+    AgentWebTheme("system") {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                ScreenTitle(tr(S.conversations), tr(S.conversations_subtitle))
+                EmptyState(R.drawable.aw_search, tr(S.no_matches), tr(S.search_hint), tr(S.clear_search), {})
+                LoadingState(tr(S.loading_chat))
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    StatusNotice(tr(S.reconnecting), busy = true)
+                    ErrorBlock(ClientError("Cannot connect right now."), {}, tr(S.retry))
+                }
+                AppNavigation(AppTab.CONVERSATIONS) {}
+            }
+        }
+    }
+}
+
+@Preview(name = "Composer · short viewport", locale = "zh", widthDp = 320, heightDp = 280, showBackground = true)
+@Preview(name = "Composer · large type", locale = "en", widthDp = 360, heightDp = 300, fontScale = 1.5f)
+@Composable
+private fun CompactComposerPreview() {
+    AgentWebTheme("system") {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column {
+                CreationComposer(ComfyState(initialized = true), TextFieldValue(""), {}, { _, _ -> }, {}, {}, maxHeight = 160.dp)
+            }
+        }
+    }
+}

@@ -45,6 +45,29 @@ class AgentViewModelTest {
         vm.open(conversation("one")); runCurrent()
         assertEquals("first draft", vm.state.value.chat!!.draft)
     }
+    @Test fun browserFailureKeepsChatDraftAndRequestErrorAndCanBeDismissed() = modelTest {
+        vm.open(conversation("one")); runCurrent(); vm.draft("unsent draft")
+        vm.attachmentFailure(vm.attachmentOwner(), "Attachment could not be read")
+        val before = vm.state.value.chat!!
+        vm.browserUnavailable()
+        val failed = vm.state.value.chat!!
+        assertEquals("Could not open a browser. Install or enable a browser and try again.", failed.browserError!!.message)
+        assertEquals(before.error, failed.error)
+        assertEquals(before.draft, failed.draft)
+        assertEquals(before.messages, failed.messages)
+        assertEquals(0, repo.sendCalls)
+        vm.dismissBrowserError()
+        assertNull(vm.state.value.chat!!.browserError)
+        assertEquals(before, vm.state.value.chat)
+    }
+    @Test fun browserFailureDoesNotFollowNavigationToAnotherChat() = modelTest {
+        vm.open(conversation("one")); runCurrent(); vm.browserUnavailable()
+        vm.open(conversation("two")); runCurrent()
+        assertNull(vm.state.value.chat!!.browserError)
+        vm.back(); runCurrent(); vm.browserUnavailable()
+        assertNull(vm.state.value.chat)
+        assertNull(vm.state.value.error)
+    }
     @Test fun attachmentsKeepDraftOwnershipAndStalePickerCannotCrossNavigation() = modelTest {
         vm.open(conversation("one")); runCurrent()
         val file = encodeAttachment("a.txt", "text/plain", byteArrayOf(1), AttachmentKind.FILE)
@@ -67,6 +90,23 @@ class AgentViewModelTest {
         assertEquals(1, repo.sendCalls)
         assertTrue(vm.state.value.chat!!.attachments.isEmpty())
         assertEquals(file.name, vm.state.value.chat!!.messages.last().blocks.filterIsInstance<ChatBlock.Media>().single().items.single().name)
+    }
+    @Test fun photosFollowTheSelectedModelNotTheWholeProvider() = modelTest {
+        repo.models = listOf("model", "pro"); repo.images = mapOf("model" to true, "pro" to false)
+        vm.open(conversation("one")); runCurrent()
+        val image = encodeAttachment("a.png", "image/png", byteArrayOf(1), AttachmentKind.IMAGE)
+        assertTrue(vm.addAttachments(vm.attachmentOwner(), listOf(image)))
+        vm.removeAttachment(image.id)
+        vm.choose(ModelChoice("a", "pro")); runCurrent()
+        assertFalse(vm.addAttachments(vm.attachmentOwner(), listOf(image)))
+        assertTrue(vm.state.value.chat!!.error!!.message.contains("不支持图片"))
+        val parsed = Agent.from(buildJsonObject {
+            put("id", "deepseek"); put("supportsImages", true)
+            putJsonObject("modelSupportsImages") { put("deepseek-flash", true); put("deepseek-v4-pro", false) }
+        })
+        assertTrue(parsed.readsImages("deepseek-flash")); assertFalse(parsed.readsImages("deepseek-v4-pro"))
+        assertTrue(parsed.readsImages("unlisted"))  // older servers: the provider-wide flag
+        assertFalse(Agent.from(buildJsonObject { put("id", "grok") }).readsImages("grok-4.5"))
     }
     @Test fun pickerReturnSurvivesForegroundReloadAndReadingKeepsSendDisabled() = modelTest {
         vm.open(conversation("one")); runCurrent()
@@ -121,6 +161,19 @@ class AgentViewModelTest {
         vm.reload(); runCurrent(); vm.selectProject(null); runCurrent()
         assertEquals(1, repo.createCalls)
     }
+    @Test fun newChatKeepsSelectedEffortAndPermissionsForFirstSend() = modelTest {
+        repo.models = listOf("model", "next")
+        val choice = ModelChoice("a", "next", "high", "plan")
+        val blank = conversation("new").copy(choice = ModelChoice("a", "next"))
+        repo.create = { blank }
+        repo.getDetail = { _, _ -> detail("new").copy(conversation = blank) }
+        runCurrent()
+        vm.choose(choice)
+        vm.newChat(); runCurrent()
+        assertEquals(choice, vm.state.value.choice)
+        vm.draft("hello"); vm.send(); runCurrent()
+        assertEquals(choice, repo.followCalls.last { it.third != null }.third!!.choice)
+    }
     @Test fun newChatIsSingleFlightAndCannotHijackLaterNavigation() = modelTest {
         runCurrent()
         val pending = CompletableDeferred<Conversation>()
@@ -145,6 +198,64 @@ class AgentViewModelTest {
         assertEquals(1, repo.sendCalls)
         assertEquals("", vm.state.value.chat!!.draft)
     }
+    @Test fun droppedSendIsSettledOnceItsMessageIsSavedAndALaterTurnOwnsTheStream() = modelTest {
+        vm.open(conversation("one")); runCurrent()
+        repo.followFlow = { _, _, send, _ -> flow {
+            if (send != null) throw IOException("stream dropped mid-turn")
+            throw StreamProtocolException("The run changed. Reloading saved history is required.")
+        } }
+        vm.draft("do work"); vm.send(); runCurrent()
+        assertFalse(vm.state.value.chat!!.canSend)
+        // The server finished that turn (and a queued follow-up); nothing runs now.
+        repo.getDetail = { id, _ -> ConversationDetail(conversation(id), listOf(
+            ChatMessage("5", "user", listOf(ChatBlock.Text("do work"))), message("6")), emptyList(), false, 0, null) }
+        val follows = repo.followCalls.size
+        vm.reload(); runCurrent()
+        val chat = vm.state.value.chat!!
+        assertTrue(chat.canSend)
+        assertNull(chat.live)
+        assertNull(chat.error)
+        assertEquals(follows, repo.followCalls.size)  // the stale run is not followed again
+    }
+    @Test fun failedReconcileStopsSpinning() = modelTest {
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        repo.followFlow = { _, _, _, _ -> flow { throw StreamProtocolException("The run changed.") } }
+        vm.open(conversation("one", true)); runCurrent()
+        val chat = vm.state.value.chat!!
+        assertEquals("stream_mismatch", chat.error?.code)
+        assertNull(chat.live)
+        assertNull(chat.connection)
+    }
+    @Test fun reopeningShowsCachedHistoryWhileRefreshing() = modelTest {
+        repo.getDetail = { id, _ -> ConversationDetail(conversation(id), listOf(message("1"), message("2")), emptyList(), false, 0, null) }
+        vm.open(conversation("one")); runCurrent()
+        vm.back(); runCurrent()
+        val gate = CompletableDeferred<Unit>()
+        repo.getDetail = { id, _ -> gate.await(); ConversationDetail(conversation(id), listOf(message("1"), message("2"), message("3")), emptyList(), false, 0, null) }
+        vm.open(conversation("one")); runCurrent()
+        assertFalse(vm.state.value.chat!!.loading)
+        assertEquals(listOf("1", "2"), vm.state.value.chat!!.messages.map { it.id })
+        gate.complete(Unit); runCurrent()
+        assertEquals(listOf("1", "2", "3"), vm.state.value.chat!!.messages.map { it.id })
+    }
+    @Test fun coldStartShowsSavedListAndReusesItsPreviews() = modelTest {
+        val fresh = FakeRepository()
+        val saved = conversation("one").copy(updatedAt = 10, messageCount = 4, preview = "last words")
+        fresh.cached = listOf(saved)
+        fresh.list = listOf(conversation("one").copy(updatedAt = 10), conversation("two").copy(updatedAt = 20))
+        val gate = CompletableDeferred<Unit>(); fresh.listGate = gate
+        val cold = AgentViewModel(fresh, ModelChoice("a", "model")) { }
+        val holder = ViewModelStore().apply { put("cold", cold) }
+        try {
+            runCurrent()
+            assertEquals(listOf(saved), cold.state.value.conversations)  // shown before the network answers
+            gate.complete(Unit); runCurrent()
+            assertEquals(listOf("one", "two"), cold.state.value.conversations.map { it.id })
+            assertEquals("last words", cold.state.value.conversations.first().preview)
+            assertEquals(listOf("two"), fresh.previewCalls)  // the unchanged row is not fetched again
+            assertEquals(listOf("one", "two"), fresh.saved.last().map { it.id })
+        } finally { holder.clear() }
+    }
     @Test fun preStreamNegotiatedRejectionRestoresDraft() = modelTest {
         vm.open(conversation("one")); runCurrent()
         repo.followFlow = { _, _, _, _ -> flow { throw ApiException(409, ClientError("Incompatible protocol"), directSendRejected = true) } }
@@ -152,6 +263,27 @@ class AgentViewModelTest {
         assertEquals("keep this", vm.state.value.chat!!.draft)
         assertTrue(vm.state.value.chat!!.canSend)
         assertTrue(vm.state.value.chat!!.messages.isEmpty())
+    }
+    @Test fun quickRepliesFollowTheLatestAnswerAndSendOnTap() = modelTest {
+        repo.getDetail = { id, _ -> detail(id).copy(messages = listOf(ChatMessage("u1", "user", listOf(ChatBlock.Text("问颜色"))),
+            ChatMessage("a1", "assistant", listOf(ChatBlock.Text("选了蓝色"))))) }
+        vm.open(conversation("one")); runCurrent()
+        vm.loadSuggestions(); runCurrent()
+        assertEquals(listOf("改成红色", "应用到配置"), vm.state.value.chat!!.suggestions)
+        vm.sendSuggestion("改成红色"); runCurrent()
+        assertEquals("改成红色", repo.followCalls.last { it.third != null }.third!!.text)
+        assertTrue(vm.state.value.chat!!.suggestions.isEmpty())
+    }
+    @Test fun messageSentWhileWorkingSteersTheTurnOrQueuesWhenItCannot() = modelTest {
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        repo.admit = { buildJsonObject { put("pending", true) } }
+        vm.open(conversation("one", true)); runCurrent()
+        vm.draft("also check B"); vm.steer(); runCurrent()
+        assertEquals(listOf("also check B"), repo.steerCalls); assertTrue(repo.queueCalls.isEmpty())
+        assertEquals("", vm.state.value.chat!!.draft)
+        repo.steerAccepts = false  // the turn is finishing: the message waits for the next turn instead
+        vm.draft("next step"); vm.steer(); runCurrent()
+        assertEquals("next step", repo.queueCalls.single().text)
     }
     @Test fun queueCheckReusesEntireRequestAndNeverClearsNewDraft() = modelTest {
         repo.getDetail = { id, _ -> detail(id, running = true) }
@@ -350,6 +482,25 @@ class AgentViewModelTest {
         assertEquals(AppTab.SETTINGS, observed.last().tab)
     }
 
+    @Test fun reenteringARunningChatContinuesTheReplyInsteadOfReplayingIt() = modelTest {
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        repo.followFlow = { id, run, _, previous -> flow {
+            emit(TurnSnapshot(previous?.takeIf { it.lastSequence > 0 } ?: TurnState(id, run!!, 3, listOf(ChatBlock.Text("first part")), startedAt = 1), Connection.LIVE))
+            awaitCancellation()
+        } }
+        vm.open(conversation("one", true)); runCurrent(); advanceTimeBy(1000); runCurrent()
+        assertEquals(0L, repo.previousTurns.last()?.lastSequence ?: 0L)  // the first visit follows from the start
+        vm.back(); runCurrent()
+        vm.open(conversation("one", true))
+        assertEquals("first part", vm.state.value.chat!!.live!!.text)  // shown at once, not rebuilt
+        runCurrent()
+        val resumed = repo.previousTurns.last()!!
+        assertEquals(3L, resumed.lastSequence); assertEquals(CONTROL, resumed.runId)  // continues after event 3
+        // A different run on return starts fresh rather than reusing the old reply.
+        vm.back(); runCurrent()
+        vm.open(conversation("one", true).copy(controlId = "fedcba0987654321fedcba0987654321"))
+        assertNull(vm.state.value.chat!!.live!!.text.takeIf { it.isNotEmpty() })
+    }
     @Test fun disposedActivityFrameClockDoesNotCancelTheFollower() = modelTest {
         vm.frameClock = object : androidx.compose.runtime.MonotonicFrameClock {
             override suspend fun <R> withFrameNanos(onFrame: (Long) -> R): R = throw CancellationException("disposed clock")
@@ -499,6 +650,7 @@ class AgentViewModelTest {
         var readCalls = 0
         var list = emptyList<Conversation>()
         var models = listOf("model")
+        var images = emptyMap<String, Boolean>()
         var projectList = emptyList<Project>()
         var createdProject: String? = null
         override suspend fun projects() = projectList
@@ -523,8 +675,15 @@ class AgentViewModelTest {
         val stopCalls = mutableListOf<Pair<String, String>>()
         val queueCalls = mutableListOf<QueueRequest>()
         val resumeCalls = mutableListOf<Pair<String, String>>()
-        override suspend fun agents(): List<Agent> { readCalls++; return listOf(Agent("a", "Agent", models, emptyMap(), "model", true, true)) }
-        override suspend fun conversations(): List<Conversation> { readCalls++; return list }
+        override suspend fun agents(): List<Agent> { readCalls++; return listOf(Agent("a", "Agent", models, emptyMap(), "model", true, true, modelImages = images)) }
+        override suspend fun conversations(): List<Conversation> { readCalls++; listGate?.await(); return list }
+        var listGate: CompletableDeferred<Unit>? = null
+        var cached = emptyList<Conversation>()
+        val saved = mutableListOf<List<Conversation>>()
+        val previewCalls = mutableListOf<String>()
+        override suspend fun cachedConversations() = cached
+        override suspend fun saveConversations(rows: List<Conversation>) { saved += rows }
+        override suspend fun preview(id: String): ConversationDetail { previewCalls += id; return detail(id, null) }
         override suspend fun createConversation(choice: ModelChoice): Conversation { createCalls++; return create() }
         override suspend fun detail(id: String, cursor: String?) = getDetail(id, cursor)
         override fun follow(conversationId: String, runId: String?, send: SendRequest?, previous: TurnState?): Flow<TurnSnapshot> {
@@ -538,6 +697,11 @@ class AgentViewModelTest {
             return buildJsonObject { put("committed", true); put("status", "running") }
         }
         override suspend fun queue(request: QueueRequest): JsonObject { queueCalls += request; return admit(request) }
+        var suggestionItems = listOf("改成红色", "应用到配置")
+        override suspend fun suggestions(conversationId: String) = "a1" to suggestionItems
+        val steerCalls = mutableListOf<String>()
+        var steerAccepts = true
+        override suspend fun steer(conversationId: String, controlId: String, message: String): Boolean { steerCalls += message; return steerAccepts }
         override suspend fun resume(conversationId: String, headId: String): JsonObject {
             resumeCalls += conversationId to headId
             return resumeCall(conversationId, headId)

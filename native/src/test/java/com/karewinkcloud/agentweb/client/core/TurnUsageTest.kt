@@ -42,4 +42,12 @@ class TurnUsageTest {
         state = TurnReducer.reduce(state, event(3, "done", """{"conversationId":"chat","duration_ms":80}"""), 30)
         assertEquals(TurnUsage(10, 20, durationMs = 80), state.usage)
     }
+    @Test fun promptTokensIncludeClaudeCacheReadsAndWrites() {
+        val usage = TurnUsage.from(buildJsonObject {
+            put("input_tokens", 18); put("output_tokens", 345)
+            put("cache_read_input_tokens", 26011); put("cache_creation_input_tokens", 7329)
+        })!!
+        assertEquals(33358L, usage.promptTokens)
+        assertEquals(31107L, TurnUsage(inputTokens = 31107).promptTokens)
+    }
 }

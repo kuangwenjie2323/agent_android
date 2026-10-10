@@ -18,6 +18,39 @@ class TurnReducerTest {
     }
     private val initial = TurnState("conversation", "run")
 
+    @Test fun questionCardFillsInWithTheAnswerLiveAndInHistory() {
+        var state = initial
+        val question = StreamEvent.from(SseFrame("run:1", """{"type":"question","seq":1,"id":"q1","question":"哪个颜色？","options":["红色","蓝色"],"multi":false}"""))
+        state = TurnReducer.reduce(state, question, 0)
+        assertEquals(ChatBlock.Question("q1", "哪个颜色？", listOf("红色", "蓝色")), state.blocks.single())
+        state = TurnReducer.reduce(state, event(2, "answer", "id" to "q1", "content" to "蓝色"), 1)
+        assertEquals("蓝色", (state.blocks.single() as ChatBlock.Question).answer)
+        val history = historyBlocks(buildJsonObject { putJsonArray("blocks") { addJsonObject {
+            put("type", "question"); put("id", "q1"); put("question", "哪个颜色？"); put("multi", false); put("answer", "蓝色")
+            putJsonArray("options") { add("红色"); add("蓝色") } } } })
+        assertEquals(ChatBlock.Question("q1", "哪个颜色？", listOf("红色", "蓝色"), answer = "蓝色"), history.single())
+    }
+    @Test fun aStopTheUserAskedForIsANoticeNotAnError() {
+        var state = initial
+        val events = listOf(
+            event(1, "tool_call", "id" to "t1", "name" to "Bash", "input" to "{}"),
+            event(2, "tool_result", "id" to "t1", "content" to "Exit code 137", "is_error" to true),
+            event(3, "error", "code" to "interrupted", "content" to "stopped by user", "retryable" to true),
+            event(4, "done", "conversationId" to "conversation"))
+        events.forEachIndexed { i, e -> state = TurnReducer.reduce(state, e, i.toLong()) }
+        assertEquals(StepStatus.INTERRUPTED, (state.blocks.first() as ChatBlock.Tool).status)
+        assertEquals(ChatBlock.Notice(STOPPED_NOTICE), state.blocks.last())
+        assertTrue(state.blocks.none { it is ChatBlock.Error })
+        val history = historyBlocks(buildJsonObject {
+            put("status", "interrupted")
+            putJsonArray("blocks") {
+                addJsonObject { put("type", "tool"); put("id", "t1"); put("name", "Bash"); put("result", "Exit code 143"); put("is_error", true) }
+                addJsonObject { put("type", "error"); put("code", "interrupted"); put("content", "stopped by user") }
+            }
+        })
+        assertEquals(listOf(StepStatus.INTERRUPTED), history.filterIsInstance<ChatBlock.Tool>().map { it.status })
+        assertEquals(1, history.count { it == ChatBlock.Notice(STOPPED_NOTICE) }); assertTrue(history.none { it is ChatBlock.Error })
+    }
     @Test fun streamingTextAccumulatesWithoutLosingCjk() {
         var state = initial
         listOf("你", "好", "\n", "**AgentWeb**").forEachIndexed { i, text ->

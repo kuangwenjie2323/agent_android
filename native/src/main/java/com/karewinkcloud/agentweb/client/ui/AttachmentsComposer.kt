@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -29,7 +30,11 @@ internal fun AttachmentChips(chat: ChatState, vm: AgentViewModel) {
             Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow) {
                 Row(Modifier.padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (attachment.kind == AttachmentKind.IMAGE) ChatMediaCard(attachment.media(), thumbnail = true)
-                    else Text(attachment.name, Modifier.widthIn(max = 160.dp), maxLines = 2, style = MaterialTheme.typography.bodySmall)
+                    else Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        AppIcon(R.drawable.aw_file)
+                        Text(attachment.name, Modifier.widthIn(max = 160.dp), maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.MiddleEllipsis, style = MaterialTheme.typography.bodySmall)
+                    }
                     ActionIcon(R.drawable.aw_close, tr(S.remove_attachment, attachment.name)) { vm.removeAttachment(attachment.id) }
                 }
             }
@@ -66,23 +71,33 @@ internal fun AttachmentPicker(chat: ChatState, supportsImages: Boolean, vm: Agen
     }
     Box {
         ActionIcon(R.drawable.aw_plus, tr(S.add_attachment), !chat.attachmentLoading && chat.attachments.size < MAX_ATTACHMENTS) { expanded = true }
-        DropdownMenu(expanded, { expanded = false }) {
-            if (supportsImages) {
-                DropdownMenuItem(text = { Text(tr(S.photos)) }, onClick = {
-                    expanded = false; pickerOwner = vm.attachmentOwner()
-                    try { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
-                    catch (_: Exception) { vm.attachmentFailure(pickerOwner, "无法打开照片选择器") }
-                })
-                DropdownMenuItem(text = { Text(tr(S.take_photo)) }, onClick = {
-                    expanded = false; pickerOwner = vm.attachmentOwner()
-                    try {
-                        val file = File(File(context.cacheDir, "chat-camera").apply { mkdirs() }, "${newControlId()}.jpg")
-                        cameraPath = file.absolutePath
-                        camera.launch(FileProvider.getUriForFile(context, "${context.packageName}.comfy-output", file))
-                    } catch (_: Exception) { cameraPath?.let { File(it).delete() }; cameraPath = null; vm.attachmentFailure(pickerOwner, "无法打开相机") }
-                })
+        DropdownMenu(expanded, { expanded = false }, modifier = Modifier.widthIn(min = 224.dp),
+            shape = MaterialTheme.shapes.large, containerColor = MaterialTheme.colorScheme.surface,
+            tonalElevation = 0.dp, shadowElevation = 8.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+            // Always listed so the menu looks the same everywhere; a text-only model greys them out and says why.
+            @Composable fun imageItemText(label: Int) = Column {
+                Text(tr(label), style = MaterialTheme.typography.bodyMedium)
+                if (!supportsImages) Text(tr(S.model_cannot_read_images), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            DropdownMenuItem(text = { Text(tr(S.files)) }, onClick = {
+            DropdownMenuItem(text = { imageItemText(S.photos) }, enabled = supportsImages,
+                leadingIcon = { AppIcon(R.drawable.aw_photos) }, onClick = {
+                expanded = false; pickerOwner = vm.attachmentOwner()
+                try { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+                catch (_: Exception) { vm.attachmentFailure(pickerOwner, "无法打开照片选择器") }
+            })
+            DropdownMenuItem(text = { imageItemText(S.take_photo) }, enabled = supportsImages,
+                leadingIcon = { AppIcon(R.drawable.aw_camera) }, onClick = {
+                expanded = false; pickerOwner = vm.attachmentOwner()
+                try {
+                    val file = File(File(context.cacheDir, "chat-camera").apply { mkdirs() }, "${newControlId()}.jpg")
+                    cameraPath = file.absolutePath
+                    camera.launch(FileProvider.getUriForFile(context, "${context.packageName}.comfy-output", file))
+                } catch (_: Exception) { cameraPath?.let { File(it).delete() }; cameraPath = null; vm.attachmentFailure(pickerOwner, "无法打开相机") }
+            })
+            DropdownMenuItem(text = { Text(tr(S.files), style = MaterialTheme.typography.bodyMedium) },
+                leadingIcon = { AppIcon(R.drawable.aw_file) }, onClick = {
                 expanded = false; pickerOwner = vm.attachmentOwner()
                 try { files.launch(arrayOf("*/*")) } catch (_: Exception) { vm.attachmentFailure(pickerOwner, "无法打开文件选择器") }
             })

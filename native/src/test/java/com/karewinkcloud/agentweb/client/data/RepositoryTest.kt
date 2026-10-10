@@ -113,7 +113,7 @@ class RepositoryTest {
         val req = next()
         assertEquals("1.0", req.getHeader("AgentWeb-Protocol-Min"))
         assertEquals("1.0", req.getHeader("AgentWeb-Protocol-Max"))
-        assertEquals("android/0.5.0", req.getHeader("AgentWeb-Client"))
+        assertEquals("android/0.7.0", req.getHeader("AgentWeb-Client"))
         assertEquals("Bearer test-token", req.getHeader("Authorization"))
         assertEquals("close", req.getHeader("Connection"))
     }
@@ -267,7 +267,7 @@ class RepositoryTest {
     @Test fun historyPagingUsesFortyAndExclusiveCursor() = runBlocking {
         server.enqueue(json("""{"conversation":{"id":"conversation","title":"Chat","agent":"agent","model":"model","pinned":1,"active":false,"project":{"name":"Project"}},"messages":[],"queued":[],"queuePaused":true,"messagePage":{"olderCount":41,"nextCursor":"123","limit":40,"compactionCount":0}}"""))
         val detail = repo.detail("conversation", "456")
-        assertEquals("/api/chat/conversations/conversation?messageLimit=40&messageCursor=456", next().path)
+        assertEquals("/api/chat/conversations/conversation?compact=1&messageLimit=40&messageCursor=456", next().path)
         assertTrue(detail.conversation.pinned)
         assertTrue(detail.queuePaused)
         assertEquals("Project", detail.conversation.project)

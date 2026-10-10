@@ -196,7 +196,10 @@ private fun TableView(table: TableBlock) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(12.dp)) {
         Column {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton({ clipboard.setText(AnnotatedString(table.tsv())) }, Modifier.heightIn(min = 48.dp)) { Text(tr(S.copy_table)) }
+                TextButton({ clipboard.setText(AnnotatedString(table.tsv())) }, Modifier.heightIn(min = 40.dp), colors = quietButton()) {
+                    Box(Modifier.size(16.dp)) { AppIcon(R.drawable.aw_copy) }; Spacer(Modifier.width(4.dp))
+                    Text(tr(S.copy_table), style = MaterialTheme.typography.labelMedium)
+                }
             }
             // Up to three columns share the bubble width; wider tables keep 180 dp cells and scroll.
             BoxWithConstraints { val cellWidth = table.header.size.coerceAtLeast(1).let { n -> if (n <= 3) maxWidth / n else 180.dp }

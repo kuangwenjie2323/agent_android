@@ -78,8 +78,10 @@ data class StreamEvent(val id: EventId, val type: String, val payload: JsonObjec
                 throw StreamProtocolException("The stream event ID and sequence disagree.")
             }
             val stringFields = when (type) {
-                "text", "thinking", "error", "notice", "queued" -> listOf("content")
+                "text", "thinking", "error", "notice", "queued", "steer" -> listOf("content")
                 "tool_call" -> listOf("id", "name")
+                "question" -> listOf("id", "question")
+                "answer" -> listOf("id", "content")
                 "tool_result" -> listOf("id", "content")
                 "done" -> listOf("conversationId")
                 else -> emptyList()

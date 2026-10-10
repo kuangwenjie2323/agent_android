@@ -78,7 +78,7 @@ class SettingsViewModel(
                 openBrowser(url)
             } catch (e: IllegalArgumentException) { errorState.value = e.message; cancelPending() }
             catch (_: Exception) {
-                errorState.value = "A browser with Custom Tabs is required. Install or enable Chrome and try again."
+                errorState.value = "Could not open a browser. Install or enable a browser and try again."
                 cancelPending()
             } finally { savingState.value = false }
         }
@@ -122,7 +122,7 @@ class SettingsViewModel(
     }
 
     fun browserUnavailable() {
-        errorState.value = "A browser with Custom Tabs is required. Install or enable Chrome and try again."
+        errorState.value = "Could not open a browser. Install or enable a browser and try again."
         cancelPending()
     }
 
