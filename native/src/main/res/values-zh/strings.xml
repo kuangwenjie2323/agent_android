@@ -33,7 +33,8 @@
     <string name="reconnect">重新连接／刷新历史</string>
     <string name="message">消息</string>
     <string name="message_hint">输入消息…</string>
-    <string name="followup_hint">补充消息，加入队列…</string>
+    <string name="followup_hint">补充消息，它下一步就会看到…</string>
+    <string name="turn_choosing">等你选择</string>
     <string name="send">发送</string>
     <string name="stop">停止回复</string>
     <string name="queue">加入队列</string>
@@ -310,6 +311,11 @@
     <string name="photos">照片</string>
     <string name="take_photo">拍照</string>
     <string name="files">文件</string>
+    <string name="question_hint">点一个选项，或者直接在下面输入框写你的答案。</string>
+    <string name="question_confirm">确定</string>
+    <string name="question_answered">你选了：%1$s</string>
+    <string name="question_answered_custom">你回答：%1$s</string>
+    <string name="question_unanswered">没有回答</string>
     <string name="turn_stopped">已停止</string>
     <string name="steer_label">运行中插话</string>
     <string name="steer_send">插话（下一步就会看到）</string>

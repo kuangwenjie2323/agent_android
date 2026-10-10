@@ -1,5 +1,8 @@
 package com.karewinkcloud.agentweb.client.core
 
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+
 data class TurnState(
     val conversationId: String, val runId: String, val lastSequence: Long = 0,
     val blocks: List<ChatBlock> = emptyList(), val done: Boolean = false,
@@ -71,6 +74,12 @@ object TurnReducer {
             } else blocks += ChatBlock.Error(ClientError(content(), j.string("code"), j.boolean("retryable")))
             "notice", "queued" -> blocks += ChatBlock.Notice(content())
             "steer" -> blocks += ChatBlock.Steer(content())
+            "question" -> blocks += ChatBlock.Question(j.string("id").orEmpty(), j.string("question").orEmpty(),
+                j.array("options").mapNotNull { (it as? JsonPrimitive)?.contentOrNull }, j.boolean("multi") == true)
+            "answer" -> {
+                val index = blocks.indexOfLast { it is ChatBlock.Question && it.id == j.string("id") }
+                if (index >= 0) blocks[index] = (blocks[index] as ChatBlock.Question).copy(answer = content())
+            }
             "artifacts" -> {
                 val media = j.objects("items").ifEmpty { j.objects("images") }.map(MessageMedia::from)
                 // User uploads already live in the optimistic/history user bubble.

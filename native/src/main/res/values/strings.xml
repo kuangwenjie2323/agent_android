@@ -34,7 +34,8 @@
     <string name="reconnect">Reconnect / reload history</string>
     <string name="message">Message</string>
     <string name="message_hint">Message…</string>
-    <string name="followup_hint">Write a follow-up…</string>
+    <string name="followup_hint">Add a message; it reads it at its next step…</string>
+    <string name="turn_choosing">Waiting for your choice</string>
     <string name="send">Send</string>
     <string name="stop">Stop response</string>
     <string name="queue">Queue follow-up</string>
@@ -314,6 +315,11 @@
     <string name="photos">Photos</string>
     <string name="take_photo">Take photo</string>
     <string name="files">Files</string>
+    <string name="question_hint">Tap an answer, or type your own in the box below.</string>
+    <string name="question_confirm">Confirm</string>
+    <string name="question_answered">You chose: %1$s</string>
+    <string name="question_answered_custom">You answered: %1$s</string>
+    <string name="question_unanswered">Not answered</string>
     <string name="turn_stopped">Stopped</string>
     <string name="steer_label">Sent while working</string>
     <string name="steer_send">Send to the running turn</string>

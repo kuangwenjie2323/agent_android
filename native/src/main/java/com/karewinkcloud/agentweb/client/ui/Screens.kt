@@ -347,7 +347,8 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
 private fun LiveMessage(vm: AgentViewModel, label: String?, connection: Connection?) {
     val turn by vm.liveTurn.collectAsStateWithLifecycle()
     turn?.let { MessageView(ChatMessage("live-${it.runId}", "assistant", it.blocks, usage = it.usage),
-        live = !it.done || it.revealing, modelLabel = label, turn = it, connection = connection) }
+        live = !it.done || it.revealing, modelLabel = label, turn = it, connection = connection,
+        onAnswer = if (it.done) null else { id, text -> vm.answer(id, text) }) }
 }
 
 @Composable

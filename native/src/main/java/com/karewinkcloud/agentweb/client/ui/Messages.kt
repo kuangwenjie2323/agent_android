@@ -66,7 +66,7 @@ internal fun quietButton() = ButtonDefaults.textButtonColors(contentColor = Mate
 @Composable
 fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String? = null,
     turn: TurnState? = null, connection: Connection? = null, canFork: Boolean = false,
-    onRetry: (() -> Unit)? = null, onEdit: ((String) -> Unit)? = null) {
+    onRetry: (() -> Unit)? = null, onEdit: ((String) -> Unit)? = null, onAnswer: ((String, String) -> Unit)? = null) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(message.id) { mutableStateOf(false) }
     var menu by remember(message.id) { mutableStateOf(false) }
@@ -99,7 +99,7 @@ fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String?
                 }
             } else {
                 (modelLabel ?: message.model)?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                SelectionContainer { BlockContent(message.blocks, live) }
+                SelectionContainer { BlockContent(message.blocks, live, onAnswer) }
                 if (turn != null && !turn.done) WorkingIndicator(turn, connection)
                 else if (!live || turn?.done == true) TurnFooter(message)
                 if (!live) Row(verticalAlignment = Alignment.CenterVertically) {
@@ -131,8 +131,9 @@ fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String?
 }
 
 @Composable
-private fun BlockContent(blocks: List<ChatBlock>, live: Boolean) {
-    val workBlocks = blocks.filter { it is ChatBlock.Tool || it is ChatBlock.Thought }
+private fun BlockContent(blocks: List<ChatBlock>, live: Boolean, onAnswer: ((String, String) -> Unit)? = null) {
+    // The ask_user call is shown as its question card, not again as a work step.
+    val workBlocks = blocks.filter { (it is ChatBlock.Tool && !it.name.endsWith("ask_user")) || it is ChatBlock.Thought }
     val work = remember(workBlocks) { workBlocks }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (work.isNotEmpty()) WorkTrace(work, live, answerStarted = blocks.any { it is ChatBlock.Text && it.content.isNotBlank() })
@@ -142,6 +143,7 @@ private fun BlockContent(blocks: List<ChatBlock>, live: Boolean) {
                 is ChatBlock.Error -> ErrorBlock(block.problem)
                 is ChatBlock.Notice -> Text(localMessage(block.content), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 is ChatBlock.Media -> block.items.forEach { ChatMediaCard(it) }
+                is ChatBlock.Question -> QuestionCard(block, onAnswer)
                 is ChatBlock.Steer -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = MaterialTheme.shapes.large,
                         modifier = Modifier.widthIn(max = 300.dp)) {
@@ -242,5 +244,41 @@ private fun TraceStep(title: String, status: StepStatus, duration: Long?) {
             Text(stepLabel(status), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (duration != null) Text(tr(S.seconds, duration.coerceAtLeast(0) / 1000), style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+/** A choice the agent asked for: tap an option (or type your own answer in the box) and it continues. */
+@Composable
+private fun QuestionCard(block: ChatBlock.Question, onAnswer: ((String, String) -> Unit)?) {
+    val open = block.answer == null && onAnswer != null
+    val picked = remember(block.id) { mutableStateListOf<String>() }
+    val chosen = block.answer?.split("、")?.map { it.trim() }.orEmpty()
+    Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, if (open) MaterialTheme.colorScheme.primary.copy(alpha = .6f) else MaterialTheme.colorScheme.outlineVariant)) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(block.question, style = MaterialTheme.typography.titleSmall)
+            block.options.forEach { option ->
+                val selected = option in chosen || option in picked
+                OutlinedButton(onClick = {
+                    if (block.multi) { if (option in picked) picked.remove(option) else picked.add(option) }
+                    else onAnswer?.invoke(block.id, option)
+                }, enabled = open, modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
+                    border = BorderStroke(if (selected) 2.dp else 1.dp,
+                        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+                    colors = ButtonDefaults.outlinedButtonColors(disabledContentColor = if (selected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant)) {
+                    if (selected) { Box(Modifier.size(18.dp)) { AppIcon(R.drawable.aw_check) }; Spacer(Modifier.width(6.dp)) }
+                    Text(option, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            if (open && block.multi) Button(onClick = { onAnswer?.invoke(block.id, picked.joinToString("、")) }, enabled = picked.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth()) { Text(tr(S.question_confirm)) }
+            Text(tr(when {
+                block.answer != null && block.answer !in block.options && chosen.none { it in block.options } -> S.question_answered_custom
+                block.answer != null -> S.question_answered
+                open -> S.question_hint
+                else -> S.question_unanswered
+            }, block.answer.orEmpty()), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }

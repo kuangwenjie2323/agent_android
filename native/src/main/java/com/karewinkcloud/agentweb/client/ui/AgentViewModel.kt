@@ -865,6 +865,22 @@ class AgentViewModel(
         }
     }
 
+    /** The user's pick for a question the agent asked; the card updates from the turn's answer event. */
+    fun answer(questionId: String, text: String) {
+        val chat = state.value.chat ?: return
+        val control = chat.controlId ?: return
+        if (chat.controlBusy) return
+        val owner = generation
+        val source = repository
+        editChat(owner) { it.copy(controlBusy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                val answered = source.answer(chat.conversation.id, control, questionId, text)
+                editChat(owner) { it.copy(controlBusy = false, error = if (answered) null else ClientError("这个问题已经结束了，可以直接发消息告诉它。", "question_closed")) }
+            } catch (e: Exception) { editChat(owner) { it.copy(controlBusy = false, error = problem(e)) } }
+        }
+    }
+
     /** Like Claude Code: a message sent while the agent works reaches it at its next step. */
     fun steer() {
         val chat = state.value.chat ?: return

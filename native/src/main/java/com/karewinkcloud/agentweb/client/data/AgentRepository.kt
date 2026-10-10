@@ -56,6 +56,8 @@ interface AgentRepository {
     fun follow(conversationId: String, runId: String?, send: SendRequest? = null, previous: TurnState? = null): Flow<TurnSnapshot>
     suspend fun stop(conversationId: String, controlId: String): JsonObject
     suspend fun queue(request: QueueRequest): JsonObject
+    /** Answers a question the agent asked in the running turn; false when it is no longer open. */
+    suspend fun answer(conversationId: String, controlId: String, questionId: String, answer: String): Boolean = false
     /** Sends [message] into the running turn; false when that turn cannot take it (queue it instead). */
     suspend fun steer(conversationId: String, controlId: String, message: String): Boolean = false
     suspend fun resume(conversationId: String, headId: String): JsonObject
@@ -305,6 +307,12 @@ class HttpAgentRepository(
         put("conversationId", conversationId); put("expectedControlId", controlId)
     })
     override suspend fun queue(request: QueueRequest) = json("/api/chat/queue", request.json())
+    override suspend fun answer(conversationId: String, controlId: String, questionId: String, answer: String): Boolean = try {
+        json("/api/chat/answer", buildJsonObject { put("conversationId", conversationId); put("controlId", controlId)
+            put("questionId", questionId); put("answer", answer) }).string("answered") == questionId
+    } catch (e: ApiException) {
+        if (e.status == 409 || e.status == 404) false else throw e
+    }
     override suspend fun steer(conversationId: String, controlId: String, message: String): Boolean = try {
         json("/api/chat/steer", buildJsonObject { put("conversationId", conversationId); put("controlId", controlId); put("message", message) })
             .boolean("steered") == true

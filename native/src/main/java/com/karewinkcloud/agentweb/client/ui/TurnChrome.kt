@@ -27,7 +27,7 @@ import java.util.Locale
 import kotlin.math.cos
 import kotlin.math.sin
 
-enum class WorkingPhase { THINKING, TOOL, WRITING, WAITING, RECONNECTING }
+enum class WorkingPhase { THINKING, TOOL, WRITING, WAITING, RECONNECTING, CHOOSING }
 data class WorkingStatus(val phase: WorkingPhase, val toolName: String? = null)
 
 /** Terminal truth wins over the display pacer's remaining text. */
@@ -35,6 +35,8 @@ fun workingStatus(turn: TurnState, connection: Connection?): WorkingStatus? {
     if (turn.done) return null
     if (connection == Connection.RECONNECTING) return WorkingStatus(WorkingPhase.RECONNECTING)
     if (connection == Connection.CONNECTING) return WorkingStatus(WorkingPhase.WAITING)
+    // The agent asked a question and waits for the user's pick.
+    if (turn.blocks.any { it is ChatBlock.Question && it.answer == null }) return WorkingStatus(WorkingPhase.CHOOSING)
     turn.blocks.filterIsInstance<ChatBlock.Tool>().lastOrNull { it.status == StepStatus.RUNNING }?.let {
         return WorkingStatus(WorkingPhase.TOOL, shortToolName(it.name))
     }
@@ -111,6 +113,7 @@ internal fun WorkingIndicator(turn: TurnState, connection: Connection?) {
         WorkingPhase.WRITING -> tr(S.turn_writing)
         WorkingPhase.WAITING -> tr(S.turn_waiting)
         WorkingPhase.RECONNECTING -> tr(S.turn_reconnecting)
+        WorkingPhase.CHOOSING -> tr(S.turn_choosing)
     }
     // Geometry depends only on typography/font scale, never on the current phase or timer text.
     val density = LocalDensity.current
@@ -144,6 +147,8 @@ private fun sparkStyle(phase: WorkingPhase) = when (phase) {
     WorkingPhase.WAITING -> SparkStyle(8f, .34f, 2.6f, 0f, 0f, 0f, 0f, .3f)
     // Reconnecting: stops turning and blinks.
     WorkingPhase.RECONNECTING -> SparkStyle(0f, .1f, 2f, 0f, 0f, 0f, 1f, .2f)
+    // Waiting for the user's choice: still, with a calm, bright breath that invites a tap.
+    WorkingPhase.CHOOSING -> SparkStyle(0f, .3f, 1.4f, 0f, 0f, 0f, 0f, .5f)
 }
 
 @Composable

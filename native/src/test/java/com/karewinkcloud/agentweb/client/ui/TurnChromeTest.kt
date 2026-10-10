@@ -68,6 +68,9 @@ class TurnChromeTest {
         assertEquals(WorkingStatus(WorkingPhase.TOOL, "read_file"), workingStatus(base.copy(blocks = listOf(thought, tool)), Connection.LIVE))
         assertEquals(WorkingPhase.THINKING, workingStatus(base.copy(blocks = listOf(tool.copy(status = StepStatus.COMPLETE))), Connection.LIVE)?.phase)
         assertEquals(WorkingPhase.WRITING, workingStatus(base.copy(blocks = listOf(ChatBlock.Text("Answer"))), Connection.LIVE)?.phase)
+        val question = ChatBlock.Question("q", "Which?", listOf("a", "b"))
+        assertEquals(WorkingPhase.CHOOSING, workingStatus(base.copy(blocks = listOf(tool, question)), Connection.LIVE)?.phase)
+        assertEquals(WorkingPhase.TOOL, workingStatus(base.copy(blocks = listOf(question.copy(answer = "a"), tool)), Connection.LIVE)?.phase)
         assertEquals(WorkingPhase.THINKING, workingStatus(base.copy(blocks = listOf(ChatBlock.Text("Before"), thought)), Connection.LIVE)?.phase)
     }
     @Test fun connectionAndTerminalTruthOverrideContent() {
