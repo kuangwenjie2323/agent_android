@@ -1,6 +1,8 @@
-@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.karewinkcloud.agentweb.client.ui
 
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import android.content.ClipData
 import android.content.Intent
 import android.graphics.Bitmap
@@ -63,25 +65,63 @@ private fun loadMedia(media: MessageMedia, size: Int, revision: Int = 0): State<
 }
 
 @Composable
-internal fun ChatMediaCard(media: MessageMedia, thumbnail: Boolean = false) {
+internal fun ChatMediaCard(media: MessageMedia, thumbnail: Boolean = false, height: Dp = 240.dp) {
     val open = LocalOpenMedia.current
     var revision by remember(media) { mutableIntStateOf(0) }
-    if (!media.mime.startsWith("image/")) {
-        OutlinedButton({ open(media) }, Modifier.heightIn(min = 48.dp).widthIn(max = 300.dp)) {
-            Text("▤ ${media.name}", maxLines = 2)
-        }
-        return
-    }
+    if (!media.mime.startsWith("image/")) { FileCard(media); return }
     val loaded by loadMedia(media, if (thumbnail) 160 else 800, revision)
-    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainerLow,
-        // Reserve the stage before decoding so completed Markdown cannot shift when an image loads.
-        modifier = (if (thumbnail) Modifier.size(64.dp) else Modifier.fillMaxWidth().height(240.dp))
+    val bitmap = loaded.bitmap
+    // A fixed height keeps the conversation from jumping when the picture decodes; the width follows the
+    // picture's own shape (clamped), so a phone screenshot is a tall card, not a small image in a wide frame.
+    val aspect = bitmap?.let { (it.width.toFloat() / it.height).coerceIn(.45f, 2.2f) } ?: .75f
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = (if (thumbnail) Modifier.size(64.dp) else Modifier.height(height).width(height * aspect))
             .combinedClickable(onClick = { if (loaded.error) revision++ else open(media) }, onLongClick = { open(media) })) {
         Box(contentAlignment = Alignment.Center) {
-            loaded.bitmap?.let { Image(it.asImageBitmap(), media.name, if (thumbnail) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
-                contentScale = if (thumbnail) ContentScale.Crop else ContentScale.Fit) }
-                ?: Text(tr(if (loaded.error) S.output_failed else S.output_loading), Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
+            bitmap?.let { Image(it.asImageBitmap(), media.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+                ?: if (loaded.error) Text(tr(S.output_failed), Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
+                else CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
         }
+    }
+}
+
+/** A sent or received file: icon, name and size in a compact card that opens it. */
+@Composable
+internal fun FileCard(media: MessageMedia) {
+    val open = LocalOpenMedia.current
+    Surface(onClick = { open(media) }, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.widthIn(min = 180.dp, max = 280.dp)) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.primary.copy(alpha = .14f), modifier = Modifier.size(40.dp)) {
+                Box(contentAlignment = Alignment.Center) { AppIcon(R.drawable.aw_file) }
+            }
+            Column(Modifier.weight(1f, fill = false)) {
+                Text(media.name, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, style = MaterialTheme.typography.bodyMedium)
+                Text(listOfNotNull(media.name.substringAfterLast('.', "").takeIf { it.isNotBlank() && it.length <= 6 }?.uppercase(),
+                        media.size.takeIf { it > 0 }?.let(::fileSize)).joinToString(" · ").ifBlank { media.mime },
+                    maxLines = 1, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+internal fun fileSize(bytes: Long): String = when {
+    bytes >= 1024L * 1024 -> String.format(java.util.Locale.ROOT, "%.1f MB", bytes / 1048576.0)
+    bytes >= 1024 -> "${bytes / 1024} KB"
+    else -> "$bytes B"
+}
+
+/** The user's pictures and files above their bubble, right-aligned; several pictures share a row. */
+@Composable
+internal fun UserAttachments(media: List<MessageMedia>) {
+    val images = media.filter { it.mime.startsWith("image/") }
+    val files = media - images.toSet()
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (images.size == 1) ChatMediaCard(images.single(), height = 220.dp)
+        else if (images.isNotEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
+            verticalArrangement = Arrangement.spacedBy(6.dp)) { images.forEach { ChatMediaCard(it, height = 140.dp) } }
+        files.forEach { FileCard(it) }
     }
 }
 

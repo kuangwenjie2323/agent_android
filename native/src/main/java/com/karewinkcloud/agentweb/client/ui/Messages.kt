@@ -83,11 +83,15 @@ fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String?
     }) {
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (message.role == "user") {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                // Like a messenger: pictures and files sit above the bubble on their own, the bubble holds the words.
+                val media = message.blocks.filterIsInstance<ChatBlock.Media>().flatMap { it.items }
+                val words = message.blocks.filterNot { it is ChatBlock.Media }
+                if (media.isNotEmpty()) UserAttachments(media)
+                if (words.any { it !is ChatBlock.Text || it.content.isNotBlank() }) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     Spacer(Modifier.weight(.15f))
                     Surface(modifier = Modifier.weight(.85f, fill = false).widthIn(max = 560.dp), color = MaterialTheme.colorScheme.surfaceVariant,
                         contentColor = MaterialTheme.colorScheme.onSurface, shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)) {
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) { SelectionContainer { BlockContent(message.blocks, live) } }
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) { SelectionContainer { BlockContent(words, live) } }
                     }
                 }
                 if (onEdit != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {

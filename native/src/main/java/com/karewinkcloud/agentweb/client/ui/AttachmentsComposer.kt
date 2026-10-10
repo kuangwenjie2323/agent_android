@@ -30,7 +30,11 @@ internal fun AttachmentChips(chat: ChatState, vm: AgentViewModel) {
             Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow) {
                 Row(Modifier.padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (attachment.kind == AttachmentKind.IMAGE) ChatMediaCard(attachment.media(), thumbnail = true)
-                    else Text(attachment.name, Modifier.widthIn(max = 160.dp), maxLines = 2, style = MaterialTheme.typography.bodySmall)
+                    else Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        AppIcon(R.drawable.aw_file)
+                        Text(attachment.name, Modifier.widthIn(max = 160.dp), maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.MiddleEllipsis, style = MaterialTheme.typography.bodySmall)
+                    }
                     ActionIcon(R.drawable.aw_close, tr(S.remove_attachment, attachment.name)) { vm.removeAttachment(attachment.id) }
                 }
             }
