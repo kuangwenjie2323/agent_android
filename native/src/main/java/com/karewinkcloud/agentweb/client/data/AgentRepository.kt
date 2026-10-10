@@ -56,6 +56,8 @@ interface AgentRepository {
     fun follow(conversationId: String, runId: String?, send: SendRequest? = null, previous: TurnState? = null): Flow<TurnSnapshot>
     suspend fun stop(conversationId: String, controlId: String): JsonObject
     suspend fun queue(request: QueueRequest): JsonObject
+    /** Likely next messages for the latest finished answer: (message id, chips). */
+    suspend fun suggestions(conversationId: String): Pair<String?, List<String>> = null to emptyList()
     /** Answers a question the agent asked in the running turn; false when it is no longer open. */
     suspend fun answer(conversationId: String, controlId: String, questionId: String, answer: String): Boolean = false
     /** Sends [message] into the running turn; false when that turn cannot take it (queue it instead). */
@@ -307,6 +309,11 @@ class HttpAgentRepository(
         put("conversationId", conversationId); put("expectedControlId", controlId)
     })
     override suspend fun queue(request: QueueRequest) = json("/api/chat/queue", request.json())
+    override suspend fun suggestions(conversationId: String): Pair<String?, List<String>> {
+        val data = json("/api/chat/conversations/$conversationId/suggestions")
+        return (data["messageId"] as? JsonPrimitive)?.contentOrNull?.takeIf { it != "null" } to
+            data.array("suggestions").mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank) }.take(3)
+    }
     override suspend fun answer(conversationId: String, controlId: String, questionId: String, answer: String): Boolean = try {
         json("/api/chat/answer", buildJsonObject { put("conversationId", conversationId); put("controlId", controlId)
             put("questionId", questionId); put("answer", answer) }).string("answered") == questionId

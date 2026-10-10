@@ -264,6 +264,16 @@ class AgentViewModelTest {
         assertTrue(vm.state.value.chat!!.canSend)
         assertTrue(vm.state.value.chat!!.messages.isEmpty())
     }
+    @Test fun quickRepliesFollowTheLatestAnswerAndSendOnTap() = modelTest {
+        repo.getDetail = { id, _ -> detail(id).copy(messages = listOf(ChatMessage("u1", "user", listOf(ChatBlock.Text("问颜色"))),
+            ChatMessage("a1", "assistant", listOf(ChatBlock.Text("选了蓝色"))))) }
+        vm.open(conversation("one")); runCurrent()
+        vm.loadSuggestions(); runCurrent()
+        assertEquals(listOf("改成红色", "应用到配置"), vm.state.value.chat!!.suggestions)
+        vm.sendSuggestion("改成红色"); runCurrent()
+        assertEquals("改成红色", repo.followCalls.last { it.third != null }.third!!.text)
+        assertTrue(vm.state.value.chat!!.suggestions.isEmpty())
+    }
     @Test fun messageSentWhileWorkingSteersTheTurnOrQueuesWhenItCannot() = modelTest {
         repo.getDetail = { id, _ -> detail(id, running = true) }
         repo.admit = { buildJsonObject { put("pending", true) } }
@@ -687,6 +697,8 @@ class AgentViewModelTest {
             return buildJsonObject { put("committed", true); put("status", "running") }
         }
         override suspend fun queue(request: QueueRequest): JsonObject { queueCalls += request; return admit(request) }
+        var suggestionItems = listOf("改成红色", "应用到配置")
+        override suspend fun suggestions(conversationId: String) = "a1" to suggestionItems
         val steerCalls = mutableListOf<String>()
         var steerAccepts = true
         override suspend fun steer(conversationId: String, controlId: String, message: String): Boolean { steerCalls += message; return steerAccepts }

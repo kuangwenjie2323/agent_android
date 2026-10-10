@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 
 package com.karewinkcloud.agentweb.client.ui
 
@@ -328,8 +328,12 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
                     state.agents.find { model in it.models }?.label(model) ?: model
                 }, chat.connection)
             }
+            if (chat.suggestions.isNotEmpty() && !chat.running && chat.live == null && chat.messages.lastOrNull()?.id == chat.suggestionsFor)
+                item("suggestions-${chat.suggestionsFor}") { QuickReplies(chat.suggestions, enabled = chat.canSend, onPick = vm::sendSuggestion) }
             if (chat.error != null) item("error") { ErrorBlock(chat.error, vm::reload, tr(S.reconnect)) }
         }
+        val lastId = chat.messages.lastOrNull()?.id
+        LaunchedEffect(chat.conversation.id, lastId, chat.running, chat.live == null) { vm.loadSuggestions() }
         if (!followTail) TextButton({ followTail = true }, Modifier.align(Alignment.CenterHorizontally).heightIn(min = 48.dp)) {
             AppIcon(R.drawable.aw_down); Text(tr(S.latest_messages))
         }
@@ -492,5 +496,17 @@ internal fun ChoiceRow(title: String, selected: Boolean, enabled: Boolean = true
             if (selected) Box(Modifier.size(22.dp)) { CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.primary) { AppIcon(R.drawable.aw_check) } }
         }
         HorizontalDivider(Modifier.padding(start = 8.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+    }
+}
+
+/** Likely next messages under the latest answer; tapping one sends it. */
+@Composable
+private fun QuickReplies(items: List<String>, enabled: Boolean, onPick: (String) -> Unit) {
+    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items.forEach { text ->
+            SuggestionChip(onClick = { onPick(text) }, enabled = enabled, label = { Text(text, maxLines = 2) },
+                shape = MaterialTheme.shapes.large)
+        }
     }
 }

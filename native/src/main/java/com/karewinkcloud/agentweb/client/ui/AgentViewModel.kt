@@ -18,6 +18,8 @@ data class ChatState(
     val olderCount: Int = 0, val nextCursor: String? = null,
     val loading: Boolean = true, val loadingOlder: Boolean = false,
     val draft: String = "", val live: TurnState? = null,
+    /** Quick replies for the latest answer (message id -> chips); cleared once the user sends. */
+    val suggestionsFor: String? = null, val suggestions: List<String> = emptyList(),
     val connection: Connection? = null, val error: ClientError? = null,
     val browserError: ClientError? = null,
     val controlBusy: Boolean = false, val stopRequested: Boolean = false,
@@ -863,6 +865,27 @@ class AgentViewModel(
                 if (e is ApiException && e.status == 409 && owned(owner)) reload()
             }
         }
+    }
+
+    /** Fetches quick replies once per finished answer; failures just show none. */
+    fun loadSuggestions() {
+        val chat = state.value.chat ?: return
+        val last = chat.messages.lastOrNull() ?: return
+        if (chat.running || chat.live != null || last.role != "assistant" || chat.suggestionsFor == last.id) return
+        val owner = generation
+        val source = repository
+        editChat(owner) { it.copy(suggestionsFor = last.id, suggestions = emptyList()) }
+        viewModelScope.launch {
+            val (forId, items) = try { source.suggestions(chat.conversation.id) } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { return@launch }
+            editChat(owner) { if (it.suggestionsFor == last.id && (forId == null || forId == last.id)) it.copy(suggestions = items) else it }
+        }
+    }
+
+    /** A quick reply is sent as the next message. */
+    fun sendSuggestion(text: String) {
+        editChat(generation) { it.copy(draft = text, suggestions = emptyList()) }
+        send()
     }
 
     /** The user's pick for a question the agent asked; the card updates from the turn's answer event. */
