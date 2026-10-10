@@ -62,7 +62,13 @@ object TurnReducer {
                     durationMs = (now - b.startedAt).coerceAtLeast(0), diff = j.string("diff") ?: b.diff)
                 if (index >= 0) blocks[index] = result else blocks += result
             }
-            "error" -> blocks += ChatBlock.Error(ClientError(content(), j.string("code"), j.boolean("retryable")))
+            "error" -> if (j.string("code") == "interrupted") {
+                blocks.indices.forEach { i ->
+                    val b = blocks[i]
+                    if (b is ChatBlock.Tool && (b.status == StepStatus.RUNNING || killedByStop(b))) blocks[i] = b.copy(status = StepStatus.INTERRUPTED)
+                }
+                blocks += ChatBlock.Notice(STOPPED_NOTICE)
+            } else blocks += ChatBlock.Error(ClientError(content(), j.string("code"), j.boolean("retryable")))
             "notice", "queued" -> blocks += ChatBlock.Notice(content())
             "steer" -> blocks += ChatBlock.Steer(content())
             "artifacts" -> {

@@ -105,6 +105,12 @@ sealed interface ChatBlock {
     data class Media(val items: List<MessageMedia>) : ChatBlock
 }
 
+/** Shown when the user stopped a turn; not an error. */
+const val STOPPED_NOTICE = "stopped by user"
+/** A command the stop itself killed (SIGKILL/SIGTERM) rather than one that failed on its own. */
+internal fun killedByStop(tool: ChatBlock.Tool) = tool.status == StepStatus.ERROR &&
+    tool.result?.trim() in setOf("Exit code 137", "Exit code 143")
+
 fun historyBlocks(j: JsonObject): List<ChatBlock> {
     val blocks = j.objects("blocks").mapIndexedNotNull { index, b ->
         when (b.string("type")) {
@@ -119,7 +125,8 @@ fun historyBlocks(j: JsonObject): List<ChatBlock> {
                     else -> StepStatus.INTERRUPTED },
                 durationMs = b.long("duration_ms")?.coerceAtLeast(0), diff = b.string("diff"),
             )
-            "error" -> ChatBlock.Error(ClientError(b.string("content").orEmpty(), b.string("code"), b.boolean("retryable")))
+            "error" -> if (b.string("code") == "interrupted") ChatBlock.Notice(STOPPED_NOTICE)
+                else ChatBlock.Error(ClientError(b.string("content").orEmpty(), b.string("code"), b.boolean("retryable")))
             "steer" -> ChatBlock.Steer(b.string("content").orEmpty())
             else -> null
         }
@@ -127,8 +134,11 @@ fun historyBlocks(j: JsonObject): List<ChatBlock> {
     if (blocks.none { it is ChatBlock.Text } && !j.string("content").isNullOrEmpty()) {
         blocks.add(0, ChatBlock.Text(j.string("content").orEmpty()))
     }
-    if (j.string("status") in setOf("error", "interrupted") && blocks.none { it is ChatBlock.Error }) {
-        blocks.add(ChatBlock.Error(ClientError("This turn was ${j.string("status")}.", retryable = false)))
+    if (j.string("status") == "interrupted") {
+        blocks.replaceAll { if (it is ChatBlock.Tool && killedByStop(it)) it.copy(status = StepStatus.INTERRUPTED) else it }
+        if (blocks.none { it is ChatBlock.Error || (it is ChatBlock.Notice && it.content == STOPPED_NOTICE) }) blocks.add(ChatBlock.Notice(STOPPED_NOTICE))
+    } else if (j.string("status") == "error" && blocks.none { it is ChatBlock.Error }) {
+        blocks.add(ChatBlock.Error(ClientError("This turn was error.", retryable = false)))
     }
     if (j.objects("images").isNotEmpty()) blocks.add(ChatBlock.Media(j.objects("images").map(MessageMedia::from)))
     return blocks

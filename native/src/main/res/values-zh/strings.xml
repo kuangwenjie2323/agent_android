@@ -310,6 +310,7 @@
     <string name="photos">照片</string>
     <string name="take_photo">拍照</string>
     <string name="files">文件</string>
+    <string name="turn_stopped">已停止</string>
     <string name="steer_label">运行中插话</string>
     <string name="steer_send">插话（下一步就会看到）</string>
     <string name="model_cannot_read_images">当前模型看不了图片</string>

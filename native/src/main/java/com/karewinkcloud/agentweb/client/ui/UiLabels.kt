@@ -152,6 +152,7 @@ internal fun comfyErrorResource(code: String) = when(code) {
         "passkey_provider" -> S.passkey_provider
         "passkey_invalid" -> S.passkey_invalid
         "This turn was interrupted." -> S.chat_interrupted
+        STOPPED_NOTICE -> S.turn_stopped
         "This turn was error." -> S.chat_failed
         "This message has attachments. Open the web client to view them." -> S.chat_attachments
         "Connection interrupted. Reconnect to check server history; no work is automatically resent." -> S.chat_connection_lost
