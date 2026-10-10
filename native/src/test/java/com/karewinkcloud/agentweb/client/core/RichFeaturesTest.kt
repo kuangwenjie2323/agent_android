@@ -52,6 +52,7 @@ class RichFeaturesTest {
         assertEquals("Sonnet 5.5", readableModelId("claude-sonnet-5-5"))
         assertEquals("Opus 5", readableModelId("claude-opus-5"))
         assertEquals("gpt-6-luna", readableModelId("gpt-6-luna"))
+        assertEquals("deepseek-flash", readableModelId("deepseek-flash[1m]"))  // DeepSeek's own id, without the context hint
     }
     @Test fun commonHtmlFromModelsRendersAsText() {
         assertEquals("a\nb\nc", simpleHtmlText("a<br>b</br>c"))
@@ -123,6 +124,7 @@ class RichFeaturesTest {
         assertEquals("done", plainPreview("intro\n- [x] ~~done~~"))
         assertEquals("https://example.test", plainPreview("<https://example.test>"))
         assertEquals("DS V4.1 Flash", compactModelLabel("DeepSeek V4.1 Flash"))
+        assertEquals("deepseek-flash", compactModelLabel("deepseek-flash"))
         assertEquals("snake_case", plainPreview("`snake_case`"))
     }
     @Test fun reconnectBackoffIsCappedAndHttpRejectionsStopRetries() {

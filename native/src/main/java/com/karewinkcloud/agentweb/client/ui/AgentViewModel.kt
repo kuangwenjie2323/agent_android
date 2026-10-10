@@ -156,6 +156,8 @@ class AgentViewModel(
         listJob = viewModelScope.launch {
             // Show the last saved list at once on a cold start; the network result replaces it.
             if (state.value.conversations.isEmpty()) {
+                val savedAgents = source.cachedAgents()
+                if (owner == epoch && savedAgents.isNotEmpty()) mutable.update { old -> if (old.agents.isEmpty()) old.copy(agents = savedAgents) else old }
                 val cached = source.cachedConversations()
                 if (owner == epoch && cached.isNotEmpty()) {
                     // Saved previews stay valid while a row's updated_at is unchanged.

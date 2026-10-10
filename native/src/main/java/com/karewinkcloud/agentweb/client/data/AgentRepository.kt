@@ -41,6 +41,8 @@ interface AgentRepository {
     suspend fun conversations(): List<Conversation>
     /** The last list saved on this device for the current server and account; empty when none. */
     suspend fun cachedConversations(): List<Conversation> = emptyList()
+    /** The last model list saved on this device, so names show right away on a cold start. */
+    suspend fun cachedAgents(): List<Agent> = emptyList()
     suspend fun saveConversations(rows: List<Conversation>) {}
     suspend fun cachedClaudeSessions(): ClaudeSessionPage? = null
     fun clearConversationCache() {}
@@ -190,7 +192,12 @@ class HttpAgentRepository(
             }
         } catch (e: Exception) { destination.delete(); throw e }
     }
-    override suspend fun agents() = json("/api/agents").objects("agents").map(Agent::from)
+    override suspend fun agents() = json("/api/agents").let { data ->
+        data.objects("agents").map(Agent::from).also { runCatching { saveSnapshot("agents", data) } }
+    }
+    override suspend fun cachedAgents(): List<Agent> = runCatching {
+        snapshot("agents")?.objects("agents")?.map(Agent::from).orEmpty()
+    }.getOrDefault(emptyList())
     internal suspend fun downloadChatMedia(target: MediaTarget, destination: java.io.File, maxBytes: Long): String = withContext(Dispatchers.IO) {
         val req = if (target.authenticated) request(target.url.encodedPath + (target.url.encodedQuery?.let { "?$it" } ?: ""))
             else Request.Builder().url(target.url).build()

@@ -318,7 +318,7 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
                 EmptyState(R.drawable.aw_chat, tr(S.empty_chat), tr(S.empty_chat_hint))
             }
             items(chat.messages, key = { it.id }, contentType = { it.role }) { message ->
-                MessageView(message, modelLabel = message.model?.let { model -> state.agents.find { model in it.models }?.label(model) ?: readableModelId(model) },
+                MessageView(message, modelLabel = message.model?.let { model -> state.agents.find { model.removeSuffix("[1m]") in it.models }?.label(model) ?: readableModelId(model) },
                     canFork = chat.canFork,
                     onRetry = if (message.role == "assistant" && message.id == chat.messages.lastOrNull { it.role == "assistant" }?.id) ({ vm.retry(message.id) }) else null,
                     onEdit = if (message.role == "user" && message.id == chat.messages.lastOrNull { it.role == "user" }?.id) ({ text -> vm.edit(message.id, text) }) else null)

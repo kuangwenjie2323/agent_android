@@ -30,7 +30,7 @@ data class Agent(
     /** Per-model image support; older servers send only [supportsImages]. */
     val modelImages: Map<String, Boolean> = emptyMap(),
 ) {
-    fun label(model: String) = labels[model] ?: model.substringAfterLast('/')
+    fun label(model: String) = model.removeSuffix("[1m]").let { id -> labels[id] ?: id.substringAfterLast('/') }
     /** Whether [model] reads attached photos (DeepSeek V4.1 Flash does, V4 Pro does not). */
     fun readsImages(model: String?) = model?.let { modelImages[it] } ?: supportsImages
     fun resumeModel(model: String): String = if (model in models || id != "claude") model else
