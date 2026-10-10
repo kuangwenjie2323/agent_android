@@ -12,6 +12,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontFamily
@@ -118,7 +119,7 @@ internal fun WorkingIndicator(turn: TurnState, connection: Connection?) {
     val timerWidth = 64.dp * density.fontScale.coerceAtLeast(1f)
     Row(Modifier.fillMaxWidth().height(slotHeight), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        WorkingSpark(animatorsEnabled && motionScale?.scaleFactor != 0f)
+        WorkingSpark(animatorsEnabled && motionScale?.scaleFactor != 0f, status.phase)
         Text(label, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(elapsedLabel(now - (turn.startedAt ?: origin)), Modifier.width(timerWidth), textAlign = TextAlign.End,
@@ -128,27 +129,69 @@ internal fun WorkingIndicator(turn: TurnState, connection: Connection?) {
     }
 }
 
+/** How the spark moves in each phase; values blend when the phase changes. */
+private data class SparkStyle(val spin: Float, val breathDepth: Float, val breathSeconds: Float, val waveDepth: Float,
+    val gear: Float, val chase: Float, val blink: Float, val alphaBase: Float)
+
+private fun sparkStyle(phase: WorkingPhase) = when (phase) {
+    // Pondering: slow turn, rays rise and fall one after another, deep breath.
+    WorkingPhase.THINKING -> SparkStyle(30f, .26f, 1.6f, .28f, 0f, 0f, 0f, .55f)
+    // Running a tool: quick turn, alternating short and long rays like a gear.
+    WorkingPhase.TOOL -> SparkStyle(150f, .08f, .9f, 0f, .32f, 0f, 0f, .75f)
+    // Writing the answer: a bright point runs round the rays, like typing.
+    WorkingPhase.WRITING -> SparkStyle(40f, .06f, 1.2f, .1f, 0f, 1f, 0f, .3f)
+    // Waiting for the provider: nearly still, dim, slow breath.
+    WorkingPhase.WAITING -> SparkStyle(8f, .34f, 2.6f, 0f, 0f, 0f, 0f, .3f)
+    // Reconnecting: stops turning and blinks.
+    WorkingPhase.RECONNECTING -> SparkStyle(0f, .1f, 2f, 0f, 0f, 0f, 1f, .2f)
+}
+
 @Composable
-internal fun WorkingSpark(animate: Boolean) {
-    // Animated values are read only inside the draw lambda, so frames redraw without recomposing.
-    var rotation: State<Float> = remember { mutableFloatStateOf(0f) }
-    var breathing: State<Float> = remember { mutableFloatStateOf(1f) }
-    if (animate) {
-        val transition = rememberInfiniteTransition(label = "working spark")
-        rotation = transition.animateFloat(0f, 360f,
-            infiniteRepeatable(tween(9600, easing = LinearEasing)), label = "rotation")
-        breathing = transition.animateFloat(.72f, 1f,
-            infiniteRepeatable(tween(600, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breathing")
+internal fun WorkingSpark(animate: Boolean, phase: WorkingPhase = WorkingPhase.THINKING) {
+    val target = sparkStyle(phase)
+    val blend = tween<Float>(450, easing = FastOutSlowInEasing)
+    val spin by animateFloatAsState(target.spin, blend, label = "spin")
+    val breathDepth by animateFloatAsState(target.breathDepth, blend, label = "breath depth")
+    val breathSeconds by animateFloatAsState(target.breathSeconds, blend, label = "breath period")
+    val waveDepth by animateFloatAsState(target.waveDepth, blend, label = "wave")
+    val gear by animateFloatAsState(target.gear, blend, label = "gear")
+    val chase by animateFloatAsState(target.chase, blend, label = "chase")
+    val blink by animateFloatAsState(target.blink, blend, label = "blink")
+    val alphaBase by animateFloatAsState(target.alphaBase, blend, label = "alpha")
+    // Time and turn are read only inside the draw lambda, so frames redraw without recomposing.
+    val seconds = remember { mutableFloatStateOf(0f) }
+    val turn = remember { mutableFloatStateOf(0f) }
+    if (animate) LaunchedEffect(Unit) {
+        var last = -1L
+        while (true) withFrameMillis { frame ->
+            if (last >= 0) {
+                val dt = (frame - last) / 1000f
+                seconds.floatValue += dt
+                turn.floatValue = (turn.floatValue + spin * dt) % 360f
+            }
+            last = frame
+        }
     }
     val accent = workingAccent
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Canvas(Modifier.size(20.dp).clearAndSetSemantics { }) {
-        val breath = breathing.value
-        rotate(rotation.value) {
+        val t = seconds.floatValue
+        val tau = (2 * Math.PI).toFloat()
+        val breath = if (animate) .5f + .5f * sin(tau * t / breathSeconds) else 1f
+        val blinkLevel = if (animate) (.5f + .5f * sin(tau * t / 1.1f)).let { it * it } else 1f
+        val color = lerp(accent, muted, blink)
+        rotate(turn.floatValue) {
             repeat(8) { ray ->
                 val angle = ray * Math.PI / 4
-                val inner = size.minDimension * .21f * breath
-                val outer = size.minDimension * .44f * breath
-                drawLine(accent.copy(alpha = .55f + .45f * breath),
+                val wave = if (animate) .5f + .5f * sin(tau * (t / 1.8f - ray / 8f)) else 1f
+                val chaseLevel = if (animate) maxOf(0f, cos(tau * (t / .9f - ray / 8f))).let { it * it * it * it } else 0f
+                val length = (1f - breathDepth * (1f - breath) - waveDepth * (1f - wave) - (if (ray % 2 == 0) gear else 0f))
+                    .coerceIn(.35f, 1f)
+                val lit = (1f - chase) * breath + chase * chaseLevel
+                val alpha = (alphaBase + (1f - alphaBase) * lit) * (1f - blink * (1f - blinkLevel))
+                val inner = size.minDimension * .2f
+                val outer = inner + size.minDimension * .24f * length
+                drawLine(color.copy(alpha = alpha.coerceIn(.08f, 1f)),
                     Offset(center.x + cos(angle).toFloat() * inner, center.y + sin(angle).toFloat() * inner),
                     Offset(center.x + cos(angle).toFloat() * outer, center.y + sin(angle).toFloat() * outer),
                     strokeWidth = 1.7.dp.toPx(), cap = StrokeCap.Round)
