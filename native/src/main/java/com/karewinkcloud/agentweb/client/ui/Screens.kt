@@ -2,6 +2,12 @@
 
 package com.karewinkcloud.agentweb.client.ui
 
+import kotlinx.coroutines.withTimeoutOrNull
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -286,9 +292,12 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
         val list = rememberLazyListState()
         var followTail by remember { mutableStateOf(true) }
         var automaticScroll by remember { mutableStateOf(false) }
+        // Selected text clears like anywhere on Android: a tap elsewhere or a scroll ends it (selection
+        // lives while its container is focused; the handles would otherwise stay behind when the list moves).
+        val focus = LocalFocusManager.current
         LaunchedEffect(list) {
             snapshotFlow { list.isScrollInProgress to list.canScrollForward }.distinctUntilChanged().collect { (scrolling, canForward) ->
-                if (scrolling && !automaticScroll) followTail = false
+                if (scrolling && !automaticScroll) { followTail = false; focus.clearFocus(force = true) }
                 if (!scrolling && !canForward) followTail = true
             }
         }
@@ -307,7 +316,7 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
                 }
             }
         }
-        LazyColumn(state = list, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        LazyColumn(state = list, modifier = Modifier.weight(1f).fillMaxWidth().clearSelectionOnTap(focus), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (chat.loading) item("loading") { LoadingState(tr(S.loading_chat)) }
             if (chat.nextCursor != null) item("older") {
@@ -508,5 +517,14 @@ private fun QuickReplies(items: List<String>, enabled: Boolean, onPick: (String)
             SuggestionChip(onClick = { onPick(text) }, enabled = enabled, label = { Text(text, maxLines = 2) },
                 shape = MaterialTheme.shapes.large)
         }
+    }
+}
+
+/** A short tap anywhere in the list (seen before children handle it) drops the current text selection. */
+private fun Modifier.clearSelectionOnTap(focus: androidx.compose.ui.focus.FocusManager): Modifier = pointerInput(focus) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        val up = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) { waitForUpOrCancellation(PointerEventPass.Initial) }
+        if (up != null && (up.position - down.position).getDistance() < viewConfiguration.touchSlop) focus.clearFocus(force = true)
     }
 }
