@@ -94,8 +94,12 @@ fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String?
                         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) { SelectionContainer { BlockContent(words, live) } }
                     }
                 }
-                if (onEdit != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = { editText = message.text; editing = true }, enabled = canFork,
+                if (onEdit != null || message.text.isNotBlank()) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically) {
+                    // Copy the whole message (long-press now selects words instead of opening a menu).
+                    if (message.text.isNotBlank()) ActionIcon(if (copied) R.drawable.aw_check else R.drawable.aw_copy,
+                        tr(if (copied) S.copied else S.copy_message), onClick = copy)
+                    if (onEdit != null) TextButton(onClick = { editText = message.text; editing = true }, enabled = canFork,
                         modifier = Modifier.heightIn(min = 40.dp), colors = quietButton()) {
                         Box(Modifier.size(18.dp)) { AppIcon(R.drawable.aw_edit) }; Spacer(Modifier.width(4.dp))
                         Text(tr(S.edit_message), style = MaterialTheme.typography.labelLarge)
