@@ -50,14 +50,23 @@ fun ChatMediaHost(store: ChatMediaStore, browser: (String) -> Unit, content: @Co
 }
 
 private data class LoadedMedia(val cached: CachedMedia? = null, val bitmap: Bitmap? = null, val error: Boolean = false)
+
+/** Pictures decoded recently, so scrolling back to one shows it at once instead of an empty card. */
+private val decodedImages = object : android.util.LruCache<String, Bitmap>(32 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+}
+private fun imageKey(media: MessageMedia, size: Int) = "${media.url ?: media.localPath ?: media.name}#$size"
+
 @Composable
 private fun loadMedia(media: MessageMedia, size: Int, revision: Int = 0): State<LoadedMedia> {
     val store = LocalChatMedia.current
-    return produceState(LoadedMedia(), store, media, size, revision) {
-        value = LoadedMedia()
+    val key = imageKey(media, size)
+    return produceState(decodedImages.get(key)?.let { LoadedMedia(bitmap = it) } ?: LoadedMedia(), store, media, size, revision) {
+        if (value.bitmap == null || revision > 0) value = LoadedMedia(bitmap = value.bitmap.takeIf { revision == 0 })
         try {
             val cached = store?.load(media) ?: return@produceState
-            val bitmap = if (cached.mime.startsWith("image/") || media.mime.startsWith("image/")) withContext(Dispatchers.IO) { decodeChatBitmap(cached.file, size) } else null
+            val bitmap = value.bitmap ?: if (cached.mime.startsWith("image/") || media.mime.startsWith("image/"))
+                withContext(Dispatchers.IO) { decodeChatBitmap(cached.file, size) }.also { decodedImages.put(key, it) } else null
             value = LoadedMedia(cached, bitmap)
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { value = LoadedMedia(error = true) }

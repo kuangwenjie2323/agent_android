@@ -1,3 +1,5 @@
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.io.File
 import java.util.Properties
 
@@ -47,6 +49,13 @@ tasks.configureEach {
     }
 }
 
+val buildLabel = run {
+    val commit = providers.exec { commandLine("git", "rev-parse", "--short", "HEAD"); isIgnoreExitValue = true }
+        .standardOutput.asText.map { it.trim() }.getOrElse("")
+    val built = LocalDateTime.now().format(DateTimeFormatter.ofPattern("MM-dd HH:mm"))
+    listOf(commit, built).filter { it.isNotBlank() }.joinToString(" · ")
+}
+
 android {
     namespace = "com.karewinkcloud.agentweb.client"
     compileSdk = 36
@@ -55,8 +64,10 @@ android {
         applicationId = "com.karewinkcloud.agentweb.client"
         minSdk = 26
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.7.0"
+        versionCode = 8
+        versionName = "0.8.0"
+        // Shown in Settings so a tester can tell which build is installed.
+        buildConfigField("String", "BUILD_LABEL", "\"$buildLabel\"")
     }
     signingConfigs {
         if (signingPath != null) create("release") {

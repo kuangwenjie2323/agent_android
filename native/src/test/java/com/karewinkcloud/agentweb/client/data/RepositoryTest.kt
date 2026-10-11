@@ -113,7 +113,7 @@ class RepositoryTest {
         val req = next()
         assertEquals("1.0", req.getHeader("AgentWeb-Protocol-Min"))
         assertEquals("1.0", req.getHeader("AgentWeb-Protocol-Max"))
-        assertEquals("android/0.7.0", req.getHeader("AgentWeb-Client"))
+        assertEquals("android/${com.karewinkcloud.agentweb.client.BuildConfig.VERSION_NAME}", req.getHeader("AgentWeb-Client"))
         assertEquals("Bearer test-token", req.getHeader("Authorization"))
         assertEquals("close", req.getHeader("Connection"))
     }

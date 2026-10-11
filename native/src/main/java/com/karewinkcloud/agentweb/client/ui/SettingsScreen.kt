@@ -62,7 +62,7 @@ internal fun ColumnScope.SettingsScreen(vm: SettingsViewModel, openBrowser: (Str
         SettingsGroup(tr(S.advanced_group)) {
             SettingsRow(tr(S.server), prefs.origin.removePrefix("https://"), !busy) { editor = "server" }
         }
-        Text("AgentWeb App ${com.karewinkcloud.agentweb.client.BuildConfig.VERSION_NAME}", Modifier.align(Alignment.CenterHorizontally),
+        Text("AgentWeb App ${com.karewinkcloud.agentweb.client.BuildConfig.VERSION_NAME} · ${com.karewinkcloud.agentweb.client.BuildConfig.BUILD_LABEL}", Modifier.align(Alignment.CenterHorizontally),
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     when (editor) {
