@@ -157,7 +157,8 @@ private fun BlockContent(blocks: List<ChatBlock>, live: Boolean, onAnswer: ((Str
                         modifier = Modifier.widthIn(max = 300.dp)) {
                         Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(tr(S.steer_label), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(block.content, style = MaterialTheme.typography.bodyMedium)
+                            if (block.items.isNotEmpty()) UserAttachments(block.items)
+                            if (block.content.isNotBlank()) Text(block.content, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }

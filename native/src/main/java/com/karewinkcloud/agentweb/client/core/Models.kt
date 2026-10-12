@@ -101,7 +101,7 @@ sealed interface ChatBlock {
     data class Error(val problem: ClientError) : ChatBlock
     data class Notice(val content: String) : ChatBlock
     /** A message the user sent into the running turn; the model read it at its next step. */
-    data class Steer(val content: String) : ChatBlock
+    data class Steer(val content: String, val items: List<MessageMedia> = emptyList()) : ChatBlock
     /** A choice the agent asked the user to make (ask_user); [answer] once the user picked. */
     data class Question(val id: String, val question: String, val options: List<String>, val multi: Boolean = false,
         val answer: String? = null) : ChatBlock
@@ -130,7 +130,7 @@ fun historyBlocks(j: JsonObject): List<ChatBlock> {
             )
             "error" -> if (b.string("code") == "interrupted") ChatBlock.Notice(STOPPED_NOTICE)
                 else ChatBlock.Error(ClientError(b.string("content").orEmpty(), b.string("code"), b.boolean("retryable")))
-            "steer" -> ChatBlock.Steer(b.string("content").orEmpty())
+            "steer" -> ChatBlock.Steer(b.string("content").orEmpty(), b.objects("items").map(MessageMedia::from))
             "question" -> ChatBlock.Question(b.string("id").orEmpty(), b.string("question").orEmpty(),
                 b.array("options").mapNotNull { (it as? JsonPrimitive)?.contentOrNull }, b.boolean("multi") == true, b.string("answer"))
             else -> null

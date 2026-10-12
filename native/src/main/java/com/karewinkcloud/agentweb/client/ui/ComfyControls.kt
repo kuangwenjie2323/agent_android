@@ -448,3 +448,76 @@ private fun ValuePicker(title: String, value: String, options: List<Pair<String,
             }
         }, confirmButton = { TextButton({ open = false }, Modifier.heightIn(min = 48.dp)) { Text(tr(S.close)) } })
 }
+
+/** Opens the right picker for a reference input and uploads the choice: photos, videos, or an audio file. */
+@Composable
+internal fun rememberReferencePicker(vm: ComfyViewModel): (ComfyInput) -> Unit {
+    val context = LocalContext.current
+    var target by remember { mutableStateOf<ComfyInput?>(null) }
+    val visual = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        val input = target ?: return@rememberLauncherForActivityResult
+        if (uri != null) vm.uploadReference(input.key) {
+            if (input.media == "image") readPhoto(context.applicationContext, uri) else readReference(context.applicationContext, uri, input.media)
+        }
+    }
+    val audio = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val input = target ?: return@rememberLauncherForActivityResult
+        if (uri != null) vm.uploadReference(input.key) { readReference(context.applicationContext, uri, "audio") }
+    }
+    return { input ->
+        target = input
+        runCatching { when (input.media) {
+            "video" -> visual.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+            "audio" -> audio.launch(arrayOf("audio/*"))
+            else -> visual.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        } }
+    }
+}
+
+private fun referenceLabel(input: ComfyInput) = when (input.media) { "video" -> S.reference_video; "audio" -> S.reference_audio; else -> S.reference_image }
+
+/** Composer button: add a reference picture, video or audio clip to the workflow when it takes one. */
+@Composable
+internal fun ReferenceButton(state: ComfyState, vm: ComfyViewModel) {
+    val inputs = state.workflow?.inputs.orEmpty().filter { it.type == "asset" }
+    if (inputs.isEmpty()) return
+    val pick = rememberReferencePicker(vm)
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        if (state.uploading != null) Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+        } else ActionIcon(R.drawable.aw_photos, tr(S.reference_add)) { if (inputs.size == 1) pick(inputs.single()) else menu = true }
+        DropdownMenu(menu, { menu = false }) {
+            inputs.forEach { input ->
+                val set = (state.values[input.key] ?: "").isNotBlank()
+                DropdownMenuItem(text = { Text(tr(referenceLabel(input)) + if (set) " ✓" else "") },
+                    leadingIcon = { AppIcon(when (input.media) { "video" -> R.drawable.aw_play; "audio" -> R.drawable.aw_file; else -> R.drawable.aw_photos }) },
+                    onClick = { menu = false; pick(input) })
+            }
+        }
+    }
+}
+
+/** The references attached to this creation, each removable; an upload failure shows here too. */
+@Composable
+internal fun AttachedReferences(state: ComfyState, vm: ComfyViewModel) {
+    val attached = state.workflow?.inputs.orEmpty().filter { it.type == "asset" && (state.values[it.key] ?: "").isNotBlank() }
+    val failure = state.uploadError
+    if (attached.isEmpty() && failure == null) return
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)) {
+        items(attached, key = { it.key }) { input ->
+            val uploadId = runCatching { wireJson.parseToJsonElement(state.values[input.key].orEmpty()).jsonObject.string("upload_id") }.getOrNull()
+            val photo by produceState<android.graphics.Bitmap?>(null, uploadId) {
+                this.value = uploadId?.takeIf { input.media == "image" }?.let { id ->
+                    withContext(Dispatchers.IO) { runCatching { decodeChatBitmap(vm.referenceFile(id), 160) }.getOrNull() } }
+            }
+            InputChip(selected = true, onClick = {}, label = { Text(tr(referenceLabel(input)), maxLines = 1) },
+                avatar = { photo?.let { Image(it.asImageBitmap(), null, Modifier.size(24.dp).clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Crop) }
+                    ?: AppIcon(when (input.media) { "video" -> R.drawable.aw_play; "audio" -> R.drawable.aw_file; else -> R.drawable.aw_photos }) },
+                trailingIcon = { Box(Modifier.size(18.dp).clickable { vm.parameter(input.key, "") }, contentAlignment = Alignment.Center) {
+                    AppIcon(R.drawable.aw_close, tr(S.reference_remove)) } })
+        }
+        if (failure != null) item("failure") { Text(comfyError(failure.second), Modifier.padding(top = 8.dp),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+    }
+}

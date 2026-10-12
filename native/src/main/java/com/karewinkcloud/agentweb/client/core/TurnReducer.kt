@@ -73,7 +73,7 @@ object TurnReducer {
                 blocks += ChatBlock.Notice(STOPPED_NOTICE)
             } else blocks += ChatBlock.Error(ClientError(content(), j.string("code"), j.boolean("retryable")))
             "notice", "queued" -> blocks += ChatBlock.Notice(content())
-            "steer" -> blocks += ChatBlock.Steer(content())
+            "steer" -> blocks += ChatBlock.Steer(content(), j.objects("items").map(MessageMedia::from))
             "question" -> blocks += ChatBlock.Question(j.string("id").orEmpty(), j.string("question").orEmpty(),
                 j.array("options").mapNotNull { (it as? JsonPrimitive)?.contentOrNull }, j.boolean("multi") == true)
             "answer" -> {

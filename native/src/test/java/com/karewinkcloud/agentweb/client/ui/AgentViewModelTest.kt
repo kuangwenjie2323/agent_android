@@ -274,6 +274,14 @@ class AgentViewModelTest {
         assertEquals("改成红色", repo.followCalls.last { it.third != null }.third!!.text)
         assertTrue(vm.state.value.chat!!.suggestions.isEmpty())
     }
+    @Test fun filesSentWhileWorkingGoIntoTheRunningTurn() = modelTest {
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        vm.open(conversation("one", true)); runCurrent()
+        val file = encodeAttachment("log.txt", "text/plain", byteArrayOf(1), AttachmentKind.FILE)
+        vm.addAttachments(vm.attachmentOwner(), listOf(file)); vm.draft("看这个日志"); vm.steer(); runCurrent()
+        assertEquals(listOf("看这个日志"), repo.steerCalls); assertEquals(listOf(file), repo.steerAttachments)
+        assertTrue(vm.state.value.chat!!.attachments.isEmpty()); assertTrue(repo.queueCalls.isEmpty())
+    }
     @Test fun messageSentWhileWorkingSteersTheTurnOrQueuesWhenItCannot() = modelTest {
         repo.getDetail = { id, _ -> detail(id, running = true) }
         repo.admit = { buildJsonObject { put("pending", true) } }
@@ -701,7 +709,8 @@ class AgentViewModelTest {
         override suspend fun suggestions(conversationId: String) = "a1" to suggestionItems
         val steerCalls = mutableListOf<String>()
         var steerAccepts = true
-        override suspend fun steer(conversationId: String, controlId: String, message: String): Boolean { steerCalls += message; return steerAccepts }
+        override suspend fun steer(conversationId: String, controlId: String, message: String, attachments: List<Attachment>): Boolean { steerCalls += message; steerAttachments += attachments; return steerAccepts }
+        val steerAttachments = mutableListOf<Attachment>()
         override suspend fun resume(conversationId: String, headId: String): JsonObject {
             resumeCalls += conversationId to headId
             return resumeCall(conversationId, headId)

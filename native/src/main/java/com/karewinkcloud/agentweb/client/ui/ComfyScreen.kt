@@ -119,7 +119,8 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
                 { settingsOpen = true }, { focus.clearFocus(); keyboard?.hide(); vm.submit(); composerOpen = false }, vm::choose, vm::size,
                 composerHeight.coerceAtLeast(260.dp), { galleryOpen = true },
                 onStyle = { vm.replacePrompt(applyStyle(prompt.text, it)) }, onInspire = { vm.replacePrompt(comfyInspirations.random()) },
-                autoFocus = true, onParameter = vm::parameter)
+                autoFocus = true, onParameter = vm::parameter,
+                referenceButton = { ReferenceButton(state, vm) }, attachedReferences = { AttachedReferences(state, vm) })
         }
     }
     if (allOpen) AllCreations(jobs, ::titleOf, vm, showFailed, { showFailed = it }, openJob) { allOpen = false }
@@ -448,7 +449,9 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
     onFilter: (String, String) -> Unit, onSettings: () -> Unit, onSubmit: () -> Unit,
     onSuggestion: (String) -> Unit = {}, onSize: (ComfySize) -> Unit = {}, maxHeight: Dp = 320.dp, onGallery: () -> Unit = onSettings,
     onStyle: (ComfyStyle) -> Unit = {}, onInspire: () -> Unit = {}, autoFocus: Boolean = false,
-    onParameter: (String, String) -> Unit = { _, _ -> }) {
+    onParameter: (String, String) -> Unit = { _, _ -> },
+    /** "Reference materials" button and the attached references, when the workflow takes any. */
+    referenceButton: @Composable () -> Unit = {}, attachedReferences: @Composable () -> Unit = {}) {
     val promptFocus = remember { androidx.compose.ui.focus.FocusRequester() }
     if (autoFocus) LaunchedEffect(Unit) { delay(250); runCatching { promptFocus.requestFocus() } }
     var kindMenu by remember { mutableStateOf(false) }
@@ -485,6 +488,7 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
                 if (sizeMenu) SizeSheet(sizes, size?.label, onSize, quick = quick, current = current,
                     onQuick = { key, value -> onParameter(key, value) }) { sizeMenu = false }
             }
+            referenceButton()
             ActionIcon(R.drawable.aw_settings, tr(S.creation_settings), onClick = onSettings)
             val submitDescription = tr(if (state.submitting) S.submitting else S.generate)
             FilledIconButton(onSubmit, enabled = state.canSubmit, modifier = Modifier.size(48.dp).semantics { contentDescription = submitDescription }) {
@@ -493,6 +497,7 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
             }
         }
     }) {
+        attachedReferences()
         TextField(prompt, onPrompt, Modifier.fillMaxWidth().focusRequester(promptFocus), placeholder = { Text(tr(S.creation_hint)) }, minLines = 2, maxLines = 4,
             colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
                 focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))

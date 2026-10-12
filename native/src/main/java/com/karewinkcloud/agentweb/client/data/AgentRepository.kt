@@ -61,7 +61,7 @@ interface AgentRepository {
     /** Answers a question the agent asked in the running turn; false when it is no longer open. */
     suspend fun answer(conversationId: String, controlId: String, questionId: String, answer: String): Boolean = false
     /** Sends [message] into the running turn; false when that turn cannot take it (queue it instead). */
-    suspend fun steer(conversationId: String, controlId: String, message: String): Boolean = false
+    suspend fun steer(conversationId: String, controlId: String, message: String, attachments: List<Attachment> = emptyList()): Boolean = false
     suspend fun resume(conversationId: String, headId: String): JsonObject
     suspend fun claudeSessions(cursor: String? = null, project: String? = null): ClaudeSessionPage
     suspend fun claudeHistory(id: String, cursor: String? = null): ClaudeSessionHistory
@@ -320,8 +320,9 @@ class HttpAgentRepository(
     } catch (e: ApiException) {
         if (e.status == 409 || e.status == 404) false else throw e
     }
-    override suspend fun steer(conversationId: String, controlId: String, message: String): Boolean = try {
-        json("/api/chat/steer", buildJsonObject { put("conversationId", conversationId); put("controlId", controlId); put("message", message) })
+    override suspend fun steer(conversationId: String, controlId: String, message: String, attachments: List<Attachment>): Boolean = try {
+        json("/api/chat/steer", JsonObject(mapOf("conversationId" to JsonPrimitive(conversationId), "controlId" to JsonPrimitive(controlId),
+            "message" to JsonPrimitive(message)) + attachmentFields(attachments)), timeoutSeconds = if (attachments.isEmpty()) null else 120)
             .boolean("steered") == true
     } catch (e: ApiException) {
         if (e.status == 409 || e.status == 404) false else throw e

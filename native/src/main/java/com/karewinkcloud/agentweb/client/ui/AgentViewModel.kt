@@ -908,17 +908,19 @@ class AgentViewModel(
     fun steer() {
         val chat = state.value.chat ?: return
         val control = chat.controlId ?: return
-        if (!chat.running || !chat.hasDraft || chat.controlBusy || chat.conversation.nativeControl || chat.attachments.isNotEmpty()) {
+        if (!chat.running || !chat.hasDraft || chat.controlBusy || chat.conversation.nativeControl || !validAttachments(chat)) {
             queue(); return
         }
         val owner = generation
         val source = repository
         val text = chat.draft
+        val attachments = chat.attachments
         editChat(owner) { it.copy(controlBusy = true, error = null) }
         viewModelScope.launch {
-            val steered = try { source.steer(chat.conversation.id, control, text) }
+            val steered = try { source.steer(chat.conversation.id, control, text, attachments) }
                 catch (e: Exception) { editChat(owner) { it.copy(controlBusy = false, error = problem(e)) }; return@launch }
-            editChat(owner) { it.copy(controlBusy = false, draft = if (steered && it.draft == text) "" else it.draft) }
+            editChat(owner) { it.copy(controlBusy = false, draft = if (steered && it.draft == text) "" else it.draft,
+                attachments = if (steered) it.attachments.filterNot { a -> attachments.any { sent -> sent.id == a.id } } else it.attachments) }
             if (owned(owner)) saveDraft()
             if (!steered && owned(owner)) queue()
         }

@@ -311,6 +311,11 @@
     <string name="photos">照片</string>
     <string name="take_photo">拍照</string>
     <string name="files">文件</string>
+    <string name="reference_add">添加参考素材</string>
+    <string name="reference_image">参考图</string>
+    <string name="reference_video">参考视频</string>
+    <string name="reference_audio">参考音频</string>
+    <string name="reference_remove">移除参考素材</string>
     <string name="question_hint">点一个选项，或者直接在下面输入框写你的答案。</string>
     <string name="question_confirm">确定</string>
     <string name="question_answered">你选了：%1$s</string>
