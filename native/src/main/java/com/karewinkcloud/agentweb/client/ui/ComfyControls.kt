@@ -267,7 +267,9 @@ private fun NumericEntry(input: ComfyInput, value: String, state: ComfyState, on
 @Composable
 private fun ReferenceImagePicker(input: ComfyInput, value: String, state: ComfyState, vm: ComfyViewModel, onChange: (String) -> Unit) {
     val context = LocalContext.current
-    val options = if (input.media != "image") emptyList() else state.jobs.filter { it.canReferenceInCloud(state.workflows) }.flatMap { job ->
+    // Cloud outputs can only feed Cloud workflows; the free GPU and RunPod take pictures uploaded from the phone.
+    val cloudOnly = state.workflow?.channel in setOf("kaggle_gpu", "runpod_gpu")
+    val options = if (input.media != "image" || cloudOnly) emptyList() else state.jobs.filter { it.canReferenceInCloud(state.workflows) }.flatMap { job ->
         job.outputs.filter { it.mime.startsWith("image/") }.map { output -> job to output }
     }
     val chosen = runCatching { wireJson.parseToJsonElement(value).jsonObject }.getOrNull()
@@ -484,9 +486,9 @@ internal fun ReferenceButton(state: ComfyState, vm: ComfyViewModel) {
     val pick = rememberReferencePicker(vm)
     var menu by remember { mutableStateOf(false) }
     Box {
-        if (state.uploading != null) Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-        } else ActionIcon(R.drawable.aw_photos, tr(S.reference_add)) { if (inputs.size == 1) pick(inputs.single()) else menu = true }
+        AssistChip(onClick = { if (state.uploading == null) { if (inputs.size == 1) pick(inputs.single()) else menu = true } },
+            label = { Text(tr(if (state.uploading != null) S.asset_uploading else S.reference_chip)) },
+            leadingIcon = { if (state.uploading != null) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else AppIcon(R.drawable.aw_photos) })
         DropdownMenu(menu, { menu = false }) {
             inputs.forEach { input ->
                 val set = (state.values[input.key] ?: "").isNotBlank()

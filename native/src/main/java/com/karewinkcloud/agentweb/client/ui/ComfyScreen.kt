@@ -488,7 +488,6 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
                 if (sizeMenu) SizeSheet(sizes, size?.label, onSize, quick = quick, current = current,
                     onQuick = { key, value -> onParameter(key, value) }) { sizeMenu = false }
             }
-            referenceButton()
             ActionIcon(R.drawable.aw_settings, tr(S.creation_settings), onClick = onSettings)
             val submitDescription = tr(if (state.submitting) S.submitting else S.generate)
             FilledIconButton(onSubmit, enabled = state.canSubmit, modifier = Modifier.size(48.dp).semantics { contentDescription = submitDescription }) {
@@ -502,6 +501,7 @@ internal fun CreationComposer(state: ComfyState, prompt: TextFieldValue, onPromp
             colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
                 focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
         if (state.kind != "audio") LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = 4.dp)) {
+            item("reference") { referenceButton() }
             if (prompt.text.isBlank()) item("inspire") {
                 AssistChip(onInspire, label = { Text(tr(S.style_inspire)) }, leadingIcon = { AppIcon(R.drawable.aw_create) })
             }

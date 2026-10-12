@@ -311,6 +311,7 @@
     <string name="photos">照片</string>
     <string name="take_photo">拍照</string>
     <string name="files">文件</string>
+    <string name="reference_chip">参考素材</string>
     <string name="reference_add">添加参考素材</string>
     <string name="reference_image">参考图</string>
     <string name="reference_video">参考视频</string>

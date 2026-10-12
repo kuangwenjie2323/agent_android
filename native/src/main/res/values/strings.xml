@@ -315,6 +315,7 @@
     <string name="photos">Photos</string>
     <string name="take_photo">Take photo</string>
     <string name="files">Files</string>
+    <string name="reference_chip">References</string>
     <string name="reference_add">Add a reference</string>
     <string name="reference_image">Reference image</string>
     <string name="reference_video">Reference video</string>
