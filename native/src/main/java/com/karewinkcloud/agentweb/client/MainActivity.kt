@@ -28,6 +28,8 @@ import com.karewinkcloud.agentweb.client.ui.*
 
 class MainActivity : ComponentActivity() {
     private lateinit var settings: SettingsViewModel
+    private var chatModel: AgentViewModel? = null
+    private var following = false
     private val listCacheDir by lazy { java.io.File(noBackupFilesDir, "conversation-list") }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,6 +38,7 @@ class MainActivity : ComponentActivity() {
             SettingsViewModel(SettingsStore(applicationContext), deviceName = Build.MODEL)
         })[SettingsViewModel::class.java]
         receiveCallback(intent)
+        askForNotifications()
         setContent {
             val preferences by settings.state.collectAsStateWithLifecycle()
             val authentication by settings.authentication.collectAsStateWithLifecycle()
@@ -46,6 +49,7 @@ class MainActivity : ComponentActivity() {
                 AgentViewModel(HttpAgentRepository(preferences.origin, settings.store, listCacheDir = listCacheDir), preferences.choice,
                     connection.signInRequired, settings.store::saveChoice).also { it.appliedConnection = connection }
             })
+            SideEffect { chatModel = chat }
             LaunchedEffect(chat) { chat.preloadClaudeSessions() }
             LaunchedEffect(connection) {
                 // The epoch survives Activity recreation along with the chat ViewModel.
@@ -94,6 +98,32 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    // Leaving the app (Home, recents, screen off) hands a running turn to the notification follower.
+    override fun onUserLeaveHint() { super.onUserLeaveHint(); followInBackground() }
+
+    override fun onStop() { super.onStop(); if (!isChangingConfigurations) followInBackground() }
+
+    override fun onStart() {
+        super.onStart()
+        if (following) { following = false; AgentWorkService.stop(this) }
+    }
+
+    private fun followInBackground() {
+        if (following) return
+        val chat = chatModel?.state?.value?.chat ?: return
+        val control = chat.controlId?.takeIf { chat.running } ?: return
+        following = AgentWorkService.start(this, chat.conversation.id, control, chat.conversation.title).isSuccess
+    }
+
+    private fun askForNotifications() {
+        if (Build.VERSION.SDK_INT < 33 || checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        val preferences = getSharedPreferences("notifications", MODE_PRIVATE)
+        if (preferences.getBoolean("asked", false)) return
+        preferences.edit().putBoolean("asked", true).apply()
+        requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 7)
     }
 
     override fun onNewIntent(intent: Intent) {

@@ -145,6 +145,7 @@ internal fun comfyErrorResource(code: String) = when(code) {
 
 /** Transport text remains data; local status/error copy follows the selected app locale. */
 @Composable internal fun localMessage(message: String): String {
+    SIGN_IN_EXPIRED.find(message)?.let { return tr(S.provider_signin_expired, it.groupValues[1]) }
     val resource = when (message) {
         "passkey_none" -> S.passkey_none
         "passkey_cancelled" -> S.passkey_cancelled
@@ -186,3 +187,5 @@ internal fun comfyErrorResource(code: String) = when(code) {
     }
     return resource?.let { tr(it) } ?: message
 }
+
+private val SIGN_IN_EXPIRED = Regex("^(\\S+) sign-in on the server has expired")

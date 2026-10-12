@@ -464,4 +464,12 @@
     <string name="featured_workflows">精选工作流</string>
     <string name="start_with_style">从风格开始</string>
     <string name="creation_start">开始创作</string>
+    <string name="notify_working">智能体正在工作</string>
+    <string name="notify_done">智能体已完成</string>
+    <string name="notify_question">智能体需要你做个选择</string>
+    <string name="notify_answered">已回答：%1$s</string>
+    <string name="notify_answer_failed">没能发送「%1$s」，请打开应用回答</string>
+    <string name="notify_channel_work">进行中的任务</string>
+    <string name="notify_channel_attention">提问和完成提醒</string>
+    <string name="provider_signin_expired">服务器上的 %1$s 登录已过期。请在电脑上重新登录 %1$s，然后点"重试"。</string>
 </resources>
