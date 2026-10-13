@@ -50,6 +50,7 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
     LifecycleStartEffect(vm) { vm.setForeground(true); onStopOrDispose { vm.setForeground(false) } }
     var settingsOpen by remember { mutableStateOf(false) }
     var detailOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(state.detailRevision) { if (state.detailRevision > 0 && state.selected != null) detailOpen = true }
     var galleryOpen by remember { mutableStateOf(false) }
     var showFailed by rememberSaveable { mutableStateOf(false) }
     val focus = LocalFocusManager.current
@@ -67,7 +68,10 @@ internal fun ColumnScope.ComfyScreen(vm: ComfyViewModel, composerHeight: Dp = 32
         ?: state.jobs.find { it.requestId == id } ?: ComfyJob(id, "", "unknown") }
     val jobs = (if (pendingJob != null && state.jobs.none { it.requestId == pendingJob.requestId }) listOf(pendingJob) else emptyList()) +
         state.jobs.map { job -> pendingJob?.takeIf { it.requestId == job.requestId } ?: job }
-    val recent = jobs.filter { it.phase() != ComfyJobPhase.FAILED }
+    // A fresh failure stays on the shelf with its reason (it used to vanish, so a job that failed
+    // right after "Generate" looked like nothing had happened); older ones live under "See all".
+    val freshSince = System.currentTimeMillis() / 1000 - 30 * 60
+    val recent = jobs.filter { it.phase() != ComfyJobPhase.FAILED || it.requestId == state.pending || (it.createdAt ?: 0) >= freshSince }
     val recentRow = rememberLazyListState()
     // A new job lands first in the list; keep it in view instead of one card off-screen to the left.
     LaunchedEffect(recent.firstOrNull()?.requestId) { if (recent.isNotEmpty()) recentRow.animateScrollToItem(0) }
@@ -170,6 +174,11 @@ private fun CreationCard(job: ComfyJob, title: String, vm: ComfyViewModel, onCli
             ComfyJobPhase.COMPLETE -> ComfyThumbnail(job, vm, Modifier.fillMaxSize())
             ComfyJobPhase.STARTING, ComfyJobPhase.QUEUED, ComfyJobPhase.RUNNING, ComfyJobPhase.FINISHING ->
                 CreationProgress(job, vm, Modifier.padding(12.dp))
+            ComfyJobPhase.FAILED -> Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(comfyStatus(job.status), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.error)
+                Text(comfyError(job.errorCode ?: "execution_failed"), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 6, overflow = TextOverflow.Ellipsis)
+            }
             else -> Text(comfyStatus(job.status), Modifier.padding(12.dp), style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -305,7 +314,7 @@ private fun CreationTile(job: ComfyJob, title: String, vm: ComfyViewModel, onCli
 }
 
 @Composable
-internal fun CreationProgress(job: ComfyJob, vm: ComfyViewModel, modifier: Modifier = Modifier) {
+internal fun CreationProgress(job: ComfyJob, vm: ComfyViewModel, modifier: Modifier = Modifier, leaveHint: Boolean = false) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val motionScale = rememberCoroutineScope().coroutineContext[MotionDurationScale]
     var observed by remember(job.requestId) { mutableLongStateOf(vm.observedMillis(job.requestId)) }
@@ -333,6 +342,10 @@ internal fun CreationProgress(job: ComfyJob, vm: ComfyViewModel, modifier: Modif
         val sinceSubmit = job.createdAt?.let { (System.currentTimeMillis() / 1000 - it).takeIf { s -> s >= 0 } }
         Text(if (sinceSubmit != null) tr(S.job_elapsed_total, spanLabel(sinceSubmit)) else tr(S.job_elapsed, observed / 1000),
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        // Waits for a GPU can be long; say it is fine to leave.
+        if (leaveHint && job.phase() in setOf(ComfyJobPhase.STARTING, ComfyJobPhase.QUEUED))
+            Text(tr(S.creation_leave_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }
 }
 
@@ -377,10 +390,16 @@ private fun CreationDetail(state: ComfyState, vm: ComfyViewModel, onEdit: () -> 
             // A finished result leads with the media; status controls only matter while a job is open or failed.
             if (active) item("status") {
                 if (job.phase() in setOf(ComfyJobPhase.STARTING, ComfyJobPhase.QUEUED, ComfyJobPhase.RUNNING, ComfyJobPhase.FINISHING))
-                    CreationProgress(job, vm, Modifier.fillMaxWidth().padding(vertical = 16.dp))
+                    CreationProgress(job, vm, Modifier.fillMaxWidth().padding(vertical = 16.dp), leaveHint = true)
                 else Text(comfyStatus(job.status), Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                     style = MaterialTheme.typography.titleSmall, color = if (job.phase() == ComfyJobPhase.FAILED) MaterialTheme.colorScheme.error else Color.Unspecified)
-                job.errorCode?.let { Text(comfyError(it), style = MaterialTheme.typography.bodyMedium) }
+                // A failure without a code (older records) still says what happened instead of "check later".
+                (job.errorCode ?: "execution_failed".takeIf { job.phase() == ComfyJobPhase.FAILED })?.let {
+                    Text(comfyError(it), style = MaterialTheme.typography.bodyMedium)
+                }
+                job.errorNode?.takeIf { job.phase() == ComfyJobPhase.FAILED }?.let {
+                    Text(tr(S.error_failed_node, it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 if (job.status in setOf("unknown", "query_failed")) Text(tr(S.uncertain_hint), style = MaterialTheme.typography.bodySmall)
                 if (job.phase() != ComfyJobPhase.FAILED) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton({ vm.check(job.requestId) }, enabled = !state.checking && !state.submitting) { Text(tr(S.check_status)) }

@@ -25,11 +25,15 @@ import androidx.browser.customtabs.CustomTabsClient
 import androidx.browser.customtabs.CustomTabsIntent
 import com.karewinkcloud.agentweb.client.data.*
 import com.karewinkcloud.agentweb.client.ui.*
+import com.karewinkcloud.agentweb.client.core.needsPolling
 
 class MainActivity : ComponentActivity() {
     private lateinit var settings: SettingsViewModel
     private var chatModel: AgentViewModel? = null
+    private var studioModel: ComfyViewModel? = null
     private var following = false
+    /** A tapped notification's target ("conversation" or "creation" to its id), shown once the view models exist. */
+    private val openRequest = mutableStateOf<Pair<String, String>?>(null)
     private val listCacheDir by lazy { java.io.File(noBackupFilesDir, "conversation-list") }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,6 +41,7 @@ class MainActivity : ComponentActivity() {
         settings = ViewModelProvider(this, factory {
             SettingsViewModel(SettingsStore(applicationContext), deviceName = Build.MODEL)
         })[SettingsViewModel::class.java]
+        takeOpenRequest(intent)
         receiveCallback(intent)
         askForNotifications()
         setContent {
@@ -63,7 +68,14 @@ class MainActivity : ComponentActivity() {
                     AndroidComfyPendingStore(applicationContext, connection.origin, settings.store),
                     java.io.File(cacheDir, "comfy-output"), connection.signInRequired).also { it.appliedConnection = connection }
             })
+            SideEffect { studioModel = studio }
             LaunchedEffect(studio) { studio.preload() }
+            val request by openRequest
+            LaunchedEffect(request) {
+                val (kind, id) = request ?: return@LaunchedEffect
+                openRequest.value = null
+                if (kind == "creation") { chat.selectTab(AppTab.CREATE); studio.openById(id) } else chat.openById(id)
+            }
             LaunchedEffect(connection) {
                 if (studio.appliedConnection != connection) {
                     studio.appliedConnection = connection
@@ -108,13 +120,31 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         if (following) { following = false; AgentWorkService.stop(this) }
+        AgentWorkService.clearAll(this)
     }
 
+    /** Every running turn (the open chat and the list) and every open creation goes to the notification follower. */
     private fun followInBackground() {
         if (following) return
-        val chat = chatModel?.state?.value?.chat ?: return
-        val control = chat.controlId?.takeIf { chat.running } ?: return
-        following = AgentWorkService.start(this, chat.conversation.id, control, chat.conversation.title).isSuccess
+        val state = chatModel?.state?.value
+        val turns = buildList {
+            state?.chat?.let { chat -> chat.controlId?.takeIf { chat.running }?.let { add(AgentWorkService.Turn(chat.conversation.id, it, chat.conversation.title)) } }
+            state?.conversations.orEmpty().forEach { conversation ->
+                val control = conversation.controlId?.takeIf { conversation.running } ?: return@forEach
+                if (none { it.conversationId == conversation.id }) add(AgentWorkService.Turn(conversation.id, control, conversation.title))
+            }
+        }
+        val studio = studioModel?.state?.value
+        val creations = studio?.jobs.orEmpty().filter { it.needsPolling() }.map { job ->
+            AgentWorkService.Creation(job.requestId, studio?.workflows?.find { it.id == job.workflowId }?.title ?: job.workflowId)
+        }
+        if (turns.isEmpty() && creations.isEmpty()) return
+        following = AgentWorkService.start(this, turns, creations).isSuccess
+    }
+
+    private fun takeOpenRequest(incoming: Intent) {
+        incoming.getStringExtra(AgentWorkService.EXTRA_OPEN_CONVERSATION)?.let { openRequest.value = "conversation" to it }
+        incoming.getStringExtra(AgentWorkService.EXTRA_OPEN_CREATION)?.let { openRequest.value = "creation" to it }
     }
 
     private fun askForNotifications() {
@@ -128,6 +158,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        takeOpenRequest(intent)
         receiveCallback(intent)
     }
 

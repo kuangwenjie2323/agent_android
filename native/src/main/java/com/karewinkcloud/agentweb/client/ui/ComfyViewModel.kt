@@ -20,6 +20,8 @@ data class ComfyState(
     val kind: String = "image", val channel: String = "cloud_gpu", val prompt: String = "",
     /** Bumped only when the prompt is replaced from outside the field (Edit prefill), never by typing. */
     val promptRevision: Int = 0,
+    /** Bumped when something outside the screen (a tapped notification) asks to show [selected]'s detail. */
+    val detailRevision: Int = 0,
     val values: Map<String, String> = emptyMap(), val suggestions: List<ComfySuggestion> = emptyList(),
     val resources: ComfyResources? = null, val resourcesLoading: Boolean = false, val resourcesError: Boolean = false,
     val jobs: List<ComfyJob> = emptyList(), val selected: ComfyJob? = null, val pending: String? = null,
@@ -362,6 +364,16 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
             jobs = if (current.jobs.any { it.requestId == job.requestId }) current.jobs.map { if (it.requestId == job.requestId) job else it }
                 else (listOf(job) + current.jobs).take(50), error = job.errorCode) }
         if (foreground && !state.value.pollingPaused) schedulePoll()
+    }
+    /** Shows one creation by request id (a tapped notification), reading it when the list does not have it. */
+    fun openById(requestId: String) {
+        val show = { job: ComfyJob -> open(job); mutable.update { it.copy(detailRevision = it.detailRevision + 1) } }
+        state.value.jobs.firstOrNull { it.requestId == requestId }?.let { show(it); return }
+        val owner = epoch; val source = repository
+        viewModelScope.launch {
+            val job = try { source.job(requestId) } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+            if (job != null && owner == epoch) show(job)
+        }
     }
     fun open(job: ComfyJob) {
         stopPolling(user = false)

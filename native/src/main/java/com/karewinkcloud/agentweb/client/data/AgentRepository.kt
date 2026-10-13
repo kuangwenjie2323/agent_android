@@ -229,11 +229,12 @@ class HttpAgentRepository(
     override suspend fun conversations() = json("/api/chat/conversations").objects("conversations").map(Conversation::from)
     // Last-known responses, one folder per server + credential so another account never sees
     // them; other accounts' folders are removed on save. Only lists are kept, never history.
-    private fun snapshotDir(): java.io.File? = listCacheDir?.let { dir ->
+    private fun snapshotDir(): java.io.File? = listCacheDir?.let { dir -> credentialKey()?.let { java.io.File(dir, it) } }
+    /** A stable folder name for this server + credential; a different account never gets the same one. */
+    internal fun credentialKey(): String? {
         val token = tokens.tokenFor(origin)?.takeIf { it.isNotBlank() } ?: return null
-        val key = java.security.MessageDigest.getInstance("SHA-256").digest((origin + "\n" + token).toByteArray())
+        return java.security.MessageDigest.getInstance("SHA-256").digest((origin + "\n" + token).toByteArray())
             .joinToString("") { "%02x".format(it) }.take(32)
-        java.io.File(dir, key)
     }
     internal suspend fun snapshot(name: String): JsonObject? = withContext(Dispatchers.IO) {
         runCatching {

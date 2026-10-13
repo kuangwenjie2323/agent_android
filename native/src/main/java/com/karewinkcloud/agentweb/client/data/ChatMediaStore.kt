@@ -24,8 +24,10 @@ fun mediaTarget(origin: String, value: String): MediaTarget? {
 
 data class CachedMedia(val file: File, val mime: String)
 class ChatMediaStore(private val repository: HttpAgentRepository, cache: File) {
-    // Each auth/server epoch gets a private namespace; previous credentials' downloads are never reused.
-    private val root = File(cache, "chat-media/${newControlId()}").apply { mkdirs() }
+    // One folder per server + credential, kept across launches so pictures already seen show at once
+    // (each used to cost a fresh download after every restart); another account's downloads are never
+    // reused. Without a credential (local testing) each launch gets its own folder.
+    private val root = File(cache, "chat-media/${repository.credentialKey() ?: newControlId()}").apply { mkdirs() }
     private val permits = Semaphore(2)
     private val locks = Array(32) { Mutex() }
     private val downloads = mutableMapOf<String, CachedMedia>()
@@ -43,11 +45,19 @@ class ChatMediaStore(private val repository: HttpAgentRepository, cache: File) {
             synchronized(downloads) { downloads[url] }?.takeIf { it.file.isFile }?.let { return@withLock it }
             val target = requireNotNull(mediaTarget(repository.origin, url)) { "不支持此附件地址" }
             val key = MessageDigest.getInstance("SHA-256").digest(url.toByteArray()).joinToString("") { "%02x".format(it) }
-            val file = File(root, key)
-            val mime = repository.downloadChatMedia(target, file, 32L * 1024 * 1024)
-            // Cache is private and disposable; a missing evicted file is fetched again on demand.
-            pruneChatCache(root.parentFile, file, 128L * 1024 * 1024)
-            CachedMedia(file, mime).also { synchronized(downloads) {
+            val file = File(root, key); val type = File(root, "$key.type")
+            val cached = if (file.isFile && type.isFile) CachedMedia(file, type.readText()).also { file.setLastModified(System.currentTimeMillis()) }
+            else {
+                // Written aside and renamed, so a download cut off by the app being killed is never taken as complete.
+                val part = File(root, "$key.part")
+                val mime = repository.downloadChatMedia(target, part, 32L * 1024 * 1024)
+                type.writeText(mime)
+                if (!part.renameTo(file)) { part.delete(); throw java.io.IOException("Media could not be saved") }
+                // Cache is private and disposable; a missing evicted file is fetched again on demand.
+                pruneChatCache(root.parentFile, file, 128L * 1024 * 1024)
+                CachedMedia(file, mime)
+            }
+            cached.also { synchronized(downloads) {
                 if (downloads.size >= 128) downloads.remove(downloads.keys.first())
                 downloads[url] = it
             } }

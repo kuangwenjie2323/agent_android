@@ -468,7 +468,6 @@
     <string name="featured_workflows">Workflows</string>
     <string name="start_with_style">Start with a style</string>
     <string name="creation_start">Start creating</string>
-    <string name="notify_working">The agent is working</string>
     <string name="notify_done">The agent has finished</string>
     <string name="notify_question">The agent needs your choice</string>
     <string name="notify_answered">Answered: %1$s</string>
@@ -476,4 +475,19 @@
     <string name="notify_channel_work">Running turns</string>
     <string name="notify_channel_attention">Questions and finished turns</string>
     <string name="provider_signin_expired">%1$s sign-in on the server has expired. Sign in again on the server computer, then tap Retry.</string>
+    <string name="status_kaggle_waiting_gpu">Kaggle is queueing a free GPU (usually 5–30 min)</string>
+    <string name="error_content_moderated">The provider\'s content check blocked this request, so nothing was generated. Change the prompt or the reference and try again.</string>
+    <string name="error_out_of_memory">The GPU ran out of memory. Lower the resolution or duration and try again.</string>
+    <string name="error_generation_timeout">The generation took too long and was stopped. Try again, or pick a faster workflow.</string>
+    <string name="error_provider_busy">The provider is busy right now. Wait a few minutes and try again.</string>
+    <string name="error_execution_failed">The workflow failed while running. Try again; if it keeps failing, pick another workflow.</string>
+    <string name="error_failed_node">Failed step: %1$s</string>
+    <string name="notify_background">AgentWeb is working in the background</string>
+    <string name="notify_background_turns">%1$d conversation(s) running</string>
+    <string name="notify_background_jobs">%1$d creation(s) in progress</string>
+    <string name="notify_creation_done">Your creation is ready</string>
+    <string name="notify_creation_failed">A creation failed</string>
+    <string name="status_kaggle_gpu_busy">Your Kaggle account\'s 2 GPU sessions are in use; this starts when one frees up</string>
+    <string name="error_kaggle_gpu_busy">Your Kaggle account kept both GPU sessions busy, so the free GPU could not start. Stop one on Kaggle or choose Comfy Cloud.</string>
+    <string name="creation_leave_hint">You can leave the app; you\'ll get a notification when it\'s ready.</string>
 </resources>

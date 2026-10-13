@@ -78,6 +78,8 @@ internal fun comfyProgressResource(job: ComfyJob) = if (job.status == "canceling
     ComfyJobPhase.STARTING -> if (job.billingChannel == "runpod_gpu") {
         if (job.workerStage == "waiting_gpu") S.status_runpod_waiting_gpu else S.status_runpod_starting
     } else when (job.workerStage) {
+        "waiting_gpu" -> S.status_kaggle_waiting_gpu
+        "gpu_busy" -> S.status_kaggle_gpu_busy
         "installing" -> S.status_kaggle_installing
         "models" -> S.status_kaggle_models
         "comfy", "ready", "first_image" -> S.status_kaggle_comfy
@@ -107,6 +109,12 @@ internal fun comfyErrorResource(code: String) = when(code) {
     "kaggle_worker_lost" -> S.error_kaggle_worker_lost
     "kaggle_execution_failed" -> S.error_kaggle_execution
     "kaggle_unavailable" -> S.error_kaggle_unavailable
+    "kaggle_gpu_busy" -> S.error_kaggle_gpu_busy
+    "content_moderated" -> S.error_content_moderated
+    "generation_out_of_memory" -> S.error_out_of_memory
+    "generation_timeout" -> S.error_generation_timeout
+    "provider_busy" -> S.error_provider_busy
+    "execution_failed" -> S.error_execution_failed
     else -> S.error_generic
 }
 @Composable internal fun comfyError(code: String) = tr(comfyErrorResource(code))

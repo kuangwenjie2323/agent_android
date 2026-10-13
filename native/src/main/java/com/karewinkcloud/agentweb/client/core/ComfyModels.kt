@@ -166,7 +166,9 @@ data class ComfyJob(val requestId: String, val workflowId: String, val status: S
     /** Server clock, epoch seconds: when the job was submitted and when it reached a final state. */
     val createdAt: Long? = null, val finishedAt: Long? = null,
     /** The GPU provider's own split, when it reports one: waiting for a worker vs. running on it. */
-    val queueMs: Long? = null, val runMs: Long? = null) {
+    val queueMs: Long? = null, val runMs: Long? = null,
+    /** The workflow step (node class) that failed, when the provider says. */
+    val errorNode: String? = null) {
     /** Seconds from submission to the final state, when both ends are known. */
     val totalSeconds get() = createdAt?.let { start -> finishedAt?.let { end -> (end - start).takeIf { it >= 0 } } }
     companion object {
@@ -179,12 +181,14 @@ data class ComfyJob(val requestId: String, val workflowId: String, val status: S
                 j.obj("error")?.string("code"), j.string("job_id"), (j["progress"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it in 0.0..1.0 },
                 j.string("billing_channel"), j.string("worker_state"),
                 (j["queue_position"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull?.takeIf { it in 1..Int.MAX_VALUE.toLong() }?.toInt(),
-                j.string("worker_stage")?.takeIf { it in setOf("starting", "installing", "models", "comfy", "ready", "first_image", "waiting_gpu") },
+                j.string("worker_stage")?.takeIf { it in setOf("starting", "installing", "models", "comfy", "ready", "first_image", "waiting_gpu", "gpu_busy") },
                 epochSeconds(j["created_at"]), epochSeconds(j["finished_at"]),
-                j.obj("timing")?.let { duration(it["queue_ms"]) }, j.obj("timing")?.let { duration(it["run_ms"]) })
+                j.obj("timing")?.let { duration(it["queue_ms"]) }, j.obj("timing")?.let { duration(it["run_ms"]) },
+                j.obj("error")?.string("node")?.takeIf { NODE_CLASS.matches(it) })
         }
     }
 }
+private val NODE_CLASS = Regex("[A-Za-z0-9_.+-]{1,80}")
 private fun epochSeconds(value: JsonElement?) = (value as? JsonPrimitive)?.takeUnless { it.isString }?.doubleOrNull
     ?.takeIf { it.isFinite() && it > 1_000_000_000 && it < 10_000_000_000 }?.toLong()
 private fun duration(value: JsonElement?) = (value as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull?.takeIf { it in 0..1_000_000_000 }

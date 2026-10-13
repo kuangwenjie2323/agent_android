@@ -344,6 +344,17 @@ class AgentViewModel(
         // permissions. Keep the user's selection for the first send in a fresh chat.
         sessionJob = viewModelScope.launch { loadAndFollow(owner, applyChoice = !fresh) }
     }
+    /** Opens a conversation by id (a tapped notification); reads the list first when it is not loaded yet. */
+    fun openById(id: String) {
+        if (state.value.signInRequired) return
+        state.value.conversations.firstOrNull { it.id == id }?.let { open(it); return }
+        val owner = epoch; val source = repository
+        viewModelScope.launch {
+            val found = try { source.conversations().firstOrNull { it.id == id } } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { null }
+            if (found != null && owner == epoch) open(found)
+        }
+    }
     fun back() {
         cacheChat(); saveDraft(); generation++; attachmentScope = newControlId(); sessionJob?.cancel()
         val current = state.value
