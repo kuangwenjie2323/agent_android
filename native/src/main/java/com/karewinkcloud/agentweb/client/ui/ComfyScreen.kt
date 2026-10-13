@@ -318,12 +318,16 @@ internal fun CreationProgress(job: ComfyJob, vm: ComfyViewModel, modifier: Modif
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val motionScale = rememberCoroutineScope().coroutineContext[MotionDurationScale]
     var observed by remember(job.requestId) { mutableLongStateOf(vm.observedMillis(job.requestId)) }
+    // Ticks with [observed]: the elapsed time since submission must be read from a state that changes,
+    // or the label froze at its first value ("0 s" for the whole wait).
+    var nowSeconds by remember { mutableLongStateOf(System.currentTimeMillis() / 1000) }
     var animate by remember { mutableStateOf(false) }
     LaunchedEffect(job.requestId, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             try {
                 while (true) {
                     observed = vm.observedMillis(job.requestId)
+                    nowSeconds = System.currentTimeMillis() / 1000
                     animate = ValueAnimator.areAnimatorsEnabled()
                     delay(1000)
                 }
@@ -339,7 +343,7 @@ internal fun CreationProgress(job: ComfyJob, vm: ComfyViewModel, modifier: Modif
             LinearProgressIndicator(progress = { it.toFloat() }, modifier = Modifier.fillMaxWidth())
             Text(tr(S.job_progress, (it * 100).toInt()), style = MaterialTheme.typography.bodySmall)
         }
-        val sinceSubmit = job.createdAt?.let { (System.currentTimeMillis() / 1000 - it).takeIf { s -> s >= 0 } }
+        val sinceSubmit = job.createdAt?.let { (nowSeconds - it).takeIf { s -> s >= 0 } }
         Text(if (sinceSubmit != null) tr(S.job_elapsed_total, spanLabel(sinceSubmit)) else tr(S.job_elapsed, observed / 1000),
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         // Waits for a GPU can be long; say it is fine to leave.

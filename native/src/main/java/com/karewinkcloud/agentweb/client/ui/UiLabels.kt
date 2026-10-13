@@ -115,6 +115,7 @@ internal fun comfyErrorResource(code: String) = when(code) {
     "generation_timeout" -> S.error_generation_timeout
     "provider_busy" -> S.error_provider_busy
     "execution_failed" -> S.error_execution_failed
+    "output_too_large" -> S.error_output_too_large
     else -> S.error_generic
 }
 @Composable internal fun comfyError(code: String) = tr(comfyErrorResource(code))

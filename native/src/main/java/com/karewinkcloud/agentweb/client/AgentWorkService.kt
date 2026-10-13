@@ -35,6 +35,9 @@ import java.io.File
 class AgentWorkService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var work: Job? = null
+    // What the ongoing note counts; both change only on the main thread.
+    private var turnsLeft = 0
+    private var creationsLeft = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -43,14 +46,9 @@ class AgentWorkService : Service() {
         val creations = intent?.creations().orEmpty()
         if (turns.isEmpty() && creations.isEmpty()) { stopSelf(); return START_NOT_STICKY }
         createChannels(this)
-        val summary = listOfNotNull(
-            turns.size.takeIf { it > 0 }?.let { getString(R.string.notify_background_turns, it) },
-            creations.size.takeIf { it > 0 }?.let { getString(R.string.notify_background_jobs, it) }).joinToString(" · ")
-        val ongoing = NotificationCompat.Builder(this, CHANNEL_WORK).setSmallIcon(R.drawable.aw_create)
-            .setContentTitle(getString(R.string.notify_background)).setContentText(summary).setOngoing(true).setSilent(true)
-            .setContentIntent(openApp(this)).build()
+        turnsLeft = turns.size; creationsLeft = creations.size
         try {
-            ServiceCompat.startForeground(this, ID_ONGOING, ongoing,
+            ServiceCompat.startForeground(this, ID_ONGOING, ongoing(),
                 if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0)
         } catch (_: Exception) { stopSelf(); return START_NOT_STICKY }
         work?.cancel()
@@ -65,6 +63,18 @@ class AgentWorkService : Service() {
         }
         return START_NOT_STICKY
     }
+
+    private fun ongoing(): Notification {
+        val summary = listOfNotNull(
+            turnsLeft.takeIf { it > 0 }?.let { getString(R.string.notify_background_turns, it) },
+            creationsLeft.takeIf { it > 0 }?.let { getString(R.string.notify_background_jobs, it) }).joinToString(" · ")
+        return NotificationCompat.Builder(this, CHANNEL_WORK).setSmallIcon(R.drawable.aw_create)
+            .setContentTitle(getString(R.string.notify_background)).setContentText(summary).setOngoing(true).setSilent(true)
+            .setContentIntent(openApp(this)).build()
+    }
+
+    /** The ongoing note follows what is still running ("3 in progress" stayed after two had finished). */
+    private fun refreshOngoing() { if (turnsLeft + creationsLeft > 0) notify(this, ID_ONGOING, ongoing()) }
 
     private suspend fun followTurn(repository: HttpAgentRepository, turn: Turn) {
         val asked = mutableSetOf<String>()
@@ -84,6 +94,7 @@ class AgentWorkService : Service() {
                 }
             }
         } catch (_: Exception) { }
+        finally { turnsLeft--; refreshOngoing() }
     }
 
     private suspend fun followCreations(studio: HttpComfyRepository, creations: List<Creation>) {
@@ -100,6 +111,7 @@ class AgentWorkService : Service() {
                     ComfyJobPhase.UNKNOWN -> open.remove(creation.requestId)
                     else -> Unit
                 }
+                if (creationsLeft != open.size) { creationsLeft = open.size; refreshOngoing() }
             }
             if (open.isNotEmpty()) delay(15_000)
         }

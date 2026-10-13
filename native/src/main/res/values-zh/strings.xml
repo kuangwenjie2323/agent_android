@@ -486,4 +486,5 @@
     <string name="status_kaggle_gpu_busy">Kaggle 账号的 2 个 GPU 名额都被占用，空出来就自动开始</string>
     <string name="error_kaggle_gpu_busy">你的 Kaggle 账号一直有 2 个 GPU 任务在运行（Kaggle 最多允许 2 个），免费 GPU 没能启动。可以在 Kaggle 上停掉一个，或改用 Comfy Cloud。</string>
     <string name="creation_leave_hint">可以先离开 App，好了会通知你。</string>
+    <string name="error_output_too_large">结果超过 128 MB，没法取回。换个更短或更小的规格再试。</string>
 </resources>

@@ -490,4 +490,5 @@
     <string name="status_kaggle_gpu_busy">Your Kaggle account\'s 2 GPU sessions are in use; this starts when one frees up</string>
     <string name="error_kaggle_gpu_busy">Your Kaggle account kept both GPU sessions busy, so the free GPU could not start. Stop one on Kaggle or choose Comfy Cloud.</string>
     <string name="creation_leave_hint">You can leave the app; you\'ll get a notification when it\'s ready.</string>
+    <string name="error_output_too_large">The result is larger than 128 MB, so it could not be collected. Choose a shorter or smaller output.</string>
 </resources>
