@@ -147,7 +147,8 @@ internal fun comfyErrorResource(code: String) = when(code) {
         "sample_rate" -> S.field_sample_rate
         "subject_detection" -> S.field_subject_detection
         "thinking" -> S.field_thinking
-        else -> null
+        // A reference picture, clip or sound reads by what it is, not by its manifest key.
+        else -> if (input.type == "asset") when (input.media) { "video" -> S.reference_video; "audio" -> S.reference_audio; else -> S.reference_image } else null
     }
     return id?.let { tr(it) } ?: input.title
 }

@@ -491,4 +491,63 @@
     <string name="error_kaggle_gpu_busy">Your Kaggle account kept both GPU sessions busy, so the free GPU could not start. Stop one on Kaggle or choose Comfy Cloud.</string>
     <string name="creation_leave_hint">You can leave the app; you\'ll get a notification when it\'s ready.</string>
     <string name="error_output_too_large">The result is larger than 128 MB, so it could not be collected. Choose a shorter or smaller output.</string>
+    <string name="step_think">Thought</string>
+    <string name="step_think_running">Thinking</string>
+    <string name="step_think_done">Thought for %1$s</string>
+    <string name="step_command">Ran a command</string>
+    <string name="step_read">Read</string>
+    <string name="step_edit">Edited</string>
+    <string name="step_write">Created</string>
+    <string name="step_search">Searched</string>
+    <string name="step_web_search">Searched the web</string>
+    <string name="step_web_fetch">Opened</string>
+    <string name="step_image">Viewed an image</string>
+    <string name="step_agent">Subtask</string>
+    <string name="step_todo">Updated tasks</string>
+    <string name="step_mcp">Used %1$s</string>
+    <string name="step_earlier">%1$d earlier steps</string>
+    <string name="step_more_lines">%1$d more lines, tap to show</string>
+    <string name="step_file_removed">Deleted this file</string>
+    <plurals name="work_commands"><item quantity="one">Ran %1$d command</item><item quantity="other">Ran %1$d commands</item></plurals>
+    <plurals name="work_edits"><item quantity="one">Edited %1$d file</item><item quantity="other">Edited %1$d files</item></plurals>
+    <plurals name="work_reads"><item quantity="one">Read %1$d file</item><item quantity="other">Read %1$d files</item></plurals>
+    <plurals name="work_searches"><item quantity="one">Searched once</item><item quantity="other">Searched %1$d times</item></plurals>
+    <plurals name="work_pages"><item quantity="one">Opened %1$d page</item><item quantity="other">Opened %1$d pages</item></plurals>
+    <plurals name="work_other"><item quantity="one">%1$d more step</item><item quantity="other">%1$d more steps</item></plurals>
+    <string name="step_background">Running in the background</string>
+    <string name="step_background_agent">Background agent</string>
+    <string name="step_task_output">Checked background output</string>
+    <string name="step_task_stop">Stopped a background task</string>
+    <string name="task_running">Running</string>
+    <string name="task_running_for">Running · %1$s</string>
+    <string name="task_done">Done</string>
+    <string name="task_done_in">Done · %1$s</string>
+    <string name="task_failed">Failed</string>
+    <string name="task_failed_code">Failed · exit code %1$d</string>
+    <string name="task_stopped">Stopped</string>
+    <string name="task_stop">Stop</string>
+    <string name="task_exit_code">exit code %1$d</string>
+    <string name="task_unnamed">Background task</string>
+    <string name="task_notice_done">Background task “%1$s” finished</string>
+    <string name="task_notice_failed">Background task “%1$s” failed</string>
+    <string name="task_notice_stopped">Background task “%1$s” was stopped</string>
+    <string name="task_output">Output</string>
+    <string name="task_output_loading">Reading the output…</string>
+    <string name="task_output_waiting">No output yet</string>
+    <string name="task_output_empty">It printed nothing</string>
+    <string name="task_output_gone">The server no longer has this output</string>
+    <string name="task_output_failed">Couldn’t read the output just now</string>
+    <string name="task_output_truncated">Showing the latest part</string>
+    <string name="task_not_running">This background task has already ended.</string>
+    <string name="tasks_title">Background tasks</string>
+    <string name="tasks_running_group">Running</string>
+    <string name="tasks_ended_group">Ended</string>
+    <string name="tasks_none">No background tasks in this turn.</string>
+    <plurals name="tasks_running"><item quantity="one">%1$d background task</item><item quantity="other">%1$d background tasks</item></plurals>
+    <plurals name="tasks_running_short"><item quantity="one">%1$d running</item><item quantity="other">%1$d running</item></plurals>
+    <string name="grokbot_reply">reply</string>
+    <string name="grokbot_mention">mentioned this computer</string>
+    <string name="turn_background_one">Waiting for background task: %1$s</string>
+    <plurals name="turn_background"><item quantity="one">Waiting for %1$d background task</item><item quantity="other">Waiting for %1$d background tasks</item></plurals>
+    <string name="turn_cached">%1$d%% cached</string>
 </resources>

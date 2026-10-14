@@ -120,98 +120,110 @@ internal fun CreationSettings(state: ComfyState, vm: ComfyViewModel, onGallery: 
     LaunchedEffect(state.invalidField, state.workflowId) {
         if (groups?.advanced?.any { it.key == state.invalidField } == true) advanced = true
     }
-    AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
+    // Apple Music's settings layout: inset grouped cards under grey titles, red checks, a centred title bar.
+    AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = groupedPageColor()) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.95f)) {
-            Row(Modifier.padding(start = 24.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(tr(S.creation_settings), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                ActionIcon(R.drawable.aw_check, tr(S.done), onClick = onClose)
-            }
-            LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                item("basic") { Text(tr(S.creation_basic), style = MaterialTheme.typography.titleMedium) }
+            SheetHeader(tr(S.creation_settings), onClose)
+            LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp)) {
                 item("channel") {
-                    Text(tr(S.creation_channel), style = MaterialTheme.typography.labelMedium)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("kaggle_gpu", "runpod_gpu", "cloud_gpu", "partner_api").forEach { channel ->
-                            PillChip(state.channel == channel, { vm.filter(channel = channel) },
-                                enabled = state.workflows.any { it.channel == channel }, label = { Text(tr(comfyChannelResource(channel))) })
+                    GroupedSection(tr(S.creation_channel)) {
+                        listOf("kaggle_gpu", "runpod_gpu", "cloud_gpu", "partner_api").forEachIndexed { index, channel ->
+                            if (index > 0) RowDivider()
+                            CheckRow(tr(comfyChannelResource(channel)), state.channel == channel, state.workflows.any { it.channel == channel },
+                                tr(comfyChannelHintResource(channel))) { vm.filter(channel = channel) }
                         }
                     }
                 }
                 item("workflow") {
-                    // The chosen workflow as a cover row, like a "now playing" track.
-                    Surface(onGallery, Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
-                        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Box(Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
+                    val availability = workflow?.availability(state.resources)
+                    val note = availability?.let { availabilityLabel(it) }?.takeIf { it.isNotEmpty() }
+                    val unavailable = availability != null && availability.kind != ComfyAvailabilityKind.AVAILABLE
+                    GroupedSection(tr(S.workflow), footer = listOfNotNull(tr(S.channel_kaggle_terms).takeIf { workflow?.channel == "kaggle_gpu" },
+                        note.takeIf { !unavailable }).joinToString("\n").ifEmpty { null }) {
+                        // The chosen workflow as a cover row, like a "now playing" track.
+                        Row(Modifier.fillMaxWidth().clickable(onClick = onGallery).padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Box(Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
                                 RemoteImage(workflow?.coverUrl, vm, Modifier.fillMaxSize()) { AppIcon(R.drawable.aw_create) }
                             }
                             Column(Modifier.weight(1f)) {
                                 Text(workflow?.title?.substringBefore(" · ") ?: tr(S.select_value), maxLines = 1, overflow = TextOverflow.Ellipsis,
                                     style = MaterialTheme.typography.bodyLarge, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.onSurface)
-                                Text(workflow?.let { tr(comfyChannelResource(it.channel)) } ?: tr(S.workflow), style = MaterialTheme.typography.bodySmall,
+                                Text(workflow?.title?.substringAfter(" · ", "")?.ifBlank { null } ?: workflow?.let { tr(comfyChannelResource(it.channel)) } ?: tr(S.workflow),
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
-                            Box(Modifier.size(20.dp)) { CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant) { AppIcon(R.drawable.aw_chevron) } }
+                            Icon(androidx.compose.ui.res.painterResource(R.drawable.aw_chevron), null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.outline)
                         }
                     }
-                    workflow?.let {
-                        Text(tr(comfyChannelHintResource(it.channel)), Modifier.padding(top = 8.dp, start = 4.dp), style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (it.channel == "kaggle_gpu") Text(tr(S.channel_kaggle_terms), Modifier.padding(top = 2.dp, start = 4.dp), style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        val availability = it.availability(state.resources)
-                        availabilityLabel(availability).takeIf { it.isNotEmpty() }?.let { Text(it, style = MaterialTheme.typography.bodySmall,
-                            color = if (availability.kind == ComfyAvailabilityKind.AVAILABLE) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error) }
-                    }
-                }
-                if (sizes.isNotEmpty()) item("size") {
-                    var sizeSheet by remember { mutableStateOf(false) }
-                    val current = sizes.firstOrNull { size -> size.parameters.all { state.values[it.key] == it.value } }?.label
-                    PickerButton(tr(S.size), current ?: tr(S.select_value)) { sizeSheet = true }
-                    if (sizeSheet) SizeSheet(sizes, current, vm::size) { sizeSheet = false }
+                    if (unavailable && note != null) Text(note, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
                 // LoRA and its strength sit under the "Models & LoRA" heading with the other resources,
-                // not among the size and seed controls above it.
+                // not among the size and seed controls; reference pictures get their own card.
                 val (loraFields, basicFields) = groups?.basic.orEmpty().filter { it.key !in sizeKeys }.partition(ComfyInput::isLoraControl)
-                items(basicFields, key = { "basic-${workflow?.id}-${it.key}" }) { input ->
-                    SchemaField(input, state.values[input.key] ?: input.default, state, vm) { vm.parameter(input.key, it) }
+                val (assetFields, plainFields) = basicFields.partition { it.type == "asset" }
+                items(assetFields, key = { "asset-${workflow?.id}-${it.key}" }) { input ->
+                    Box(Modifier.padding(bottom = 20.dp)) { SchemaField(input, state.values[input.key] ?: input.default, state, vm) { vm.parameter(input.key, it) } }
                 }
-                if (state.needsResources) item("resources") {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(tr(S.resources), Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
-                        TextButton({ vm.ensureResources(true) }, enabled = !state.resourcesLoading) { Text(tr(S.resources_refresh)) }
-                    }
-                    if (state.resourcesLoading) Text(tr(S.resources_loading), style = MaterialTheme.typography.bodySmall)
-                    if (state.resourcesError || (state.resources?.ready != true && !state.resourcesLoading)) Text(tr(S.resources_failed), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    if (state.resources?.stale == true) Text(tr(S.resources_stale), style = MaterialTheme.typography.bodySmall)
-                    Text(tr(S.resource_compatibility), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                items(loraFields, key = { "lora-${workflow?.id}-${it.key}" }) { input ->
-                    SchemaField(input, state.values[input.key] ?: input.default, state, vm) { vm.parameter(input.key, it) }
-                }
-                if (!groups?.advanced.isNullOrEmpty()) {
-                    item("advanced") {
-                        val description = tr(if (advanced) S.expanded else S.collapsed)
-                        Surface({ advanced = !advanced }, Modifier.fillMaxWidth().heightIn(min = 52.dp).semantics { stateDescription = description },
-                            shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
-                            Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(tr(S.advanced_group), Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-                                Box(Modifier.size(20.dp).graphicsLayer { rotationZ = if (advanced) 90f else 0f }) {
-                                    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant) { AppIcon(R.drawable.aw_chevron) }
-                                }
-                            }
+                if (sizes.isNotEmpty() || plainFields.isNotEmpty()) item("basic") {
+                    GroupedSection(tr(S.creation_basic)) {
+                        if (sizes.isNotEmpty()) {
+                            var sizeSheet by remember { mutableStateOf(false) }
+                            val current = sizes.firstOrNull { size -> size.parameters.all { state.values[it.key] == it.value } }?.label
+                            PickerButton(tr(S.size), current ?: tr(S.select_value)) { sizeSheet = true }
+                            if (sizeSheet) SizeSheet(sizes, current, vm::size) { sizeSheet = false }
+                        }
+                        plainFields.forEachIndexed { index, input ->
+                            if (index > 0 || sizes.isNotEmpty()) RowDivider()
+                            key(input.key) { SchemaField(input, state.values[input.key] ?: input.default, state, vm) { vm.parameter(input.key, it) } }
                         }
                     }
-                    if (advanced) items(groups?.advanced.orEmpty().filter { it.key !in sizeKeys }, key = { "advanced-${workflow?.id}-${it.key}" }) { input ->
-                        SchemaField(input, state.values[input.key] ?: input.default, state, vm) { vm.parameter(input.key, it) }
+                }
+                if (state.needsResources || loraFields.isNotEmpty()) item("resources") {
+                    val status = when {
+                        state.resourcesLoading -> tr(S.resources_loading)
+                        state.resourcesError || (state.needsResources && state.resources?.ready != true) -> tr(S.resources_failed)
+                        state.resources?.stale == true -> tr(S.resources_stale)
+                        else -> null
+                    }
+                    GroupedSection(tr(S.resources), footer = if (state.needsResources) tr(S.resource_compatibility) else null) {
+                        if (state.needsResources) ValueRow(tr(S.resources_refresh), status.orEmpty(), enabled = !state.resourcesLoading, chevron = false) {
+                            vm.ensureResources(true)
+                        }
+                        loraFields.forEachIndexed { index, input ->
+                            if (index > 0 || state.needsResources) RowDivider()
+                            key(input.key) { SchemaField(input, state.values[input.key] ?: input.default, state, vm) { vm.parameter(input.key, it) } }
+                        }
                     }
                 }
-                if (state.invalidField != null) item("validation") { Text(comfyError("invalid_parameters"), color = MaterialTheme.colorScheme.error) }
+                val advancedFields = groups?.advanced.orEmpty().filter { it.key !in sizeKeys }
+                if (advancedFields.isNotEmpty()) item("advanced") {
+                    val description = tr(if (advanced) S.expanded else S.collapsed)
+                    GroupedSection(null) {
+                        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { advanced = !advanced }
+                            .semantics { stateDescription = description }.padding(start = 16.dp, end = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Text(tr(S.advanced_group), Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                            Icon(androidx.compose.ui.res.painterResource(R.drawable.aw_chevron), null,
+                                Modifier.size(18.dp).graphicsLayer { rotationZ = if (advanced) 90f else 0f }, tint = MaterialTheme.colorScheme.outline)
+                        }
+                        if (advanced) advancedFields.forEach { input ->
+                            RowDivider()
+                            key(input.key) { SchemaField(input, state.values[input.key] ?: input.default, state, vm) { vm.parameter(input.key, it) } }
+                        }
+                    }
+                }
+                if (state.invalidField != null) item("validation") {
+                    Text(comfyError("invalid_parameters"), Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
+                }
             }
         }
     }
 }
 
+/** One parameter as a row of a grouped card: a menu, a switch, a slider, or a value typed in place. */
 @Composable
 private fun SchemaField(input: ComfyInput, value: String, state: ComfyState, vm: ComfyViewModel, onChange: (String) -> Unit) {
     val title = fieldLabel(input)
@@ -225,43 +237,57 @@ private fun SchemaField(input: ComfyInput, value: String, state: ComfyState, vm:
         input.type == "asset" -> ReferenceImagePicker(input, value, state, vm, onChange)
         input.options.isNotEmpty() -> ValuePicker(title, value, input.options.mapNotNull { (it as? JsonPrimitive)?.content?.let { raw ->
             raw to if (input.key in setOf("duration", "duration_seconds")) durationLabel(raw) else raw } }, onChange = onChange)
-        input.type == "boolean" -> Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-            Switch(value.toBoolean(), { onChange(it.toString()) }, Modifier.semantics { contentDescription = title })
+        input.type == "boolean" -> Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 16.dp, end = 12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+            Switch(value.toBoolean(), { onChange(it.toString()) }, Modifier.semantics { contentDescription = title },
+                colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary))
         }
         input.key == "seed" -> NumericEntry(input, value, state, onChange)  // nobody drags to a seed
         range != null -> {
             var exact by remember(input.key) { mutableStateOf(false) }
-            Column {
+            Column(Modifier.padding(start = 16.dp, end = 12.dp, top = 8.dp, bottom = 4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
                     Text(value, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     TextButton({ exact = !exact }, colors = quietButton()) { Text(tr(if (exact) S.done else S.creation_exact), style = MaterialTheme.typography.labelLarge) }
                 }
-                Slider(range.fraction(value), { onChange(range.value(it)) }, Modifier.fillMaxWidth().semantics { contentDescription = title },
-                    colors = appSliderColors())
-                if (exact || state.invalidField == input.key) NumericEntry(input, value, state, onChange)
+                AppleSlider(range.fraction(value), { onChange(range.value(it)) }, Modifier.fillMaxWidth().semantics { contentDescription = title })
             }
+            if (exact || state.invalidField == input.key) { RowDivider(); NumericEntry(input, value, state, onChange) }
         }
         else -> NumericEntry(input, value, state, onChange)
     }
 }
 
+/** A typed value in a card row: the name on the left, the value editable on the right (text spans the row). */
 @Composable
 private fun NumericEntry(input: ComfyInput, value: String, state: ComfyState, onChange: (String) -> Unit) {
-    TextField(value, onChange, Modifier.fillMaxWidth(), label = { Text(fieldLabel(input)) }, shape = RoundedCornerShape(12.dp),
-        colors = TextFieldDefaults.colors(focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer, errorContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-            focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent, unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent),
-        isError = state.invalidField == input.key, minLines = 1, maxLines = if (input.type == "string") 4 else 1,
-        keyboardOptions = KeyboardOptions(keyboardType = if ((input.min ?: 0.0) < 0) KeyboardType.Text else if (input.type == "integer") KeyboardType.Number else if (input.type == "number") KeyboardType.Decimal else KeyboardType.Text),
-        supportingText = {
-            if (input.min != null || input.max != null) {
-                fun bound(key: String) = (input.spec[key] as? JsonPrimitive)?.content?.toBigDecimalOrNull()
-                    ?.stripTrailingZeros()?.toPlainString() ?: "…"
-                Text(tr(S.bounds, bound("minimum"), bound("maximum")))
-            }
-        })
+    val error = state.invalidField == input.key
+    val multiline = input.type == "string"
+    val label = fieldLabel(input)
+    val textStyle = MaterialTheme.typography.bodyLarge.copy(
+        color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = if (multiline) androidx.compose.ui.text.style.TextAlign.Start else androidx.compose.ui.text.style.TextAlign.End)
+    val keyboard = KeyboardOptions(keyboardType = if ((input.min ?: 0.0) < 0) KeyboardType.Text else if (input.type == "integer") KeyboardType.Number
+        else if (input.type == "number") KeyboardType.Decimal else KeyboardType.Text)
+    fun bound(key: String) = (input.spec[key] as? JsonPrimitive)?.content?.toBigDecimalOrNull()?.stripTrailingZeros()?.toPlainString() ?: "…"
+    val bounds = if (input.min != null || input.max != null) tr(S.bounds, bound("minimum"), bound("maximum")) else null
+    val cursor = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary)
+    if (multiline) Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        androidx.compose.foundation.text.BasicTextField(value, onChange, Modifier.fillMaxWidth().semantics { contentDescription = label },
+            textStyle = textStyle.copy(color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface),
+            maxLines = 4, keyboardOptions = keyboard, cursorBrush = cursor)
+    } else Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.bodyLarge)
+            if (bounds != null) Text(bounds, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        androidx.compose.foundation.text.BasicTextField(value, onChange, Modifier.widthIn(min = 64.dp, max = 180.dp)
+            .semantics { contentDescription = label }, textStyle = textStyle, singleLine = true, keyboardOptions = keyboard, cursorBrush = cursor)
+    }
 }
 
 @Composable
@@ -367,37 +393,33 @@ internal fun sizeIsUpscaled(label: String) = SizeLabel.matchEntire(label)?.group
 internal fun SizeSheet(sizes: List<ComfySize>, selected: String?, onPick: (ComfySize) -> Unit,
     quick: List<ComfyQuickChoice> = emptyList(), current: (ComfyInput) -> String = { it.default },
     onQuick: (String, String) -> Unit = { _, _ -> }, onClose: () -> Unit) {
-    AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
+    AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = groupedPageColor()) {
         Column(Modifier.fillMaxWidth()) {
-            Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(tr(if (quick.isEmpty()) S.size else S.quick_settings), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                ActionIcon(R.drawable.aw_check, tr(S.done), onClick = onClose)
-            }
+            SheetHeader(tr(if (quick.isEmpty()) S.size else S.quick_settings), onClose)
             val (upscaled, native) = sizes.partition { sizeIsUpscaled(it.label) }
             // A combined sheet keeps open after a pick, so every shortcut can be set in one visit.
             val closeOnPick = quick.isEmpty()
-            LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                quick.forEach { choice ->
-                    item("title-${choice.input.key}") {
-                        Text(fieldLabel(choice.input), Modifier.padding(top = 12.dp, start = 4.dp).semantics { heading() },
-                            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp)) {
+                items(quick, key = { "quick-${it.input.key}" }) { choice ->
+                    GroupedSection(fieldLabel(choice.input)) {
+                        choice.values.forEachIndexed { index, value ->
+                            if (index > 0) RowDivider()
+                            CheckRow(quickLabel(choice.input, value), sameChoice(value, current(choice.input))) { onQuick(choice.input.key, value) }
+                        }
                     }
-                    items(choice.values, key = { "${choice.input.key}-$it" }) { value ->
-                        ChoiceRow(quickLabel(choice.input, value), sameChoice(value, current(choice.input))) { onQuick(choice.input.key, value) }
-                    }
-                }
-                if (quick.isNotEmpty() && sizes.isNotEmpty()) item("title-frame") {
-                    Text(tr(S.size), Modifier.padding(top = 12.dp, start = 4.dp).semantics { heading() },
-                        style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 listOf(S.size_native to native, S.size_upscaled to upscaled).filter { it.second.isNotEmpty() }.forEach { (title, group) ->
-                    if (upscaled.isNotEmpty()) item("title-$title") {
-                        Text(tr(title), Modifier.padding(top = 12.dp, start = 4.dp).semantics { heading() },
-                            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    items(group, key = { it.label }) { size ->
-                        ChoiceRow(size.label, size.label == selected, subtitle = if (title == S.size_upscaled) tr(S.size_upscaled_hint) else null) {
-                            onPick(size); if (closeOnPick) onClose()
+                    item("size-$title") {
+                        // With shortcuts above, the frame group needs its own title; alone, the sheet title says it.
+                        GroupedSection(when {
+                            upscaled.isNotEmpty() -> tr(title)
+                            quick.isNotEmpty() -> tr(S.size)
+                            else -> null
+                        }, footer = if (title == S.size_upscaled) tr(S.size_upscaled_hint) else null) {
+                            group.forEachIndexed { index, size ->
+                                if (index > 0) RowDivider()
+                                CheckRow(size.label, size.label == selected) { onPick(size); if (closeOnPick) onClose() }
+                            }
                         }
                     }
                 }
@@ -408,19 +430,9 @@ internal fun SizeSheet(sizes: List<ComfySize>, selected: String?, onPick: (Comfy
 
 /** The tonal field button used for every setting in the creation sheet. */
 @Composable
-internal fun PickerButton(title: String, value: String, enabled: Boolean = true, onClick: () -> Unit) {
-    // A settings row: name on the left, current value on the right, then a chevron.
-    Surface(onClick, Modifier.fillMaxWidth().heightIn(min = 52.dp), enabled = enabled, shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer) {
-        Row(Modifier.padding(start = 16.dp, end = 10.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-            Text(value, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.End)
-            Box(Modifier.size(20.dp)) { CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant) { AppIcon(R.drawable.aw_chevron) } }
-        }
-    }
-}
+internal fun PickerButton(title: String, value: String, enabled: Boolean = true, onClick: () -> Unit) =
+    // A settings row of a grouped card: name on the left, current value on the right, then a chevron.
+    ValueRow(title, value, enabled, onClick = onClick)
 
 /** Grey track with an accent fill, white thumb. */
 @Composable
@@ -430,6 +442,8 @@ internal fun appSliderColors() = SliderDefaults.colors(thumbColor = MaterialThem
 
 @Composable
 private fun ValuePicker(title: String, value: String, options: List<Pair<String, String>>, enabled: Boolean = true, onChange: (String) -> Unit) {
+    // A short list opens as a menu at the row (Apple's pop-up button); a long one keeps a searchable list.
+    if (options.size <= 12) { MenuValueRow(title, value, options, enabled, onChange); return }
     var open by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf("") }
     PickerButton(title, options.find { it.first == value }?.second?.substringBefore('\n') ?: value.ifBlank { tr(S.select_value) }, enabled) {

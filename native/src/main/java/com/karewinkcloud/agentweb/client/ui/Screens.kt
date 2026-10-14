@@ -39,6 +39,7 @@ import com.karewinkcloud.agentweb.client.R.string as S
 import com.karewinkcloud.agentweb.client.core.*
 import com.karewinkcloud.agentweb.client.data.*
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -56,6 +57,7 @@ fun AgentWebApp(vm: AgentViewModel, settings: SettingsViewModel, studio: ComfyVi
         try { kotlinx.coroutines.awaitCancellation() } finally { vm.frameClock = null }
     }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.onForeground() }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.onBackground() }
     BackHandler(!modelsOpen && (state.chat != null || state.claudePreview != null || state.tab != AppTab.CONVERSATIONS)) {
         if (state.chat != null || state.claudePreview != null) vm.back() else vm.selectTab(AppTab.CONVERSATIONS)
     }
@@ -167,6 +169,11 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
     var menu by remember { mutableStateOf(false) }
     val visibleIds by remember { derivedStateOf { list.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String } } }
     LaunchedEffect(visibleIds, state.conversations) { vm.loadPreviews(visibleIds) }
+    // Rows that arrive above the first visible one (the fresh list after the cached one, a chat that just
+    // became the newest) would sit hidden above it, since the list keeps that row in place. Near the top,
+    // show the newest instead.
+    val newest = state.sections.firstOrNull()?.conversations?.firstOrNull()?.id
+    LaunchedEffect(newest) { if (list.firstVisibleItemIndex <= 2 && !list.isScrollInProgress) list.scrollToItem(0) }
     ScreenTitle(tr(S.conversations)) {
         if (state.creating) Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) }
         else IconButton({ vm.newChat() }, colors = IconButtonDefaults.iconButtonColors(contentColor = MaterialTheme.colorScheme.primary)) {
@@ -275,85 +282,101 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
             }
         }
     }
-    chat.browserError?.let { error ->
-        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-            ErrorBlock(error, vm::dismissBrowserError, tr(S.close))
-        }
-    }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-    chat.conversation.lineage?.let { lineage ->
-        val parentTitle = lineage.parentTitle?.takeIf { it.isNotBlank() }
-            ?: state.conversations.find { it.id == lineage.parentConversationId }?.let { conversationTitle(it) }
-            ?: tr(S.variant_parent)
-        AssistChip(onClick = vm::openParent, label = { Text(tr(S.variant_of, parentTitle), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-            leadingIcon = { AppIcon(R.drawable.aw_back) }, modifier = Modifier.padding(horizontal = 16.dp).heightIn(min = 48.dp))
-    }
-    key(chat.conversation.id) {
-        val list = rememberLazyListState()
-        var followTail by remember { mutableStateOf(true) }
-        var automaticScroll by remember { mutableStateOf(false) }
-        // Selected text clears like anywhere on Android: a tap elsewhere or a scroll ends it (selection
-        // lives while its container is focused; the handles would otherwise stay behind when the list moves).
-        val focus = LocalFocusManager.current
-        LaunchedEffect(list) {
-            snapshotFlow { list.isScrollInProgress to list.canScrollForward }.distinctUntilChanged().collect { (scrolling, canForward) ->
-                if (scrolling && !automaticScroll) { followTail = false; focus.clearFocus(force = true) }
-                if (!scrolling && !canForward) followTail = true
+    // Background tasks: steps, notices and the pill open one list, where output is read and tasks stopped.
+    var taskSheet by remember(chat.conversation.id) { mutableStateOf<String?>(null) }
+    val taskControls = remember(vm, chat.conversation.id) { TaskControls(vm::taskOutput, vm::stopTask) { id -> taskSheet = id ?: "" } }
+    CompositionLocalProvider(LocalTaskControls provides taskControls) {
+        taskSheet?.let { request -> TaskSheetHost(vm, chat, request) { taskSheet = null } }
+        chat.browserError?.let { error ->
+            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                ErrorBlock(error, vm::dismissBrowserError, tr(S.close))
             }
         }
-        LaunchedEffect(list, followTail, chat.loading) {
-            snapshotFlow { list.layoutInfo.let { info ->
-                Triple(info.totalItemsCount, info.visibleItemsInfo.lastOrNull()?.size, info.viewportEndOffset)
-            } }.distinctUntilChanged().collect {
-                if (followTail && !chat.loading) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        chat.conversation.lineage?.let { lineage ->
+            val parentTitle = lineage.parentTitle?.takeIf { it.isNotBlank() }
+                ?: state.conversations.find { it.id == lineage.parentConversationId }?.let { conversationTitle(it) }
+                ?: tr(S.variant_parent)
+            AssistChip(onClick = vm::openParent, label = { Text(tr(S.variant_of, parentTitle), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                leadingIcon = { AppIcon(R.drawable.aw_back) }, modifier = Modifier.padding(horizontal = 16.dp).heightIn(min = 48.dp))
+        }
+        key(chat.conversation.id) {
+            val list = rememberLazyListState()
+            var followTail by remember { mutableStateOf(true) }
+            var automaticScroll by remember { mutableStateOf(false) }
+            // Selected text clears like anywhere on Android: a tap elsewhere or a scroll ends it (selection
+            // lives while its container is focused; the handles would otherwise stay behind when the list moves).
+            val focus = LocalFocusManager.current
+            LaunchedEffect(list) {
+                snapshotFlow { list.isScrollInProgress to list.canScrollForward }.distinctUntilChanged().collect { (scrolling, canForward) ->
+                    if (scrolling && !automaticScroll) { followTail = false; focus.clearFocus(force = true) }
+                    if (!scrolling && !canForward) followTail = true
+                }
+            }
+            LaunchedEffect(list, followTail, chat.loading) {
+                snapshotFlow { list.layoutInfo.let { info ->
+                    Triple(info.totalItemsCount, info.visibleItemsInfo.lastOrNull()?.size, info.viewportEndOffset)
+                } }.distinctUntilChanged().collect {
+                    if (followTail && !chat.loading) {
+                        automaticScroll = true
+                        try {
+                            val total = list.layoutInfo.totalItemsCount
+                            // One clamped jump to the very end. Scrolling to the item's top and then
+                            // down by its height showed an intermediate frame on every growth (jitter).
+                            if (total > 0) list.scrollToItem(total - 1, Int.MAX_VALUE)
+                        } finally { automaticScroll = false }
+                    }
+                }
+            }
+            LazyColumn(state = list, modifier = Modifier.weight(1f).fillMaxWidth().clearSelectionOnTap(focus), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (chat.loading) item("loading") { LoadingState(tr(S.loading_chat)) }
+                if (chat.nextCursor != null) item("older") {
+                    TextButton(onClick = { followTail = false; vm.loadOlder() }, enabled = !chat.loadingOlder,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(if (chat.loadingOlder) tr(S.loading) else countLabel(R.plurals.load_older, chat.olderCount)) }
+                }
+                if (!chat.loading && chat.messages.isEmpty() && chat.live == null && chat.error == null) item("empty") {
+                    EmptyState(R.drawable.aw_chat, tr(S.empty_chat), tr(S.empty_chat_hint))
+                }
+                items(chat.messages, key = { it.id }, contentType = { it.role }) { message ->
+                    MessageView(message, modelLabel = message.model?.let { model -> state.agents.find { model.removeSuffix("[1m]") in it.models }?.label(model) ?: readableModelId(model) },
+                        canFork = chat.canFork,
+                        onRetry = if (message.role == "assistant" && message.id == chat.messages.lastOrNull { it.role == "assistant" }?.id) ({ vm.retry(message.id) }) else null,
+                        onEdit = if (message.role == "user" && message.id == chat.messages.lastOrNull { it.role == "user" }?.id) ({ text -> vm.edit(message.id, text) }) else null)
+                }
+                if (chat.live != null) item("live-${chat.live.runId}") {
+                    LiveMessage(vm, (chat.liveModel ?: chat.conversation.choice.model).takeIf { it.isNotBlank() }?.let { model ->
+                        state.agents.find { model in it.models }?.label(model) ?: model
+                    }, chat.connection)
+                }
+                if (chat.suggestions.isNotEmpty() && !chat.running && chat.live == null && chat.messages.lastOrNull()?.id == chat.suggestionsFor)
+                    item("suggestions-${chat.suggestionsFor}") { QuickReplies(chat.suggestions, enabled = chat.canSend, onPick = vm::sendSuggestion) }
+                if (chat.error != null) item("error") { ErrorBlock(chat.error, vm::reload, tr(S.reconnect)) }
+            }
+            val lastId = chat.messages.lastOrNull()?.id
+            LaunchedEffect(chat.conversation.id, lastId, chat.running, chat.live == null) { vm.loadSuggestions() }
+            if (!followTail) TextButton({ followTail = true }, Modifier.align(Alignment.CenterHorizontally).heightIn(min = 48.dp)) {
+                AppIcon(R.drawable.aw_down); Text(tr(S.latest_messages))
+            }
+            LaunchedEffect(followTail) {
+                if (followTail && list.layoutInfo.totalItemsCount > 0) {
                     automaticScroll = true
-                    try {
-                        val total = list.layoutInfo.totalItemsCount
-                        // One clamped jump to the very end. Scrolling to the item's top and then
-                        // down by its height showed an intermediate frame on every growth (jitter).
-                        if (total > 0) list.scrollToItem(total - 1, Int.MAX_VALUE)
-                    } finally { automaticScroll = false }
+                    try { list.scrollToItem(list.layoutInfo.totalItemsCount - 1, Int.MAX_VALUE) } finally { automaticScroll = false }
                 }
             }
         }
-        LazyColumn(state = list, modifier = Modifier.weight(1f).fillMaxWidth().clearSelectionOnTap(focus), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            if (chat.loading) item("loading") { LoadingState(tr(S.loading_chat)) }
-            if (chat.nextCursor != null) item("older") {
-                TextButton(onClick = { followTail = false; vm.loadOlder() }, enabled = !chat.loadingOlder,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(if (chat.loadingOlder) tr(S.loading) else countLabel(R.plurals.load_older, chat.olderCount)) }
-            }
-            if (!chat.loading && chat.messages.isEmpty() && chat.live == null && chat.error == null) item("empty") {
-                EmptyState(R.drawable.aw_chat, tr(S.empty_chat), tr(S.empty_chat_hint))
-            }
-            items(chat.messages, key = { it.id }, contentType = { it.role }) { message ->
-                MessageView(message, modelLabel = message.model?.let { model -> state.agents.find { model.removeSuffix("[1m]") in it.models }?.label(model) ?: readableModelId(model) },
-                    canFork = chat.canFork,
-                    onRetry = if (message.role == "assistant" && message.id == chat.messages.lastOrNull { it.role == "assistant" }?.id) ({ vm.retry(message.id) }) else null,
-                    onEdit = if (message.role == "user" && message.id == chat.messages.lastOrNull { it.role == "user" }?.id) ({ text -> vm.edit(message.id, text) }) else null)
-            }
-            if (chat.live != null) item("live-${chat.live.runId}") {
-                LiveMessage(vm, (chat.liveModel ?: chat.conversation.choice.model).takeIf { it.isNotBlank() }?.let { model ->
-                    state.agents.find { model in it.models }?.label(model) ?: model
-                }, chat.connection)
-            }
-            if (chat.suggestions.isNotEmpty() && !chat.running && chat.live == null && chat.messages.lastOrNull()?.id == chat.suggestionsFor)
-                item("suggestions-${chat.suggestionsFor}") { QuickReplies(chat.suggestions, enabled = chat.canSend, onPick = vm::sendSuggestion) }
-            if (chat.error != null) item("error") { ErrorBlock(chat.error, vm::reload, tr(S.reconnect)) }
-        }
-        val lastId = chat.messages.lastOrNull()?.id
-        LaunchedEffect(chat.conversation.id, lastId, chat.running, chat.live == null) { vm.loadSuggestions() }
-        if (!followTail) TextButton({ followTail = true }, Modifier.align(Alignment.CenterHorizontally).heightIn(min = 48.dp)) {
-            AppIcon(R.drawable.aw_down); Text(tr(S.latest_messages))
-        }
-        LaunchedEffect(followTail) {
-            if (followTail && list.layoutInfo.totalItemsCount > 0) {
-                automaticScroll = true
-                try { list.scrollToItem(list.layoutInfo.totalItemsCount - 1, Int.MAX_VALUE) } finally { automaticScroll = false }
-            }
-        }
+        Composer(chat, state, vm, (availableHeight * .55f).coerceAtLeast(100.dp), onModels)
     }
-    Composer(chat, state, vm, (availableHeight * .55f).coerceAtLeast(100.dp), onModels)
+}
+
+/** The task list for the open conversation: the running turn's tasks, or those of the saved turn a notice is in. */
+@Composable
+private fun TaskSheetHost(vm: AgentViewModel, chat: ChatState, request: String, onClose: () -> Unit) {
+    val turn by vm.liveTurn.collectAsStateWithLifecycle()
+    val liveTasks = turn?.let { backgroundTasks(it.blocks) }.orEmpty()
+    val saved = if (request.isEmpty() || liveTasks.any { it.second.id == request }) null
+        else chat.messages.firstNotNullOfOrNull { message -> backgroundTasks(message.blocks).takeIf { tasks -> tasks.any { it.second.id == request } } }
+    BackgroundTasksSheet(saved ?: liveTasks, live = saved == null && turn?.done == false, selected = request.ifEmpty { null }, onClose)
 }
 
 @Composable
@@ -394,6 +417,11 @@ private fun Composer(chat: ChatState, state: ClientState, vm: AgentViewModel, ma
         }
     }) {
         if (chat.conversation.nativeControl) { StatusNotice(tr(S.desktop_controlled)); return@ComposerSurface }
+        // Only the count is watched here, so a streaming answer does not redraw the composer.
+        val runningTasks by remember(vm) { vm.liveTurn.map { turn -> turn?.takeUnless { it.done }
+            ?.let { live -> backgroundTasks(live.blocks).count { it.second.running } } ?: 0 }.distinctUntilChanged() }
+            .collectAsStateWithLifecycle(0)
+        if (runningTasks > 0) LocalTaskControls.current?.let { controls -> BackgroundTasksPill(runningTasks) { controls.open(null) } }
         if (chat.queued.isNotEmpty() || chat.pendingQueue != null) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(chat.queued, key = { it.id }) { item ->
                 Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(16.dp), modifier = Modifier.widthIn(max = 260.dp)) {
@@ -423,40 +451,32 @@ private fun Composer(chat: ChatState, state: ClientState, vm: AgentViewModel, ma
 
 @Composable
 internal fun ModelSheet(agents: List<Agent>, choice: ModelChoice, onChoice: (ModelChoice) -> Unit, onRefresh: () -> Unit, onClose: () -> Unit) {
-    AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
+    AppModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = groupedPageColor()) {
         BoxWithConstraints(Modifier.fillMaxWidth().fillMaxHeight(.88f)) {
-            val pinControls = maxHeight >= 480.dp * LocalDensity.current.fontScale
+            val pinControls = maxHeight >= 520.dp * LocalDensity.current.fontScale
             val visibleAgents = agents.filter { it.enabled }
-            // Start at the current model in the very first frame. Scrolling after the sheet
+            // Start at the current model's group in the very first frame. Scrolling after the sheet
             // appeared moved rows under a finger mid-tap and picked the wrong model.
             // Compact layouts stay at the controls.
-            val initialIndex = remember {
-                val selectedAgent = visibleAgents.indexOfFirst { it.id == choice.agent }
-                if (!pinControls || selectedAgent < 0) 0 else {
-                    val modelIndex = visibleAgents[selectedAgent].models.indexOf(choice.model)
-                    visibleAgents.take(selectedAgent).sumOf { 1 + it.models.size } + if (modelIndex > 0) 1 + modelIndex else 0
-                }
-            }
+            val initialIndex = remember { if (!pinControls) 0 else visibleAgents.indexOfFirst { it.id == choice.agent }.coerceAtLeast(0) }
             val modelListState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
             Column(Modifier.fillMaxSize()) {
-                Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(tr(S.model_settings), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                    ActionIcon(R.drawable.aw_check, tr(S.done), onClick = onClose)
-                }
+                SheetHeader(tr(S.model_settings), onClose)
                 val agent = agents.find { it.id == choice.agent }
-                if (pinControls) ModelChoiceControls(agent, choice, onChoice)
-                LazyColumn(state = modelListState, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (pinControls) ModelChoiceControls(agent, choice, onChoice, Modifier.padding(horizontal = 16.dp))
+                LazyColumn(state = modelListState, modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp)) {
                     if (!pinControls) item("controls") { ModelChoiceControls(agent, choice, onChoice) }
                     if (agents.isEmpty()) item { TextButton(onRefresh, Modifier.heightIn(min = 48.dp)) { Text(tr(S.refresh)) } }
-                    visibleAgents.forEach { agent ->
-                        item("agent-${agent.id}") { Text(agent.name, Modifier.padding(top = 12.dp).semantics { heading() },
-                            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                        items(agent.models, key = { "${agent.id}-$it" }) { model ->
-                            ChoiceRow(agent.label(model), choice.agent == agent.id && choice.model == model, agent.available,
-                                if (!agent.available) tr(S.model_unavailable) else modelHint(agent, model)) {
-                                val efforts = agent.effortLevels[model]
-                                onChoice(choice.copy(agent = agent.id, model = model, effort = choice.effort.takeIf { agent.supportsEffort && (efforts == null || it in efforts) }))
+                    items(visibleAgents, key = { "agent-${it.id}" }) { agent ->
+                        GroupedSection(agent.name) {
+                            agent.models.forEachIndexed { index, model ->
+                                if (index > 0) RowDivider()
+                                CheckRow(agent.label(model), choice.agent == agent.id && choice.model == model, agent.available,
+                                    if (!agent.available) tr(S.model_unavailable) else modelHint(agent, model)) {
+                                    val efforts = agent.effortLevels[model]
+                                    onChoice(choice.copy(agent = agent.id, model = model, effort = choice.effort.takeIf { agent.supportsEffort && (efforts == null || it in efforts) }))
+                                }
                             }
                         }
                     }
@@ -467,26 +487,26 @@ internal fun ModelSheet(agents: List<Agent>, choice: ModelChoice, onChoice: (Mod
 }
 
 @Composable
-private fun ModelChoiceControls(agent: Agent?, choice: ModelChoice, onChoice: (ModelChoice) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+private fun ModelChoiceControls(agent: Agent?, choice: ModelChoice, onChoice: (ModelChoice) -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth().padding(bottom = 8.dp)) {
         if (agent?.supportsEffort == true) {
-            Text(tr(S.effort), style = MaterialTheme.typography.labelMedium)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(listOf("default") + (agent.effortLevels[choice.model] ?: listOf("low", "medium", "high", "xhigh", "max"))) { value ->
-                    PillChip((choice.effort ?: "default") == value, { onChoice(choice.copy(effort = value.takeUnless { it == "default" })) },
-                        label = { Text(effortLabel(value)) })
-                }
+            val efforts = listOf("default") + (agent.effortLevels[choice.model] ?: listOf("low", "medium", "high", "xhigh", "max"))
+            val pick = { value: String -> onChoice(choice.copy(effort = value.takeUnless { it == "default" })) }
+            GroupLabel(tr(S.effort))
+            // Up to six short choices fit a segmented control; more read better as a menu.
+            if (efforts.size <= 6) SegmentedControl(efforts.map { it to effortLabel(it) }, choice.effort ?: "default", onSelect = pick)
+            else GroupedSection(null, Modifier.padding(bottom = 0.dp)) {
+                MenuValueRow(tr(S.effort), choice.effort ?: "default", efforts.map { it to effortLabel(it) }, onChange = pick)
             }
+            Spacer(Modifier.height(16.dp))
         }
-        Text(tr(S.permission), style = MaterialTheme.typography.labelMedium)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(listOf("auto", "plan", "full")) { permission -> PillChip(choice.permission == permission,
-                { onChoice(choice.copy(permission = permission)) }, label = { Text(permissionLabel(permission)) }) }
+        GroupLabel(tr(S.permission))
+        SegmentedControl(listOf("auto", "plan", "full").map { it to permissionLabel(it) }, choice.permission) {
+            onChoice(choice.copy(permission = it))
         }
         Text(tr(when { choice.permission == "full" -> S.permission_full_hint; choice.permission == "plan" -> S.permission_plan_hint
-            choice.agent == "grok" -> S.permission_grok_hint; else -> S.permission_auto_hint }), style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        HorizontalDivider(Modifier.padding(vertical = 12.dp))
+            choice.agent == "grok" -> S.permission_grok_hint; else -> S.permission_auto_hint }), Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

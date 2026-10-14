@@ -62,6 +62,10 @@ interface AgentRepository {
     suspend fun answer(conversationId: String, controlId: String, questionId: String, answer: String): Boolean = false
     /** Sends [message] into the running turn; false when that turn cannot take it (queue it instead). */
     suspend fun steer(conversationId: String, controlId: String, message: String, attachments: List<Attachment> = emptyList()): Boolean = false
+    /** The latest output of a background task; null once the server no longer has it. */
+    suspend fun taskOutput(conversationId: String, taskId: String): TaskOutput? = null
+    /** Stops one background task of the running turn; false when it no longer runs. */
+    suspend fun stopTask(conversationId: String, controlId: String, taskId: String): Boolean = false
     suspend fun resume(conversationId: String, headId: String): JsonObject
     suspend fun claudeSessions(cursor: String? = null, project: String? = null): ClaudeSessionPage
     suspend fun claudeHistory(id: String, cursor: String? = null): ClaudeSessionHistory
@@ -325,6 +329,19 @@ class HttpAgentRepository(
         json("/api/chat/steer", JsonObject(mapOf("conversationId" to JsonPrimitive(conversationId), "controlId" to JsonPrimitive(controlId),
             "message" to JsonPrimitive(message)) + attachmentFields(attachments)), timeoutSeconds = if (attachments.isEmpty()) null else 120)
             .boolean("steered") == true
+    } catch (e: ApiException) {
+        if (e.status == 409 || e.status == 404) false else throw e
+    }
+    override suspend fun taskOutput(conversationId: String, taskId: String): TaskOutput? = try {
+        val data = json("/api/chat/task-output?conversationId=${java.net.URLEncoder.encode(conversationId, "UTF-8")}" +
+            "&taskId=${java.net.URLEncoder.encode(taskId, "UTF-8")}")
+        TaskOutput(data.string("output").orEmpty(), data.boolean("truncated") == true, data.long("size") ?: 0)
+    } catch (e: ApiException) {
+        if (e.status == 410 || e.status == 404) null else throw e
+    }
+    override suspend fun stopTask(conversationId: String, controlId: String, taskId: String): Boolean = try {
+        json("/api/chat/task-stop", buildJsonObject { put("conversationId", conversationId); put("controlId", controlId)
+            put("taskId", taskId) }).string("stopping") == taskId
     } catch (e: ApiException) {
         if (e.status == 409 || e.status == 404) false else throw e
     }

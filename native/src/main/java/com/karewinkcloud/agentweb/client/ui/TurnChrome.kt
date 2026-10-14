@@ -21,14 +21,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.karewinkcloud.agentweb.client.core.*
 import com.karewinkcloud.agentweb.client.data.Connection
+import com.karewinkcloud.agentweb.client.R
 import com.karewinkcloud.agentweb.client.R.string as S
 import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.math.cos
 import kotlin.math.sin
 
-enum class WorkingPhase { THINKING, TOOL, WRITING, WAITING, RECONNECTING, CHOOSING }
-data class WorkingStatus(val phase: WorkingPhase, val toolName: String? = null)
+enum class WorkingPhase { THINKING, TOOL, WRITING, WAITING, RECONNECTING, CHOOSING, BACKGROUND }
+/** [toolName] is the running tool, or for BACKGROUND the one task still running; [tasks] counts those. */
+data class WorkingStatus(val phase: WorkingPhase, val toolName: String? = null, val tasks: Int = 0)
 
 /** Terminal truth wins over the display pacer's remaining text. */
 fun workingStatus(turn: TurnState, connection: Connection?): WorkingStatus? {
@@ -37,6 +39,11 @@ fun workingStatus(turn: TurnState, connection: Connection?): WorkingStatus? {
     if (connection == Connection.CONNECTING) return WorkingStatus(WorkingPhase.WAITING)
     // The agent asked a question and waits for the user's pick.
     if (turn.blocks.any { it is ChatBlock.Question && it.answer == null }) return WorkingStatus(WorkingPhase.CHOOSING)
+    // Answered; the turn stays open only while its background tasks run (the user can keep talking).
+    if (turn.backgroundWait) {
+        val running = backgroundTasks(turn.blocks).filter { it.second.running }
+        return WorkingStatus(WorkingPhase.BACKGROUND, running.singleOrNull()?.let { (tool, task) -> taskName(tool, task) }, running.size)
+    }
     turn.blocks.filterIsInstance<ChatBlock.Tool>().lastOrNull { it.status == StepStatus.RUNNING }?.let {
         return WorkingStatus(WorkingPhase.TOOL, shortToolName(it.name))
     }
@@ -61,12 +68,17 @@ fun compactTokenCount(count: Long): String = if (count < 1000) count.toString() 
     java.math.BigDecimal.valueOf(count).divide(java.math.BigDecimal(1000), 1, java.math.RoundingMode.HALF_UP)
         .stripTrailingZeros().toPlainString() + "k"
 
-data class FooterLabels(val input: String, val output: String, val steps: String)
+data class FooterLabels(val input: String, val output: String, val steps: String, val cached: String = "")
 
 /** Templates come from Android resources; the formatting is also testable without Android. */
 fun turnFooter(usage: TurnUsage?, traceDurationMs: Long?, steps: Int?, labels: FooterLabels): String = buildList {
     (usage?.durationMs ?: traceDurationMs)?.takeIf { it >= 0 }?.let { add(elapsedLabel(it)) }
     usage?.promptTokens?.takeIf { it >= 0 }?.let { add(String.format(Locale.ROOT, labels.input, compactTokenCount(it))) }
+    // How much of that the model's prompt cache served (billed at a fraction, and faster).
+    val prompt = usage?.promptTokens ?: 0
+    val cached = usage?.cacheReadInputTokens ?: 0
+    if (labels.cached.isNotEmpty() && prompt > 0 && cached > 0)
+        add(String.format(Locale.ROOT, labels.cached, (cached * 100 / prompt).coerceIn(1, 100)))
     usage?.outputTokens?.takeIf { it >= 0 }?.let { add(String.format(Locale.ROOT, labels.output, compactTokenCount(it))) }
     steps?.takeIf { it > 0 }?.let { add(String.format(Locale.ROOT, labels.steps, it)) }
 }.joinToString(" · ")
@@ -86,9 +98,10 @@ fun traceDurationMs(blocks: List<ChatBlock>): Long? {
 
 @Composable
 internal fun TurnFooter(message: ChatMessage) {
-    val steps = message.blocks.count { it is ChatBlock.Tool || it is ChatBlock.Thought }
+    // The steps the timeline shows (an empty, instant thought is left out there too).
+    val steps = remember(message.blocks) { turnPieces(message.blocks).sumOf { (it as? TurnPiece.Work)?.steps?.size ?: 0 } }
     val footer = turnFooter(message.usage, traceDurationMs(message.blocks), steps,
-        FooterLabels(tr(S.turn_input), tr(S.turn_output), tr(if (steps == 1) S.turn_one_step else S.turn_steps)))
+        FooterLabels(tr(S.turn_input), tr(S.turn_output), tr(if (steps == 1) S.turn_one_step else S.turn_steps), tr(S.turn_cached)))
     if (footer.isNotEmpty()) Text(footer, style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
@@ -114,6 +127,8 @@ internal fun WorkingIndicator(turn: TurnState, connection: Connection?) {
         WorkingPhase.WAITING -> tr(S.turn_waiting)
         WorkingPhase.RECONNECTING -> tr(S.turn_reconnecting)
         WorkingPhase.CHOOSING -> tr(S.turn_choosing)
+        WorkingPhase.BACKGROUND -> status.toolName?.let { tr(S.turn_background_one, it) }
+            ?: countLabel(R.plurals.turn_background, status.tasks)
     }
     // Geometry depends only on typography/font scale, never on the current phase or timer text.
     val density = LocalDensity.current
@@ -149,6 +164,8 @@ private fun sparkStyle(phase: WorkingPhase) = when (phase) {
     WorkingPhase.RECONNECTING -> SparkStyle(0f, .1f, 2f, 0f, 0f, 0f, 1f, .2f)
     // Waiting for the user's choice: still, with a calm, bright breath that invites a tap.
     WorkingPhase.CHOOSING -> SparkStyle(0f, .3f, 1.4f, 0f, 0f, 0f, 0f, .5f)
+    // Background work: a slow, steady gear; nothing is needed from the user.
+    WorkingPhase.BACKGROUND -> SparkStyle(24f, .12f, 2.2f, 0f, .32f, 0f, 0f, .45f)
 }
 
 @Composable

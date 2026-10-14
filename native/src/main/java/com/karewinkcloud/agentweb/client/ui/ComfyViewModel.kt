@@ -45,6 +45,9 @@ data class ComfyState(
         } && (workflow?.promptKey == null || prompt.isNotBlank())
 }
 
+/** Creation previews and originals kept on the phone (the user asked for up to 1 GB). */
+private const val MEDIA_CACHE_BYTES = 1024L * 1024 * 1024
+
 class ComfyViewModel(private var repository: ComfyRepository, private var pendingStore: ComfyPendingStore,
     private val mediaDirectory: File, initialSignInRequired: Boolean = false,
     private val io: CoroutineDispatcher = Dispatchers.IO, private val pollDelay: Long = 3000) : ViewModel() {
@@ -459,16 +462,20 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
             if (state.value.signInRequired) throw ComfyFailure("auth")
             mediaDirectory.mkdirs()
             val extension = if (thumbnail) "jpg" else mediaExtensions[output.mime] ?: throw ComfyFailure("media")
-            val file = File(mediaDirectory, "$mediaSession-$owner-${job.requestId}-${output.index}${if (thumbnail) "-p$edge" else ""}.$extension")
-            if (!file.isFile) downloadSlots.withPermit {
+            // Named by server + credential rather than by launch: thumbnails seen before show at once after a
+            // restart (each launch used to download every card again). Another account never shares a name.
+            val namespace = source.cacheNamespace() ?: "$mediaSession-$owner"
+            val file = File(mediaDirectory, "$namespace-${job.requestId}-${output.index}${if (thumbnail) "-p$edge" else ""}.$extension")
+            if (file.isFile) file.setLastModified(System.currentTimeMillis())  // recently seen stays longest
+            else downloadSlots.withPermit {
                 // Private, disposable cache: reserve at most one bounded media download.
                 evictionLock.withLock {
                     val existing = mediaDirectory.listFiles()?.filter { it.isFile && !it.name.endsWith(".part") }
                         ?.sortedBy { it.lastModified() }.orEmpty()
                     var retained = existing.sumOf { it.length() }
-                    val selectedPrefix = "$mediaSession-$owner-${state.value.selected?.requestId}-"
+                    val selectedPrefix = "$namespace-${state.value.selected?.requestId}-"
                     for (old in existing) {
-                        if (retained <= 256L * 1024 * 1024 && System.currentTimeMillis() - old.lastModified() < 24 * 60 * 60 * 1000L) break
+                        if (retained <= MEDIA_CACHE_BYTES && System.currentTimeMillis() - old.lastModified() < 30 * 24 * 60 * 60 * 1000L) break
                         if (old.name.startsWith(selectedPrefix)) continue
                         val length = old.length()
                         if (old.delete()) retained -= length

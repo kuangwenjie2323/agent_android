@@ -144,4 +144,49 @@ class TurnReducerTest {
         assertEquals(StepStatus.ERROR, (parsed.blocks[1] as ChatBlock.Tool).status)
         assertEquals(false, (parsed.blocks[3] as ChatBlock.Error).problem.retryable)
     }
+
+    @Test fun aBackgroundTaskRunsPastTheAnswerAndItsEndIsAnnounced() {
+        var state = initial
+        val events = listOf(
+            event(1, "tool_call", "id" to "t1", "name" to "Bash", "input" to "{}"),
+            event(2, "task", "id" to "bz1", "tool_id" to "t1", "status" to "running", "description" to "Run tests", "kind" to "local_bash",
+                "at" to 1_700_000_000.5),
+            event(3, "tool_result", "id" to "t1", "content" to "Command running in background with ID: bz1.", "is_error" to false),
+            event(4, "text", "content" to "Started."),
+            event(5, "background_wait", "waiting" to true))
+        events.forEachIndexed { i, e -> state = TurnReducer.reduce(state, e, 1000L * i) }
+        val running = (state.blocks.first() as ChatBlock.Tool).task!!
+        assertEquals(BackgroundTask("bz1", "running", "Run tests", "local_bash", startedAt = 1_700_000_000_500), running)
+        assertTrue(state.backgroundWait)
+        // Replayed after a reconnect, both events arrive at once: the times come from the server's stamps.
+        state = TurnReducer.reduce(state, event(6, "task", "id" to "bz1", "tool_id" to "t1", "status" to "failed",
+            "description" to "Run tests", "exit_code" to 1, "notice" to true, "at" to 1_700_000_060.5), 4_001)
+        val ended = (state.blocks.first() as ChatBlock.Tool).task!!
+        assertEquals(Triple("failed", 1, 60_000L), Triple(ended.status, ended.exitCode, ended.durationMs))
+        assertEquals(ChatBlock.TaskNotice("bz1", "t1", "failed", "Run tests", 1), state.blocks.last())
+        // The CLI answers the notification on its own: the model is at work again.
+        state = TurnReducer.reduce(state, event(7, "text", "content" to "Two tests failed."), 62_000)
+        assertFalse(state.backgroundWait)
+    }
+
+    @Test fun aTaskStillRunningWhenTheTurnEndsWentDownWithIt() {
+        var state = initial
+        val events = listOf(
+            event(1, "tool_call", "id" to "t1", "name" to "Bash", "input" to "{}"),
+            event(2, "task", "id" to "bz1", "tool_id" to "t1", "status" to "running"),
+            event(3, "done", "conversationId" to "conversation"))
+        events.forEachIndexed { i, e -> state = TurnReducer.reduce(state, e, i.toLong()) }
+        assertEquals("stopped", (state.blocks.single() as ChatBlock.Tool).task!!.status)
+        val history = historyBlocks(buildJsonObject { putJsonArray("blocks") {
+            addJsonObject { put("type", "tool"); put("id", "t1"); put("name", "Bash"); put("result", "ok")
+                putJsonObject("task") { put("id", "bz1"); put("status", "completed"); put("exit_code", 0)
+                    put("started_at", 100.0); put("ended_at", 145.5) } }
+            addJsonObject { put("type", "tool"); put("id", "t2"); put("name", "Bash"); put("result", "ok")
+                putJsonObject("task") { put("id", "bz2"); put("status", "running") } }
+            addJsonObject { put("type", "task_notice"); put("task_id", "bz1"); put("tool_id", "t1"); put("status", "completed")
+                put("description", "Sample"); put("exit_code", 0) } } })
+        assertEquals(BackgroundTask("bz1", "completed", exitCode = 0, durationMs = 45_500), (history[0] as ChatBlock.Tool).task)
+        assertEquals("stopped", (history[1] as ChatBlock.Tool).task!!.status)
+        assertEquals(ChatBlock.TaskNotice("bz1", "t1", "completed", "Sample", 0), history[2])
+    }
 }

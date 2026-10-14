@@ -5,12 +5,16 @@ import androidx.compose.ui.graphics.graphicsLayer
 
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.*
@@ -48,6 +52,7 @@ fun ErrorBlock(error: ClientError, onRetry: (() -> Unit)? = null, action: String
                 "fork_idempotency_conflict" -> tr(S.fork_idempotency_conflict)
                 "fork_cleanup_failed", "fork_state_unavailable", "fork_request_failed", "fork_persist_failed" -> tr(S.fork_request_failed)
                 "invalid_protocol_range", "protocol_major_mismatch", "protocol_version_mismatch" -> tr(S.chat_protocol_error)
+                "task_not_running" -> tr(S.task_not_running)
                 else -> localMessage(error.message)
             }, style = MaterialTheme.typography.bodyMedium)
             if (error.retryable == false) Text(tr(S.not_retried), style = MaterialTheme.typography.bodySmall)
@@ -82,7 +87,16 @@ fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String?
         customActions = listOf(CustomAccessibilityAction(copyLabel) { copy(); true })
     }) {
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (message.role == "user") {
+            val grokBot = if (message.role == "user") remember(message.text) { grokBotMessage(message.text) } else null
+            if (grokBot != null) {
+                // Forwarded by the server from a Grok Bot agent: the agent's card, not the user's bubble.
+                GrokBotCard(grokBot)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    ActionIcon(if (copied) R.drawable.aw_check else R.drawable.aw_copy, tr(if (copied) S.copied else S.copy_message)) {
+                        clipboard.setText(AnnotatedString(grokBot.text)); copied = true
+                    }
+                }
+            } else if (message.role == "user") {
                 // Like a messenger: pictures and files sit above the bubble on their own, the bubble holds the words.
                 val media = message.blocks.filterIsInstance<ChatBlock.Media>().flatMap { it.items }
                 val words = message.blocks.filterNot { it is ChatBlock.Media }
@@ -108,7 +122,13 @@ fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String?
             } else {
                 (modelLabel ?: message.model)?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 SelectionContainer { BlockContent(message.blocks, live, onAnswer) }
-                if (turn != null && !turn.done) WorkingIndicator(turn, connection)
+                // The timeline already shows a running step with its own spinner and time; the line below is
+                // for the moments between steps (waiting for the model, writing, reconnecting).
+                val stepRunning = message.blocks.lastOrNull().let { last ->
+                    (last is ChatBlock.Tool && last.status == StepStatus.RUNNING && !last.name.endsWith("ask_user")) ||
+                        (last is ChatBlock.Thought && last.status == StepStatus.RUNNING)
+                }
+                if (turn != null && !turn.done && !stepRunning) WorkingIndicator(turn, connection)
                 else if (!live || turn?.done == true) TurnFooter(message)
                 if (!live) Row(verticalAlignment = Alignment.CenterVertically) {
                     if (message.text.isNotBlank()) ActionIcon(if (copied) R.drawable.aw_check else R.drawable.aw_copy,
@@ -140,119 +160,71 @@ fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String?
 
 @Composable
 private fun BlockContent(blocks: List<ChatBlock>, live: Boolean, onAnswer: ((String, String) -> Unit)? = null) {
-    // The ask_user call is shown as its question card, not again as a work step.
-    val workBlocks = blocks.filter { (it is ChatBlock.Tool && !it.name.endsWith("ask_user")) || it is ChatBlock.Thought }
-    val work = remember(workBlocks) { workBlocks }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (work.isNotEmpty()) WorkTrace(work, live, answerStarted = blocks.any { it is ChatBlock.Text && it.content.isNotBlank() })
-        blocks.forEachIndexed { index, block -> key(index) {
-            when (block) {
-                is ChatBlock.Text -> Markdown(block.content, streaming = live && index == blocks.indexOfLast { it is ChatBlock.Text })
-                is ChatBlock.Error -> ErrorBlock(block.problem)
-                is ChatBlock.Notice -> Text(localMessage(block.content), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                is ChatBlock.Media -> block.items.forEach { ChatMediaCard(it) }
-                is ChatBlock.Question -> QuestionCard(block, onAnswer)
-                is ChatBlock.Steer -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = MaterialTheme.shapes.large,
-                        modifier = Modifier.widthIn(max = 300.dp)) {
-                        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(tr(S.steer_label), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            if (block.items.isNotEmpty()) UserAttachments(block.items)
-                            if (block.content.isNotBlank()) Text(block.content, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
+    // Reading order, like Claude: thinking and tool steps sit between the pieces of the answer they led to.
+    val pieces = remember(blocks) { turnPieces(blocks) }
+    val streamingText = if (live) blocks.indexOfLast { it is ChatBlock.Text } else -1
+    val taskNames = remember(blocks) { backgroundTasks(blocks).associate { (tool, task) -> task.id to taskName(tool, task) } }
+    CompositionLocalProvider(LocalTaskNames provides taskNames) { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        pieces.forEachIndexed { position, piece ->
+            key(if (piece is TurnPiece.Work) "w${piece.first}" else "b${(piece as TurnPiece.Single).index}") {
+                when (piece) {
+                    // Only the latest work of a running turn stays open; earlier work folds into one line each.
+                    is TurnPiece.Work -> WorkSection(piece.steps, live, current = live && position == pieces.lastIndex, key = piece.first)
+                    is TurnPiece.Single -> TurnBlock(piece.block, streaming = piece.index == streamingText, onAnswer)
                 }
-                else -> Unit
             }
-        } }
-    }
+        }
+    } }
 }
 
 @Composable
-private fun WorkTrace(blocks: List<ChatBlock>, live: Boolean, answerStarted: Boolean = false) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    // Like leading chat apps: once the answer starts streaming, fold the reasoning away.
-    LaunchedEffect(live, answerStarted) { if (live && answerStarted) expanded = false }
-    // Label stays "running" for the whole live turn; per-step status flipped it between steps.
-    val running = live
-    val now by produceState(System.nanoTime() / 1_000_000, running) {
-        while (running) { value = System.nanoTime() / 1_000_000; delay(1000) }
-    }
-    val timedStarts = blocks.mapNotNull { when (it) {
-        is ChatBlock.Tool -> it.startedAt.takeIf { t -> t > 0 }
-        is ChatBlock.Thought -> it.startedAt.takeIf { t -> t > 0 }
-        else -> null
-    } }
-    val ends = blocks.mapNotNull { when (it) {
-        is ChatBlock.Tool -> it.startedAt.takeIf { t -> t > 0 }?.let { start -> start + (it.durationMs ?: (now - start)) }
-        is ChatBlock.Thought -> it.startedAt.takeIf { t -> t > 0 }?.let { start -> start + (it.durationMs ?: (now - start)) }
-        else -> null
-    } }
-    val reasoningDuration = blocks.sumOf {
-        when (it) {
-            is ChatBlock.Thought -> it.durationMs ?: 0L
-            else -> 0L
-        }.coerceAtLeast(0)
-    }
-    val duration = if (timedStarts.isEmpty()) null else (ends.maxOrNull()!! - timedStarts.min()).coerceAtLeast(0)
-    val failures = blocks.count { it is ChatBlock.Tool && it.status == StepStatus.ERROR }
-    val expansion = tr(if (expanded) S.expanded else S.collapsed)
-    Surface(color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(16.dp)) {
-        Column {
-            TextButton(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)
-                .semantics { stateDescription = expansion },
-                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp), colors = quietButton()) {
-                Box(Modifier.size(18.dp).graphicsLayer { rotationZ = if (expanded) 90f else 0f }) { AppIcon(R.drawable.aw_chevron) }
-                Spacer(Modifier.width(6.dp))
-                Text(countLabel(if (running) R.plurals.working else R.plurals.trace, blocks.size) +
-                    if (failures > 0) " · " + countLabel(R.plurals.failed_steps, failures) else "", Modifier.weight(1f),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
-                Text(when { duration != null -> tr(S.seconds, duration / 1000)
-                    reasoningDuration > 0 -> tr(S.reasoning_seconds, reasoningDuration / 1000)
-                    else -> tr(S.details) }, style = MaterialTheme.typography.bodySmall)
-            }
-            // Bounded, independently scrolling body so a long reasoning trace never
-            // forces a long scroll back to the header; a footer button collapses it.
-            if (expanded) Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())
-                .padding(start = 16.dp, end = 12.dp, bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                blocks.forEach { block ->
-                    when (block) {
-                        is ChatBlock.Tool -> {
-                            TraceStep(toolCommand(block), block.status, block.durationMs ?: if (running && block.status == StepStatus.RUNNING && block.startedAt > 0) now - block.startedAt else null)
-                            compactToolDiff(block)?.let { diff ->
-                                CodeBlock(diff, "diff")
-                            }
-                            if (block.status == StepStatus.ERROR && !block.result.isNullOrBlank()) ErrorBlock(ClientError(block.result.take(2000)))
-                        }
-                        is ChatBlock.Thought -> {
-                            TraceStep(tr(S.reasoning_summary), block.status, block.durationMs ?: if (running && block.startedAt > 0) now - block.startedAt else null)
-                            if (block.content.isNotBlank()) Text(block.content, style = MaterialTheme.typography.bodySmall)
-                        }
-                        else -> Unit
-                    }
+private fun TurnBlock(block: ChatBlock, streaming: Boolean, onAnswer: ((String, String) -> Unit)?) {
+    when (block) {
+        is ChatBlock.Text -> Markdown(block.content, streaming = streaming)
+        is ChatBlock.Error -> ErrorBlock(block.problem)
+        is ChatBlock.Notice -> Text(localMessage(block.content), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        is ChatBlock.Media -> block.items.forEach { ChatMediaCard(it) }
+        is ChatBlock.Question -> QuestionCard(block, onAnswer)
+        is ChatBlock.TaskNotice -> TaskNoticeRow(block)
+        is ChatBlock.Steer -> grokBotMessage(block.content)?.let { GrokBotCard(it) } ?: Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = MaterialTheme.shapes.large,
+                modifier = Modifier.widthIn(max = 300.dp)) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(tr(S.steer_label), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (block.items.isNotEmpty()) UserAttachments(block.items)
+                    if (block.content.isNotBlank()) Text(block.content, style = MaterialTheme.typography.bodyMedium)
                 }
             }
-            if (expanded) TextButton(onClick = { expanded = false },
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(tr(S.collapse)) }
         }
+        else -> Unit
     }
 }
 
-@Composable private fun stepLabel(status: StepStatus) = tr(when(status) {
-    StepStatus.RUNNING -> S.step_running; StepStatus.COMPLETE -> S.step_complete; StepStatus.ERROR -> S.step_error; StepStatus.INTERRUPTED -> S.step_interrupted
-})
-
+/**
+ * A message from one of the user's Grok Bot agents, forwarded into this conversation: on the left with the
+ * agent's name, like another participant, so it never reads as something the user typed.
+ */
 @Composable
-private fun TraceStep(title: String, status: StepStatus, duration: Long?) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
-        Text(when (status) { StepStatus.COMPLETE -> "✓"; StepStatus.RUNNING -> "●"; StepStatus.ERROR -> "!"; StepStatus.INTERRUPTED -> "–" },
-            color = if (status == StepStatus.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
-        Column(Modifier.weight(1f)) {
-            Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
-            Text(stepLabel(status), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun GrokBotCard(message: GrokBotMessage) {
+    Row(Modifier.fillMaxWidth()) {
+        Surface(Modifier.weight(.88f, fill = false).widthIn(max = 560.dp), color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = RoundedCornerShape(6.dp, 20.dp, 20.dp, 20.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.size(22.dp).clip(CircleShape).background(Color(0xff3a3a3c)),
+                        contentAlignment = Alignment.Center) {
+                        Text("G", color = Color.White, style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold)
+                    }
+                    Text(message.agent, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(tr(if (message.mention) S.grokbot_mention else S.grokbot_reply), style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (message.text.isNotBlank()) SelectionContainer { Markdown(message.text) }
+            }
         }
-        if (duration != null) Text(tr(S.seconds, duration.coerceAtLeast(0) / 1000), style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.weight(.12f))
     }
 }
 

@@ -92,12 +92,42 @@ data class Conversation(
 }
 
 enum class StepStatus { RUNNING, COMPLETE, ERROR, INTERRUPTED }
+
+/**
+ * Work a step left running in the background (Bash or Agent with run_in_background): the step itself
+ * returns at once, the task runs on and its end is announced later in the turn. [status] is running,
+ * completed, failed or stopped. [startedAt] is when it started by the server's clock (epoch ms, 0 when
+ * unknown), so a reconnect that replays the turn keeps its running time; [durationMs] once it ended.
+ */
+data class BackgroundTask(val id: String, val status: String = RUNNING, val description: String = "", val kind: String = "",
+    val exitCode: Int? = null, val startedAt: Long = 0, val durationMs: Long? = null) {
+    val running get() = status == RUNNING
+    val agent get() = kind.endsWith("agent")
+    companion object {
+        const val RUNNING = "running"
+        fun from(j: JsonObject?): BackgroundTask? {
+            val id = j?.string("id")?.takeIf(String::isNotBlank) ?: return null
+            val started = (j["started_at"] as? JsonPrimitive)?.doubleOrNull
+            val ended = (j["ended_at"] as? JsonPrimitive)?.doubleOrNull
+            return BackgroundTask(id, j.string("status") ?: RUNNING, j.string("description").orEmpty(), j.string("kind").orEmpty(),
+                j.long("exit_code")?.toInt(), durationMs = if (started != null && ended != null) ((ended - started) * 1000).toLong().coerceAtLeast(0) else null)
+        }
+    }
+}
+
+/** The last part of a background task's output, as a terminal would show it. */
+data class TaskOutput(val text: String, val truncated: Boolean = false, val size: Long = 0)
+
 sealed interface ChatBlock {
     data class Text(val content: String) : ChatBlock
     data class Thought(val content: String = "", val startedAt: Long = 0, val durationMs: Long? = null,
         val status: StepStatus = StepStatus.RUNNING) : ChatBlock
     data class Tool(val id: String, val name: String, val input: String = "", val result: String? = null,
-        val status: StepStatus = StepStatus.RUNNING, val startedAt: Long = 0, val durationMs: Long? = null, val diff: String? = null) : ChatBlock
+        val status: StepStatus = StepStatus.RUNNING, val startedAt: Long = 0, val durationMs: Long? = null, val diff: String? = null,
+        val task: BackgroundTask? = null) : ChatBlock
+    /** A background task ended here in the turn (Claude Code announces it, then answers it). */
+    data class TaskNotice(val taskId: String, val toolId: String, val status: String, val description: String = "",
+        val exitCode: Int? = null) : ChatBlock
     data class Error(val problem: ClientError) : ChatBlock
     data class Notice(val content: String) : ChatBlock
     /** A message the user sent into the running turn; the model read it at its next step. */
@@ -127,7 +157,11 @@ fun historyBlocks(j: JsonObject): List<ChatBlock> {
                     b.containsKey("result") -> StepStatus.COMPLETE
                     else -> StepStatus.INTERRUPTED },
                 durationMs = b.long("duration_ms")?.coerceAtLeast(0), diff = b.string("diff"),
+                // A task still "running" in a saved turn ended with it (the CLI stops its tasks when it exits).
+                task = BackgroundTask.from(b.obj("task"))?.let { if (it.running) it.copy(status = "stopped") else it },
             )
+            "task_notice" -> ChatBlock.TaskNotice(b.string("task_id").orEmpty(), b.string("tool_id").orEmpty(),
+                b.string("status") ?: "completed", b.string("description").orEmpty(), b.long("exit_code")?.toInt())
             "error" -> if (b.string("code") == "interrupted") ChatBlock.Notice(STOPPED_NOTICE)
                 else ChatBlock.Error(ClientError(b.string("content").orEmpty(), b.string("code"), b.boolean("retryable")))
             "steer" -> ChatBlock.Steer(b.string("content").orEmpty(), b.objects("items").map(MessageMedia::from))

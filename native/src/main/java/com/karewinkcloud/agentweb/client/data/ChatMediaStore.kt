@@ -22,6 +22,9 @@ fun mediaTarget(origin: String, value: String): MediaTarget? {
     return MediaTarget(url, authenticated)
 }
 
+/** Chat pictures and files kept on the phone (the user asked for up to 1 GB). */
+const val CHAT_MEDIA_CACHE_BYTES = 1024L * 1024 * 1024
+
 data class CachedMedia(val file: File, val mime: String)
 class ChatMediaStore(private val repository: HttpAgentRepository, cache: File) {
     // One folder per server + credential, kept across launches so pictures already seen show at once
@@ -54,7 +57,7 @@ class ChatMediaStore(private val repository: HttpAgentRepository, cache: File) {
                 type.writeText(mime)
                 if (!part.renameTo(file)) { part.delete(); throw java.io.IOException("Media could not be saved") }
                 // Cache is private and disposable; a missing evicted file is fetched again on demand.
-                pruneChatCache(root.parentFile, file, 128L * 1024 * 1024)
+                pruneChatCache(root.parentFile, file, CHAT_MEDIA_CACHE_BYTES)
                 CachedMedia(file, mime)
             }
             cached.also { synchronized(downloads) {

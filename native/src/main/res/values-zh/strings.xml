@@ -487,4 +487,63 @@
     <string name="error_kaggle_gpu_busy">你的 Kaggle 账号一直有 2 个 GPU 任务在运行（Kaggle 最多允许 2 个），免费 GPU 没能启动。可以在 Kaggle 上停掉一个，或改用 Comfy Cloud。</string>
     <string name="creation_leave_hint">可以先离开 App，好了会通知你。</string>
     <string name="error_output_too_large">结果超过 128 MB，没法取回。换个更短或更小的规格再试。</string>
+    <string name="step_think">思考</string>
+    <string name="step_think_running">思考中</string>
+    <string name="step_think_done">思考了 %1$s</string>
+    <string name="step_command">运行命令</string>
+    <string name="step_read">读取</string>
+    <string name="step_edit">修改</string>
+    <string name="step_write">新建</string>
+    <string name="step_search">搜索</string>
+    <string name="step_web_search">搜索网页</string>
+    <string name="step_web_fetch">打开网页</string>
+    <string name="step_image">查看图片</string>
+    <string name="step_agent">子任务</string>
+    <string name="step_todo">更新任务</string>
+    <string name="step_mcp">调用 %1$s</string>
+    <string name="step_earlier">前面还有 %1$d 步</string>
+    <string name="step_more_lines">还有 %1$d 行，点开查看</string>
+    <string name="step_file_removed">已删除这个文件</string>
+    <plurals name="work_commands"><item quantity="other">运行了 %1$d 个命令</item></plurals>
+    <plurals name="work_edits"><item quantity="other">修改了 %1$d 个文件</item></plurals>
+    <plurals name="work_reads"><item quantity="other">读取了 %1$d 个文件</item></plurals>
+    <plurals name="work_searches"><item quantity="other">搜索了 %1$d 次</item></plurals>
+    <plurals name="work_pages"><item quantity="other">打开了 %1$d 个网页</item></plurals>
+    <plurals name="work_other"><item quantity="other">另外 %1$d 步</item></plurals>
+    <string name="step_background">后台运行</string>
+    <string name="step_background_agent">后台子任务</string>
+    <string name="step_task_output">查看后台输出</string>
+    <string name="step_task_stop">停止后台任务</string>
+    <string name="task_running">运行中</string>
+    <string name="task_running_for">运行中 · %1$s</string>
+    <string name="task_done">已完成</string>
+    <string name="task_done_in">已完成 · 用时 %1$s</string>
+    <string name="task_failed">失败</string>
+    <string name="task_failed_code">失败 · 退出码 %1$d</string>
+    <string name="task_stopped">已停止</string>
+    <string name="task_stop">停止</string>
+    <string name="task_exit_code">退出码 %1$d</string>
+    <string name="task_unnamed">后台任务</string>
+    <string name="task_notice_done">后台任务「%1$s」已完成</string>
+    <string name="task_notice_failed">后台任务「%1$s」失败了</string>
+    <string name="task_notice_stopped">后台任务「%1$s」已停止</string>
+    <string name="task_output">输出</string>
+    <string name="task_output_loading">正在读取输出…</string>
+    <string name="task_output_waiting">还没有输出</string>
+    <string name="task_output_empty">没有任何输出</string>
+    <string name="task_output_gone">服务器上已经没有这份输出了</string>
+    <string name="task_output_failed">暂时读不到输出</string>
+    <string name="task_output_truncated">只显示最新的一部分</string>
+    <string name="task_not_running">这个后台任务已经结束了。</string>
+    <string name="tasks_title">后台任务</string>
+    <string name="tasks_running_group">运行中</string>
+    <string name="tasks_ended_group">已结束</string>
+    <string name="tasks_none">这一轮没有后台任务。</string>
+    <plurals name="tasks_running"><item quantity="other">%1$d 个后台任务</item></plurals>
+    <plurals name="tasks_running_short"><item quantity="other">%1$d 个在后台运行</item></plurals>
+    <string name="grokbot_reply">回复</string>
+    <string name="grokbot_mention">@本机</string>
+    <string name="turn_background_one">等待后台任务：%1$s</string>
+    <plurals name="turn_background"><item quantity="other">等待 %1$d 个后台任务</item></plurals>
+    <string name="turn_cached">缓存 %1$d%%</string>
 </resources>

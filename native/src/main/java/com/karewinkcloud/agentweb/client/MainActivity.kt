@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity() {
                 phase == SignInPhase.SIGNING_OUT || (!settings.localTesting() && authentication.origin != preferences.origin))
             val chat: AgentViewModel = viewModel(factory = factory {
                 AgentViewModel(HttpAgentRepository(preferences.origin, settings.store, listCacheDir = listCacheDir), preferences.choice,
-                    connection.signInRequired, settings.store::saveChoice).also { it.appliedConnection = connection }
+                    connection.signInRequired, watchIdleChats = true, saveChoice = settings.store::saveChoice).also { it.appliedConnection = connection }
             })
             SideEffect { chatModel = chat }
             LaunchedEffect(chat) { chat.preloadClaudeSessions() }

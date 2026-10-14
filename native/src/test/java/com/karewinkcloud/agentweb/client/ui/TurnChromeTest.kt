@@ -44,6 +44,9 @@ class TurnChromeTest {
     }
     @Test fun missingAndNegativePartsAreOmitted() {
         assertEquals("", turnFooter(null, null, null, labels("en")))
+        // The share the prompt cache served, after the input it belongs to.
+        assertEquals("4:08 · 输入 777.7k · 缓存 99% · 输出 17k · 40 步", turnFooter(TurnUsage(inputTokens = 4286, outputTokens = 17000,
+            cacheReadInputTokens = 773376, durationMs = 248000), null, 40, labels("zh").copy(cached = "缓存 %1\$d%%")))
         assertEquals("", turnFooter(TurnUsage(), null, 0, labels("zh")))
         assertEquals("输出 0", turnFooter(TurnUsage(inputTokens = -1, outputTokens = 0), null, 0, labels("zh")))
         assertEquals("0s · Input 0", turnFooter(TurnUsage(inputTokens = 0, durationMs = 0), null, null, labels("en")))

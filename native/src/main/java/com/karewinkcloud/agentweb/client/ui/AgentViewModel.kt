@@ -66,6 +66,8 @@ class AgentViewModel(
     private var repository: AgentRepository,
     initialChoice: ModelChoice,
     initialSignInRequired: Boolean = false,
+    /** Keep watching an open idle chat for turns the server starts on its own (off in tests: it never settles). */
+    private val watchIdleChats: Boolean = false,
     private val saveChoice: (ModelChoice) -> Unit,
 ) : ViewModel() {
     private val mutable = MutableStateFlow(ClientState(choice = initialChoice, signInRequired = initialSignInRequired))
@@ -424,7 +426,11 @@ class AgentViewModel(
         editChat(owner) { it.copy(error = null) }
         sessionJob = viewModelScope.launch { loadAndFollow(owner) }
     }
+    /** The app is on screen; an idle open chat watches the server only then. */
+    @Volatile private var inForeground = true
+    fun onBackground() { inForeground = false }
     fun onForeground() {
+        inForeground = true
         if (state.value.signInRequired) return
         if (state.value.claudeVisible && state.value.chat == null) {
             if (sessionJob?.isActive != true && state.value.claudePreview != null) refreshClaudePreview()
@@ -537,6 +543,22 @@ class AgentViewModel(
         }
     }
 
+    /** True once the open, idle conversation changed on the server; false when the chat was left. Checks only
+     *  in the foreground, against the light list row (running, last update, message count). */
+    private suspend fun awaitServerActivity(owner: Long, id: String): Boolean {
+        var baseline: Conversation? = null
+        while (owned(owner)) {
+            delay(if (baseline == null) 1_000 else 6_000)
+            if (!inForeground) continue
+            val row = try { repository.conversations().firstOrNull { it.id == id } } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { null } ?: continue
+            val before = baseline
+            if (before == null) { baseline = row; if (row.running) return true; continue }
+            if (row.running || row.updatedAt != before.updatedAt || row.messageCount != before.messageCount) return true
+        }
+        return false
+    }
+
     private suspend fun loadAndFollow(owner: Long, applyChoice: Boolean = false, allowReconcile: Boolean = true) {
         try {
             val id = state.value.chat?.conversation?.id ?: return
@@ -599,7 +621,12 @@ class AgentViewModel(
                     delay(200)
                     continue
                 }
-                if (detail.queued.isEmpty() || detail.queuePaused) return
+                if (detail.queued.isEmpty() || detail.queuePaused) {
+                    // Idle and open: keep a light watch, so a turn the server starts on its own (a Grok Bot
+                    // reply, a follow-up queued elsewhere) shows up live instead of only after reopening.
+                    if (!watchIdleChats || !awaitServerActivity(owner, id)) return
+                    continue
+                }
                 delay(1000)
             }
         } catch (e: CancellationException) { throw e }
@@ -912,6 +939,28 @@ class AgentViewModel(
                 val answered = source.answer(chat.conversation.id, control, questionId, text)
                 editChat(owner) { it.copy(controlBusy = false, error = if (answered) null else ClientError("这个问题已经结束了，可以直接发消息告诉它。", "question_closed")) }
             } catch (e: Exception) { editChat(owner) { it.copy(controlBusy = false, error = problem(e)) } }
+        }
+    }
+
+    /** The latest output of a background task in the open conversation; null once the server no longer has it. */
+    suspend fun taskOutput(taskId: String): TaskOutput? {
+        val chat = state.value.chat ?: return null
+        return repository.taskOutput(chat.conversation.id, taskId)
+    }
+
+    /** Stops one background task, as in Claude Code's task list; its step updates from the turn's own events. */
+    fun stopTask(taskId: String) {
+        val chat = state.value.chat ?: return
+        val control = chat.controlId ?: return
+        if (!chat.running || chat.conversation.nativeControl) return
+        val owner = generation
+        val source = repository
+        viewModelScope.launch {
+            try {
+                if (!source.stopTask(chat.conversation.id, control, taskId))
+                    editChat(owner) { it.copy(error = ClientError("This background task has already ended.", "task_not_running", false)) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { editChat(owner) { it.copy(error = problem(e)) } }
         }
     }
 

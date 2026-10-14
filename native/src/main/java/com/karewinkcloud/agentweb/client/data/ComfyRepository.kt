@@ -8,6 +8,8 @@ import java.io.File
 
 interface ComfyRepository {
     val authenticationRequired: Flow<Boolean>
+    /** A stable name for this server + credential, so cached media outlives an app restart; null keeps it per launch. */
+    fun cacheNamespace(): String? = null
     suspend fun workflows(): List<ComfyWorkflow>
     suspend fun recommend(prompt: String, channel: String): List<ComfySuggestion>
     suspend fun submit(request: ComfySubmission): ComfyJob
@@ -32,6 +34,7 @@ interface ComfyRepository {
 
 class HttpComfyRepository(private val http: HttpAgentRepository) : ComfyRepository {
     override val authenticationRequired = http.authenticationRequired
+    override fun cacheNamespace() = http.credentialKey()
     private suspend fun <T> operation(block: suspend () -> T): T = try { block() }
     catch (e: CancellationException) { throw e }
     catch (e: ComfyFailure) { throw e }
