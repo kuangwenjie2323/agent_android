@@ -13,7 +13,7 @@ data class TurnState(
     val backgroundWait: Boolean = false,
 ) {
     val lastEventId get() = EventId(runId, lastSequence).toString()
-    val text get() = blocks.filterIsInstance<ChatBlock.Text>().joinToString("") { it.content }
+    val text get() = answerText(blocks)
 }
 
 /** Only server events change terminal truth. Callers inject a monotonic clock. */

@@ -13,6 +13,13 @@ class GrokBotTest {
             grokBotMessage("【Grok Bot · Polymarket-yy @本机】\n@本机 请查一下 7897 端口$note"))
     }
 
+    @Test fun aMessagesWordsKeepTheirParagraphs() {
+        // "started" before a step and "68" after a mid-turn question read as two lines, not "started68".
+        val blocks = listOf(ChatBlock.Text("started\n"), ChatBlock.Steer("17 × 4?"), ChatBlock.Text("68"), ChatBlock.Text(" "))
+        assertEquals("started\n\n68", answerText(blocks))
+        assertEquals("68", plainPreview(answerText(blocks)))
+    }
+
     @Test fun theUsersOwnWordsAreLeftAlone() {
         assertNull(grokBotMessage("帮我问一下 robot-c 【Grok Bot · robot-c 的回复】"))
         assertNull(grokBotMessage("Grok Bot · robot-c 的回复"))

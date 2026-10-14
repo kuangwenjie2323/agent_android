@@ -183,9 +183,13 @@ fun historyBlocks(j: JsonObject): List<ChatBlock> {
     return blocks
 }
 
+/** The words of a message: its text blocks as paragraphs (work or a mid-turn message came between them). */
+fun answerText(blocks: List<ChatBlock>): String =
+    blocks.filterIsInstance<ChatBlock.Text>().map { it.content.trim('\n') }.filter(String::isNotBlank).joinToString("\n\n")
+
 data class ChatMessage(val id: String, val role: String, val blocks: List<ChatBlock>, val model: String? = null,
     val usage: TurnUsage? = null) {
-    val text get() = blocks.filterIsInstance<ChatBlock.Text>().joinToString("") { it.content }
+    val text get() = answerText(blocks)
     companion object {
         fun from(j: JsonObject) = ChatMessage(j.string("id").orEmpty(), j.string("role") ?: "assistant", historyBlocks(j),
             j.string("model") ?: j.obj("usage")?.string("model"), TurnUsage.from(j.obj("usage")))
