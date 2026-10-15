@@ -56,6 +56,21 @@ class RepositoryTest {
         assertEquals(1, server.requestCount)
     }
 
+    @Test fun onlyReadsToAnHttpsOriginShareAConnection() {
+        assertTrue(reusesConnection("https://agent.example.com", read = true))
+        assertFalse(reusesConnection("https://agent.example.com", read = false))
+        // The AgentWeb server itself (LAN, adb reverse) speaks HTTP/1.0 and closes every connection.
+        assertFalse(reusesConnection("http://192.168.1.5:18791", read = true))
+    }
+    @Test fun aPlainHttpOriginStillClosesEveryConnection() = runBlocking {
+        server.enqueue(json("""{"messageId":null,"suggestions":[]}"""))
+        repo.suggestions("c1")
+        assertEquals("close", next().getHeader("Connection"))
+        server.enqueue(json("""{"steered":true}""", 202))
+        assertTrue(repo.steer("c1", control, "hi"))
+        assertEquals("close", next().getHeader("Connection"))
+    }
+
     @Test fun claudeSessionPagingEncodesOpaqueCursorAndProjectPath() = runBlocking {
         server.enqueue(json("""{"sessions":[{"id":"session","project":{"cwd":"/synthetic/项目","name":"项目"},"title":"你好","state":"maybe_active","provider":"deepseek","model":"deepseek-v4-pro"}],"nextCursor":"next"}"""))
         val page = repo.claudeSessions("page+one=", "/synthetic/项目")

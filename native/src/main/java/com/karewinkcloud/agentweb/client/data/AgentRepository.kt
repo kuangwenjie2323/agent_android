@@ -72,6 +72,9 @@ interface AgentRepository {
     suspend fun adoptClaudeSession(id: String): String
 }
 
+/** Whether a request may share a pooled connection: reads to an HTTPS origin only. */
+internal fun reusesConnection(origin: String, read: Boolean) = read && origin.startsWith("https://", ignoreCase = true)
+
 class HttpAgentRepository(
     val origin: String,
     private val tokens: TokenProvider,
@@ -95,10 +98,11 @@ class HttpAgentRepository(
             .header("AgentWeb-Protocol-Min", "1.0")
             .header("AgentWeb-Protocol-Max", "1.0")
             .header("AgentWeb-Client", "android/${BuildConfig.VERSION_NAME}")
-            // The AgentWeb API speaks HTTP/1.0 and closes every connection after its
-            // response. Never pool: a reused socket can look alive through adb reverse or
-            // a proxy, and a mutating POST must never be written onto a dead connection.
-            .header("Connection", "close")
+        // The AgentWeb server speaks HTTP/1.0 and closes every connection, and a reused socket can look
+        // alive through adb reverse or a proxy: a mutating request, and anything to a plain-HTTP origin,
+        // goes out on its own connection. Reads over HTTPS (Cloudflare in front) share one HTTP/2
+        // connection: a fresh TLS handshake across the Pacific was most of the ~1.1 s each read took.
+        if (!reusesConnection(origin, body == null)) builder.header("Connection", "close")
         tokens.tokenFor(origin)?.takeIf { it.isNotBlank() }?.let { builder.header("Authorization", "Bearer $it") }
         if (body != null) builder.post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
         if (lastId != null) builder.header("Last-Event-ID", lastId)
@@ -118,11 +122,16 @@ class HttpAgentRepository(
     }
 
     // Idempotent GETs may transparently retry once on a stale pooled connection (the
-    // server closes connections; adb reverse can leave the phone side open). Mutating
-    // POSTs keep using the non-retrying client and are never replayed.
-    private val readClient: OkHttpClient by lazy { client.newBuilder().retryOnConnectionFailure(true).build() }
+    // server closes connections; adb reverse can leave the phone side open), and pings find a
+    // dead HTTP/2 link. Mutating requests use the non-retrying client without a pool: they are
+    // never replayed and never written onto a connection that was sitting idle.
+    private val readClient: OkHttpClient by lazy {
+        client.newBuilder().connectionPool(ConnectionPool(4, 4, TimeUnit.MINUTES)).pingInterval(20, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true).build()
+    }
+    private val writeClient: OkHttpClient by lazy { client.newBuilder().connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS)).build() }
 
-    private fun clientFor(request: Request) = if (request.method == "GET") readClient else client
+    private fun clientFor(request: Request) = if (request.method == "GET") readClient else writeClient
 
     private suspend fun <T> execute(request: Request, timeoutSeconds: Long? = null, readTimeoutSeconds: Long? = null,
         read: (Response) -> T): T = suspendCancellableCoroutine { continuation ->
@@ -151,7 +160,7 @@ class HttpAgentRepository(
         }
     }
     internal suspend fun delete(path: String, timeoutSeconds: Long? = null): JsonObject = withContext(Dispatchers.IO) {
-        execute(request(path).newBuilder().delete().build(), timeoutSeconds) { response ->
+        execute(request(path).newBuilder().header("Connection", "close").delete().build(), timeoutSeconds) { response ->
             validate(response)
             runCatching { wireJson.parseToJsonElement(response.body?.string().orEmpty()) as JsonObject }
                 .getOrElse { throw ApiException(response.code, ClientError("The server returned an unreadable response.")) }
