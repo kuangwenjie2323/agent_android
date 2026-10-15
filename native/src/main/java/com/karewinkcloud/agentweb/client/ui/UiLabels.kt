@@ -174,6 +174,7 @@ internal fun comfyErrorResource(code: String) = when(code) {
         "Unable to confirm session adoption. Refresh and try Continue here again." -> S.chat_adoption_unknown
 
         "Your session has ended. Sign in again in Settings." -> S.error_auth
+        TOO_LARGE_MESSAGE -> S.error_send_too_large
         "Your session has expired. Sign in again." -> S.auth_expired
         "Saved sign-in could not be unlocked. Sign in again." -> S.auth_unlocked
         "Sign-in could not be saved securely. Sign in again." -> S.auth_save

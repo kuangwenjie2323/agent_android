@@ -534,6 +534,7 @@
     <string name="task_output_gone">服务器上已经没有这份输出了</string>
     <string name="task_output_failed">暂时读不到输出</string>
     <string name="task_output_truncated">只显示最新的一部分</string>
+    <string name="error_send_too_large">这条消息太大，发不出去：图片或文件超过了上限。少发几张，或换小一点的图片再试。</string>
     <string name="task_not_running">这个后台任务已经结束了。</string>
     <string name="tasks_title">后台任务</string>
     <string name="tasks_running_group">运行中</string>

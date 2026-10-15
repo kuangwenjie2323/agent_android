@@ -17,6 +17,8 @@ data class ClientError(val message: String, val code: String? = null, val retrya
 class ApiException(val status: Int, val problem: ClientError, val directSendRejected: Boolean = false) : Exception(problem.message)
 class StreamProtocolException(message: String) : Exception(message)
 
+const val TOO_LARGE_MESSAGE = "This message is too large to send. Send fewer or smaller pictures or files."
+
 fun parseApiError(status: Int, body: String): ClientError {
     val json = runCatching { wireJson.parseToJsonElement(body) as? JsonObject }.getOrNull()
     val code = json?.string("code") ?: json?.obj("error")?.string("code")
@@ -26,6 +28,7 @@ fun parseApiError(status: Int, body: String): ClientError {
             "This server and app use incompatible protocol versions. Update the app or check the server URL."
         status == 401 -> "Your session has ended. Sign in again in Settings."
         status == 403 -> "This account does not have access to this request."
+        status == 413 -> TOO_LARGE_MESSAGE
         else -> json?.string("message") ?: json?.obj("error")?.string("message") ?: json?.string("error") ?: "The server returned HTTP $status."
     }
     return ClientError(message, code, json?.boolean("retryable"))

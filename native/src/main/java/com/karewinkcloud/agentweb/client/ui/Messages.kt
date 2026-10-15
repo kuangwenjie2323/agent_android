@@ -122,13 +122,9 @@ fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String?
             } else {
                 (modelLabel ?: message.model)?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 SelectionContainer { BlockContent(message.blocks, live, onAnswer) }
-                // The timeline already shows a running step with its own spinner and time; the line below is
-                // for the moments between steps (waiting for the model, writing, reconnecting).
-                val stepRunning = message.blocks.lastOrNull().let { last ->
-                    (last is ChatBlock.Tool && last.status == StepStatus.RUNNING && !last.name.endsWith("ask_user")) ||
-                        (last is ChatBlock.Thought && last.status == StepStatus.RUNNING)
-                }
-                if (turn != null && !turn.done && !stepRunning) WorkingIndicator(turn, connection)
+                // One status line under the turn for as long as it runs, like Claude Code's spinner line.
+                // Hiding it while a step ran made it pop in and out between steps, and the page jumped.
+                if (turn != null && !turn.done) WorkingIndicator(turn, connection)
                 else if (!live || turn?.done == true) TurnFooter(message)
                 if (!live) Row(verticalAlignment = Alignment.CenterVertically) {
                     if (message.text.isNotBlank()) ActionIcon(if (copied) R.drawable.aw_check else R.drawable.aw_copy,

@@ -538,6 +538,7 @@
     <string name="task_output_gone">The server no longer has this output</string>
     <string name="task_output_failed">Couldn’t read the output just now</string>
     <string name="task_output_truncated">Showing the latest part</string>
+    <string name="error_send_too_large">This message is too large to send. Send fewer or smaller pictures or files.</string>
     <string name="task_not_running">This background task has already ended.</string>
     <string name="tasks_title">Background tasks</string>
     <string name="tasks_running_group">Running</string>

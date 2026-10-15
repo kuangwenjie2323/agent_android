@@ -1,7 +1,10 @@
 package com.karewinkcloud.agentweb.client.ui
 
 import android.animation.ValueAnimator
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -20,6 +23,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -59,7 +64,8 @@ internal fun WorkSection(steps: List<ChatBlock>, live: Boolean, current: Boolean
         while (ticking) { value = System.nanoTime() / 1_000_000; delay(1000) }
     }
     val state = tr(if (open) S.expanded else S.collapsed)
-    Column(Modifier.fillMaxWidth()) {
+    // Steps arrive, finish and fold away while the answer streams below: sizes change smoothly, never in jumps.
+    Column(Modifier.fillMaxWidth().animateContentSize(spring(stiffness = Spring.StiffnessMediumLow))) {
         if (steps.size == 1 && !current) {
             // A lone step reads as itself rather than as "1 step".
             StepItem(steps[0], live, now, last = true, rail = false, key = key)
@@ -259,9 +265,7 @@ private fun StepItem(step: ChatBlock, live: Boolean, now: Long, last: Boolean, r
                     // The step returned at once; what it started runs on: say how it is doing.
                     if (task != null) Box(Modifier.padding(top = 2.dp)) { TaskStatusLine(task, live, now) }
                     // While it thinks, its latest thought shows; once done, "Thought for 9 s" is enough (tap to read).
-                    if (thought != null && running && !open && thought.content.isNotBlank()) Text(thought.content.trim().lines().takeLast(2).joinToString(" "),
-                        maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (thought != null && running && !open) ThoughtTicker(thought.content)
                 }
                 val added = diffs.sumOf { it.added }; val removed = diffs.sumOf { it.removed }
                 // An open diff carries its own counts in its header.
@@ -281,6 +285,21 @@ private fun StepItem(step: ChatBlock, live: Boolean, now: Long, last: Boolean, r
                 }
             }
         }
+    }
+}
+
+/**
+ * The newest two lines of a thought in progress, like a ticker: a fixed height whatever the text does
+ * (a preview that grew and shrank by a line made the whole page jump), newest line at the bottom.
+ */
+@Composable
+private fun ThoughtTicker(content: String) {
+    val style = MaterialTheme.typography.bodySmall
+    val height = with(LocalDensity.current) { style.lineHeight.toDp() } * 2
+    val tail = remember(content) { content.trim().replace(Regex("\\s+"), " ").takeLast(400) }
+    Box(Modifier.fillMaxWidth().height(height).clipToBounds(), contentAlignment = Alignment.BottomStart) {
+        Text(tail, Modifier.wrapContentHeight(Alignment.Bottom, unbounded = true), style = style,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

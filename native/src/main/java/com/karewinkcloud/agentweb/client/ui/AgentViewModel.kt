@@ -26,6 +26,8 @@ data class ChatState(
     val pendingQueue: QueueRequest? = null, val queueUncertain: Boolean = false,
     val liveModel: String? = null, val beforeSendId: Long = 0, val revealing: Boolean = false,
     val attachments: List<Attachment> = emptyList(), val attachmentLoading: Boolean = false,
+    /** Counts the user's sends (message, mid-turn message, queued one): each brings the list to the newest. */
+    val sends: Int = 0,
 ) {
     val running get() = conversation.running || live?.done == false
     val controlId get() = live?.runId?.takeIf(String::isNotBlank) ?: conversation.controlId
@@ -715,7 +717,7 @@ class AgentViewModel(
         drafts[request.conversationId] = ""
         attachmentDrafts.remove(request.conversationId)
         editChat(owner) { it.copy(draft = "", attachments = emptyList(), error = null, revealing = false, live = initial,
-            liveModel = request.choice.model, beforeSendId = it.messages.mapNotNull { message -> message.id.toLongOrNull() }.maxOrNull() ?: 0,
+            sends = it.sends + 1, liveModel = request.choice.model, beforeSendId = it.messages.mapNotNull { message -> message.id.toLongOrNull() }.maxOrNull() ?: 0,
             connection = Connection.CONNECTING, messages = it.messages + ChatMessage("pending-${request.controlId}", "user",
                 listOf(ChatBlock.Text(request.text)) + if (request.attachments.isNotEmpty()) listOf(ChatBlock.Media(request.attachments.map(Attachment::media))) else emptyList())) }
         sessionJob = viewModelScope.launch {
@@ -975,7 +977,7 @@ class AgentViewModel(
         val source = repository
         val text = chat.draft
         val attachments = chat.attachments
-        editChat(owner) { it.copy(controlBusy = true, error = null) }
+        editChat(owner) { it.copy(controlBusy = true, error = null, sends = it.sends + 1) }
         viewModelScope.launch {
             val steered = try { source.steer(chat.conversation.id, control, text, attachments) }
                 catch (e: Exception) { editChat(owner) { it.copy(controlBusy = false, error = problem(e)) }; return@launch }
@@ -996,7 +998,7 @@ class AgentViewModel(
         val owner = generation
         val source = repository
         unresolvedQueues[request.conversationId] = request
-        editChat(owner) { it.copy(pendingQueue = request, controlBusy = true, queueUncertain = false, error = null) }
+        editChat(owner) { it.copy(pendingQueue = request, controlBusy = true, queueUncertain = false, error = null, sends = it.sends + 1) }
         viewModelScope.launch {
             try {
                 source.queue(request)

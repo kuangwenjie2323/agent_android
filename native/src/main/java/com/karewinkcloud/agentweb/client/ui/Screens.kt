@@ -11,6 +11,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -303,13 +304,19 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
         key(chat.conversation.id) {
             val list = rememberLazyListState()
             var followTail by remember { mutableStateOf(true) }
-            var automaticScroll by remember { mutableStateOf(false) }
             // Selected text clears like anywhere on Android: a tap elsewhere or a scroll ends it (selection
             // lives while its container is focused; the handles would otherwise stay behind when the list moves).
             val focus = LocalFocusManager.current
+            // Only the user's own drag stops following the newest text. Watching "a scroll is in progress"
+            // also caught the list's own jumps to the end (seen a moment late), which left a streaming
+            // answer running on below the screen.
+            LaunchedEffect(list) {
+                list.interactionSource.interactions.collect { interaction ->
+                    if (interaction is DragInteraction.Start) { followTail = false; focus.clearFocus(force = true) }
+                }
+            }
             LaunchedEffect(list) {
                 snapshotFlow { list.isScrollInProgress to list.canScrollForward }.distinctUntilChanged().collect { (scrolling, canForward) ->
-                    if (scrolling && !automaticScroll) { followTail = false; focus.clearFocus(force = true) }
                     if (!scrolling && !canForward) followTail = true
                 }
             }
@@ -318,13 +325,10 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
                     Triple(info.totalItemsCount, info.visibleItemsInfo.lastOrNull()?.size, info.viewportEndOffset)
                 } }.distinctUntilChanged().collect {
                     if (followTail && !chat.loading) {
-                        automaticScroll = true
-                        try {
-                            val total = list.layoutInfo.totalItemsCount
-                            // One clamped jump to the very end. Scrolling to the item's top and then
-                            // down by its height showed an intermediate frame on every growth (jitter).
-                            if (total > 0) list.scrollToItem(total - 1, Int.MAX_VALUE)
-                        } finally { automaticScroll = false }
+                        val total = list.layoutInfo.totalItemsCount
+                        // One clamped jump to the very end. Scrolling to the item's top and then
+                        // down by its height showed an intermediate frame on every growth (jitter).
+                        if (total > 0) list.scrollToItem(total - 1, Int.MAX_VALUE)
                     }
                 }
             }
@@ -358,10 +362,11 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
             if (!followTail) TextButton({ followTail = true }, Modifier.align(Alignment.CenterHorizontally).heightIn(min = 48.dp)) {
                 AppIcon(R.drawable.aw_down); Text(tr(S.latest_messages))
             }
+            // Sending (a message, a mid-turn message, a queued one) shows the newest, like any messenger.
+            LaunchedEffect(chat.sends) { if (chat.sends > 0) followTail = true }
             LaunchedEffect(followTail) {
                 if (followTail && list.layoutInfo.totalItemsCount > 0) {
-                    automaticScroll = true
-                    try { list.scrollToItem(list.layoutInfo.totalItemsCount - 1, Int.MAX_VALUE) } finally { automaticScroll = false }
+                    list.scrollToItem(list.layoutInfo.totalItemsCount - 1, Int.MAX_VALUE)
                 }
             }
         }
@@ -434,9 +439,9 @@ private fun Composer(chat: ChatState, state: ClientState, vm: AgentViewModel, ma
             Text(tr(S.queue_paused), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
             TextButton(vm::resumeQueue, enabled = !chat.running && !chat.controlBusy && chat.queued.isNotEmpty(), modifier = Modifier.heightIn(min = 48.dp)) { Text(tr(S.resume_queue)) }
         }
-        if (chat.connection in listOf(Connection.CONNECTING, Connection.RECONNECTING) || chat.stopRequested) StatusNotice(tr(when {
-            chat.stopRequested -> S.stop_requested; chat.connection == Connection.CONNECTING -> S.connecting; else -> S.reconnecting
-        }), busy = true)
+        // Connecting shows in the turn's own status line; a notice here made the box grow and shrink at every send.
+        if (chat.connection == Connection.RECONNECTING || chat.stopRequested) StatusNotice(tr(
+            if (chat.stopRequested) S.stop_requested else S.reconnecting), busy = true)
         if (chat.messages.isEmpty() && !chat.running && !chat.loading) ComposerChip(chat.conversation.project ?: tr(S.default_project),
             { projectsOpen = true }, Modifier.widthIn(max = 280.dp))
         if (state.creating) LoadingState(tr(S.loading))
