@@ -33,6 +33,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.Lifecycle
+import kotlinx.coroutines.delay
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.karewinkcloud.agentweb.client.R
@@ -170,6 +172,15 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
     var menu by remember { mutableStateOf(false) }
     val visibleIds by remember { derivedStateOf { list.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String } } }
     LaunchedEffect(visibleIds, state.conversations) { vm.loadPreviews(visibleIds) }
+    val seen by vm.seen.collectAsStateWithLifecycle()
+    // The list saved on the phone can be stale: only a fresh one sets what counts as read.
+    LaunchedEffect(state.conversations, state.refreshing) { if (!state.refreshing) vm.adoptSeen(state.conversations) }
+    // While a chat runs or waits on the user, keep the statuses current (only while the app is on screen).
+    val busy = state.conversations.any { it.running || it.waitingInput }
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(busy, lifecycle) {
+        if (busy) lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { delay(5_000); vm.refreshList() } }
+    }
     // Rows that arrive above the first visible one (the fresh list after the cached one, a chat that just
     // became the newest) would sit hidden above it, since the list keeps that row in place. Near the top,
     // show the newest instead.
@@ -219,7 +230,8 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
                         ConversationGroup.TODAY -> S.today; ConversationGroup.YESTERDAY -> S.yesterday; else -> S.older
                     })) }
                     itemsIndexed(section.conversations, key = { _, it -> it.id }) { index, conversation ->
-                        ConversationRow(conversation, state.agents, rowPosition(index, section.conversations.size)) { vm.open(conversation) }
+                        ConversationRow(conversation, state.agents, rowPosition(index, section.conversations.size),
+                            unread = conversation.unread(seen[conversation.id])) { vm.open(conversation) }
                     }
                 }
             }
@@ -228,7 +240,8 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
 }
 
 @Composable
-internal fun ConversationRow(conversation: Conversation, agents: List<Agent>, position: RowPosition = RowPosition.ONLY, onOpen: () -> Unit) {
+internal fun ConversationRow(conversation: Conversation, agents: List<Agent>, position: RowPosition = RowPosition.ONLY,
+    unread: Boolean = false, onOpen: () -> Unit) {
     val model = agents.find { it.id == conversation.choice.agent }?.label(conversation.choice.model)
         ?: conversation.choice.model.ifBlank { tr(S.assistant) }
     val preview = "${compactModelLabel(model)}: ${plainPreview(conversation.preview).ifBlank { if (conversation.messageCount == null) "…" else tr(S.unused_chat) }}"
@@ -236,11 +249,8 @@ internal fun ConversationRow(conversation: Conversation, agents: List<Agent>, po
         extra = conversation.project?.takeIf { it.isNotBlank() }?.let { project -> {
             Text(project, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
         } },
-        trailing = {
-            if (conversation.running) Text("● ${tr(S.running)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-            else if (conversation.updatedAt > 0) Text(conversationTime(conversation.updatedAt), style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }, onClick = onOpen)
+        trailing = { ConversationStatus(conversation, unread, conversation.updatedAt.takeIf { it > 0 }?.let { conversationTime(it) }) },
+        emphasized = unread, onClick = onOpen)
 }
 
 /** "Model · effort · permission", listing only non-default settings so the chip stays short. */
@@ -273,8 +283,17 @@ internal fun conversationTime(seconds: Long, today: java.time.LocalDate = java.t
 private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, availableHeight: Dp, onModels: () -> Unit) {
     val chat = state.chat ?: return
     var overflow by remember { mutableStateOf(false) }
+    // From Claude's desktop app: a list to jump between the questions of a long chat, and side questions
+    // that neither steer nor interrupt the agent.
+    var outline by remember(chat.conversation.id) { mutableStateOf(false) }
+    var sideChat by remember(chat.conversation.id) { mutableStateOf(false) }
+    var jumpTo by remember(chat.conversation.id) { mutableStateOf<String?>(null) }
+    if (outline) OutlineSheet(chat.messages, chat.nextCursor != null, vm::loadOlder, { id -> outline = false; jumpTo = id }) { outline = false }
+    if (sideChat) SideChatSheet(chat.side, vm::askSide, { failed -> vm.dropSide(failed); vm.askSide(failed.question) }) { sideChat = false }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.weight(1f)) { Toolbar(conversationTitle(chat.conversation), chat.conversation.project ?: tr(S.default_project), vm::back) }
+        if (!chat.conversation.nativeControl) ActionIcon(R.drawable.aw_side_chat, tr(S.side_title)) { sideChat = true }
+        if (chat.messages.any { it.role == "user" }) ActionIcon(R.drawable.aw_outline, tr(S.outline_title)) { outline = true }
         Box {
             ActionIcon(R.drawable.aw_more, tr(S.more)) { overflow = true }
             DropdownMenu(overflow, { overflow = false }) {
@@ -364,6 +383,16 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
             }
             // Sending (a message, a mid-turn message, a queued one) shows the newest, like any messenger.
             LaunchedEffect(chat.sends) { if (chat.sends > 0) followTail = true }
+            // A question picked in the outline: its message at the top of the screen.
+            LaunchedEffect(jumpTo) {
+                val target = jumpTo ?: return@LaunchedEffect
+                val index = chat.messages.indexOfFirst { it.id == target }
+                if (index >= 0) {
+                    followTail = false
+                    list.scrollToItem(index + (if (chat.loading) 1 else 0) + (if (chat.nextCursor != null) 1 else 0))
+                }
+                jumpTo = null
+            }
             LaunchedEffect(followTail) {
                 if (followTail && list.layoutInfo.totalItemsCount > 0) {
                     list.scrollToItem(list.layoutInfo.totalItemsCount - 1, Int.MAX_VALUE)

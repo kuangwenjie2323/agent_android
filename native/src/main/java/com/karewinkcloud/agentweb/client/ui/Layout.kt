@@ -73,7 +73,7 @@ internal fun Avatar(text: String, accent: Boolean = false, tint: androidx.compos
 @Composable
 internal fun ListRow(title: String, subtitle: String? = null, position: RowPosition = RowPosition.ONLY, enabled: Boolean = true,
     titleLines: Int = 1, leading: (@Composable () -> Unit)? = null, trailing: (@Composable () -> Unit)? = null,
-    extra: (@Composable () -> Unit)? = null, grouped: Boolean = false, onClick: () -> Unit) {
+    extra: (@Composable () -> Unit)? = null, grouped: Boolean = false, emphasized: Boolean = false, onClick: () -> Unit) {
     // Plain rows (Apple Music library lists) by default; inset grouped cards for settings.
     val radius = if (grouped) 12.dp else 0.dp
     val top = if (position == RowPosition.ONLY || position == RowPosition.FIRST) radius else 0.dp
@@ -90,6 +90,7 @@ internal fun ListRow(title: String, subtitle: String? = null, position: RowPosit
                 leading?.invoke()
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(title, maxLines = titleLines, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = if (emphasized) androidx.compose.ui.text.font.FontWeight.SemiBold else null,
                         color = MaterialTheme.colorScheme.onSurface)
                     if (!subtitle.isNullOrBlank()) Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -66,6 +66,9 @@ interface AgentRepository {
     suspend fun taskOutput(conversationId: String, taskId: String): TaskOutput? = null
     /** Stops one background task of the running turn; false when it no longer runs. */
     suspend fun stopTask(conversationId: String, controlId: String, taskId: String): Boolean = false
+    /** A side question about the chat: answered from its transcript, never added to it or sent to its agent. */
+    suspend fun sideQuestion(conversationId: String, question: String, history: List<SideQuestion> = emptyList()): String =
+        throw ApiException(404, ClientError("Side questions are not available on this server.", "side_unavailable", false))
     suspend fun resume(conversationId: String, headId: String): JsonObject
     suspend fun claudeSessions(cursor: String? = null, project: String? = null): ClaudeSessionPage
     suspend fun claudeHistory(id: String, cursor: String? = null): ClaudeSessionHistory
@@ -354,6 +357,12 @@ class HttpAgentRepository(
     } catch (e: ApiException) {
         if (e.status == 409 || e.status == 404) false else throw e
     }
+    override suspend fun sideQuestion(conversationId: String, question: String, history: List<SideQuestion>): String =
+        json("/api/chat/side", buildJsonObject {
+            put("conversationId", conversationId); put("question", question)
+            putJsonArray("history") { history.filter { it.answer != null }.forEach { item -> addJsonObject {
+                put("question", item.question); put("answer", item.answer.orEmpty()) } } }
+        }, timeoutSeconds = 120).string("answer").orEmpty()
     override suspend fun resume(conversationId: String, headId: String) = json("/api/chat/queue/resume", buildJsonObject {
         put("conversationId", conversationId); put("expectedHeadItemId", headId)
     })

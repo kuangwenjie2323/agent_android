@@ -539,6 +539,17 @@
     <string name="task_output_failed">Couldn’t read the output just now</string>
     <string name="task_output_truncated">Showing the latest part</string>
     <string name="error_send_too_large">This message is too large to send. Send fewer or smaller pictures or files.</string>
+    <string name="outline_title">Questions in this chat</string>
+    <string name="outline_load_older">Load earlier messages</string>
+    <string name="outline_empty">You have not asked anything here yet.</string>
+    <string name="outline_picture">(picture)</string>
+    <string name="side_title">Side question</string>
+    <string name="side_hint">Ask about this chat without interrupting it: the agent keeps working and never sees this, and nothing here is added to the chat.</string>
+    <string name="side_placeholder">Ask about this chat…</string>
+    <string name="side_thinking">Thinking…</string>
+    <string name="side_failed">Could not answer that just now.</string>
+    <string name="waiting_for_you">Waiting for you</string>
+    <string name="error_offline">You are offline. The message was not sent; it is still in the box.</string>
     <string name="task_not_running">This background task has already ended.</string>
     <string name="tasks_title">Background tasks</string>
     <string name="tasks_running_group">Running</string>

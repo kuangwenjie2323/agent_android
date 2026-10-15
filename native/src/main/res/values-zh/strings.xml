@@ -535,6 +535,17 @@
     <string name="task_output_failed">暂时读不到输出</string>
     <string name="task_output_truncated">只显示最新的一部分</string>
     <string name="error_send_too_large">这条消息太大，发不出去：图片或文件超过了上限。少发几张，或换小一点的图片再试。</string>
+    <string name="outline_title">本对话的提问</string>
+    <string name="outline_load_older">加载更早的消息</string>
+    <string name="outline_empty">这里还没有提过问题。</string>
+    <string name="outline_picture">（图片）</string>
+    <string name="side_title">旁问</string>
+    <string name="side_hint">顺手问点关于这个对话的事，不会打断它：模型照常干活，也看不到这里，问答不会写进对话。</string>
+    <string name="side_placeholder">问点关于这个对话的事…</string>
+    <string name="side_thinking">正在想…</string>
+    <string name="side_failed">暂时没答上来。</string>
+    <string name="waiting_for_you">等你回答</string>
+    <string name="error_offline">现在没有网络，消息没有发出，还留在输入框里。</string>
     <string name="task_not_running">这个后台任务已经结束了。</string>
     <string name="tasks_title">后台任务</string>
     <string name="tasks_running_group">运行中</string>

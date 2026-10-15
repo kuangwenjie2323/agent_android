@@ -60,6 +60,8 @@ data class Conversation(
     val preview: String = "",
     val projectId: String? = null,
     val lineage: ConversationLineage? = null,
+    /** Its running turn waits on the user's pick (an ask_user question). */
+    val waitingInput: Boolean = false,
 ) {
     val running get() = active || starting
     /** The list-API shape of this row (without live run state), for the on-device list cache. */
@@ -87,6 +89,7 @@ data class Conversation(
             j.long("updated_at") ?: j.long("created_at") ?: 0,
             j.long("message_count")?.toInt(), j.string("last_message_preview").orEmpty(),
             j.obj("project")?.string("id"), ConversationLineage.from(j.obj("lineage")),
+            waitingInput = j.boolean("waiting_input") == true,
         )
     }
 }
@@ -114,6 +117,9 @@ data class BackgroundTask(val id: String, val status: String = RUNNING, val desc
         }
     }
 }
+
+/** One side question and its answer (null while it is being answered; [failed] when it could not be). */
+data class SideQuestion(val question: String, val answer: String? = null, val failed: Boolean = false)
 
 /** The last part of a background task's output, as a terminal would show it. */
 data class TaskOutput(val text: String, val truncated: Boolean = false, val size: Long = 0)

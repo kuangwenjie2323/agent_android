@@ -17,6 +17,7 @@ data class ClientError(val message: String, val code: String? = null, val retrya
 class ApiException(val status: Int, val problem: ClientError, val directSendRejected: Boolean = false) : Exception(problem.message)
 class StreamProtocolException(message: String) : Exception(message)
 
+const val OFFLINE_MESSAGE = "You are offline. The message was not sent; it is still in the box."
 const val TOO_LARGE_MESSAGE = "This message is too large to send. Send fewer or smaller pictures or files."
 
 fun parseApiError(status: Int, body: String): ClientError {

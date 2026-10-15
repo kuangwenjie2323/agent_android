@@ -29,6 +29,36 @@ class AgentViewModelTest {
         try { block() } finally { store.clear() }
     }
 
+    @Test fun aSideQuestionIsAnsweredBesideTheChatNotInIt() = modelTest {
+        runCurrent()
+        vm.open(conversation("one")); runCurrent()
+        vm.askSide("它在干嘛？")
+        assertEquals(listOf(SideQuestion("它在干嘛？")), vm.state.value.chat!!.side)
+        runCurrent()
+        assertEquals(listOf(SideQuestion("它在干嘛？", "answer: 它在干嘛？")), vm.state.value.chat!!.side)
+        assertEquals(0, repo.sendCalls)  // nothing went into the chat or to its agent
+        repo.side = { _, _, history -> "seen ${history.size} earlier" }
+        vm.askSide("还有呢")
+        runCurrent()
+        assertEquals("seen 1 earlier", vm.state.value.chat!!.side.last().answer)
+        vm.back(); runCurrent(); vm.open(conversation("one")); runCurrent()
+        assertEquals(2, vm.state.value.chat!!.side.size)  // kept while the app runs
+        repo.side = { _, _, _ -> throw java.io.IOException("down") }
+        vm.askSide("第三个"); runCurrent()
+        assertTrue(vm.state.value.chat!!.side.last().failed)
+    }
+
+    @Test fun anOfflineSendFailsAtOnceAndKeepsTheDraft() = modelTest {
+        val offline = AgentViewModel(repo, ModelChoice("a", "model"), online = { false }) { }
+        store.put("offline", offline)
+        runCurrent()
+        offline.open(conversation("one")); runCurrent()
+        offline.draft("hello"); offline.send(); runCurrent()
+        assertEquals("offline", offline.state.value.chat!!.error?.code)
+        assertEquals("hello", offline.state.value.chat!!.draft)
+        assertEquals(0, repo.sendCalls)
+    }
+
     @Test fun staleDetailCannotReplaceNewSelection() = modelTest {
         runCurrent()
         val delayed = CompletableDeferred<ConversationDetail>()
@@ -694,6 +724,9 @@ class AgentViewModelTest {
         override suspend fun preview(id: String): ConversationDetail { previewCalls += id; return detail(id, null) }
         override suspend fun createConversation(choice: ModelChoice): Conversation { createCalls++; return create() }
         override suspend fun detail(id: String, cursor: String?) = getDetail(id, cursor)
+        var side: suspend (String, String, List<SideQuestion>) -> String = { _, question, _ -> "answer: $question" }
+        override suspend fun sideQuestion(conversationId: String, question: String, history: List<SideQuestion>) =
+            side(conversationId, question, history)
         override fun follow(conversationId: String, runId: String?, send: SendRequest?, previous: TurnState?): Flow<TurnSnapshot> {
             if (send != null) sendCalls++
             followCalls += Triple(conversationId, runId, send)
