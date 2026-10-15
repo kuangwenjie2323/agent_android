@@ -546,4 +546,30 @@
     <string name="turn_background_one">等待后台任务：%1$s</string>
     <plurals name="turn_background"><item quantity="other">等待 %1$d 个后台任务</item></plurals>
     <string name="turn_cached">缓存 %1$d%%</string>
+    <string name="support_group">诊断与更新</string>
+    <string name="upload_log">上传诊断日志</string>
+    <string name="upload_log_hint">日志只存在这台手机上，点这里才会发送</string>
+    <string name="upload_log_last">上次上传：%1$s</string>
+    <string name="upload_log_explain">日志只记录连接、耗时、错误、卡顿和闪退，不含聊天内容、附件和登录信息。它会发到你的 AgentWeb 服务器，上传后把编号告诉 Claude 即可。</string>
+    <string name="upload_log_note">刚才发生了什么（可选）</string>
+    <string name="upload_log_send">上传</string>
+    <string name="upload_log_sending">正在上传 %1$d / %2$d…</string>
+    <string name="upload_log_done">已上传，编号：%1$s</string>
+    <string name="check_update">检查更新</string>
+    <string name="update_current">当前版本：%1$s</string>
+    <string name="update_checking">正在检查…</string>
+    <string name="update_latest">已是最新版本</string>
+    <string name="update_available">有新版本（%1$s 构建）</string>
+    <string name="update_available_detail">新版本 %1$s，%2$s 构建，%3$s MB。</string>
+    <string name="update_download">下载并安装</string>
+    <string name="update_downloading">正在下载 %1$s / %2$s MB…</string>
+    <string name="update_install">安装</string>
+    <string name="update_check_again">重新检查</string>
+    <string name="update_permission">请在刚打开的页面允许 AgentWeb 安装应用，然后返回点「安装」。</string>
+    <string name="support_not_available">服务器还没开启这个功能，需要重启一次 AgentWeb。</string>
+    <string name="support_sign_in">请先登录。</string>
+    <string name="support_network">连不上服务器，检查网络后再试。</string>
+    <string name="support_server">服务器没能完成，请稍后再试。</string>
+    <string name="support_mismatch">下载的文件不完整，或已被更新的版本替换，请重新检查。</string>
+    <string name="support_no_log">日志里还没有内容。</string>
 </resources>

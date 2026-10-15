@@ -13,6 +13,15 @@ This repository contains the native `:native` module, its Gradle wrapper, the sh
 
 The client follows the protocol in [`conformance/contract/openapi-v1.yaml`](conformance/contract/openapi-v1.yaml). The included `conformance/fixtures/` are test inputs; they are not packaged into the APK.
 
+## Diagnostics and updates
+
+Settings > Diagnostics & updates offers two actions:
+
+- **Upload diagnostic log** sends the app's own log to the AgentWeb server, where the server owner can read it: requests (method, path, status, timing), stream reconnects, errors shown, crashes, why earlier processes ended, main-thread stalls, and app start timing. It never contains message text, attachments, query strings, headers, or tokens. Until uploaded, the log stays on the phone (at most 2 MB; the oldest lines are dropped first).
+- **Check for updates** offers a newer build published on the server, verifies its SHA-256, and hands it to the system installer. The first time, Android asks the user to allow the app to install apps. Android accepts the update only when it is signed with the same key as the installed app.
+
+The version code counts minutes since 2026-01-01 at build time, so every build is newer than the one before. Installing an older build over adb needs `adb install -r -d`. The server side is described in AgentWeb's `docs/APP_DIAGNOSTICS.md`.
+
 ## Build and test
 
 Install JDK 21 and Android SDK Platform 36 with Build Tools 36.1.0. Set `JAVA_HOME` and `ANDROID_HOME` to your local installations, then run from the repository root:

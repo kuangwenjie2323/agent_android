@@ -3,13 +3,34 @@ package com.karewinkcloud.agentweb.client.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.karewinkcloud.agentweb.client.BuildConfig
+import com.karewinkcloud.agentweb.client.core.ApiException
+import com.karewinkcloud.agentweb.client.core.DiagnosticLog
 import com.karewinkcloud.agentweb.client.data.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import java.io.File
+import java.io.IOException
 
 enum class SignInPhase { IDLE, PASSKEY, BROWSER, EXCHANGING, SIGNING_OUT }
 data class ServerConnection(val origin: String, val revision: Long, val signInRequired: Boolean)
+
+enum class SupportProblem { NOT_AVAILABLE, SIGN_IN, NETWORK, SERVER, MISMATCH, NO_LOG }
+
+/** Settings > Diagnostics & updates: the log upload and the update check, download and install. */
+data class SupportState(
+    val uploading: Boolean = false, val sentParts: Int = 0, val totalParts: Int = 0,
+    val uploadId: String? = null, val uploadProblem: SupportProblem? = null,
+    val checking: Boolean = false, val checked: Boolean = false, val update: AppUpdate? = null,
+    val updateProblem: SupportProblem? = null,
+    val downloading: Boolean = false, val downloadedBytes: Long = 0, val downloadBytes: Long = 0,
+    /** A verified download waiting for the system installer. */
+    val ready: File? = null,
+    /** Hand [ready] to the installer once, right after the download; later the Install button does it. */
+    val installNow: Boolean = false,
+)
 
 class SettingsViewModel(
     val store: SettingsStorage,
@@ -18,6 +39,9 @@ class SettingsViewModel(
     private val deviceName: String = "Android phone",
     private val debug: Boolean = BuildConfig.DEBUG,
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    private val support: (String) -> AppSupport = { origin -> HttpAppSupport(HttpAgentRepository(origin, store)) },
+    private val logs: () -> DiagnosticLog? = Diagnostics::flushed,
+    private val installedVersion: Int = BuildConfig.VERSION_CODE,
 ) : ViewModel() {
     private val mutable = MutableStateFlow(store.load())
     val state = mutable.asStateFlow()
@@ -192,4 +216,92 @@ class SettingsViewModel(
 
     fun accountUrl() = mutable.value.origin + "/_access/start?manage=1"
     override fun onCleared() { signInFlow.cancel() }
+
+    private val supportState = MutableStateFlow(SupportState())
+    val supportStatus = supportState.asStateFlow()
+
+    /** Sends the whole diagnostic log, with the user's [note], to the server this app uses. */
+    fun uploadLogs(note: String) {
+        if (supportState.value.uploading) return
+        val origin = state.value.origin
+        supportState.update { it.copy(uploading = true, sentParts = 0, totalParts = 0, uploadId = null, uploadProblem = null) }
+        viewModelScope.launch {
+            try {
+                val log = withContext(io) { logs() }
+                val parts = withContext(io) { log?.gzipParts(HttpAppSupport.PART_BYTES, HttpAppSupport.MAX_PARTS).orEmpty() }
+                if (parts.isEmpty()) { supportState.update { it.copy(uploading = false, uploadProblem = SupportProblem.NO_LOG) }; return@launch }
+                val meta = buildJsonObject {
+                    put("note", note.trim().take(HttpAppSupport.NOTE_CHARS))
+                    put("app", BuildConfig.VERSION_NAME); put("versionCode", installedVersion); put("build", BuildConfig.BUILD_LABEL)
+                    put("device", deviceName); put("timezone", java.util.TimeZone.getDefault().id)
+                    put("clientTime", System.currentTimeMillis()); put("logBytes", withContext(io) { log?.sizeBytes() ?: 0 })
+                }
+                supportState.update { it.copy(totalParts = parts.size) }
+                val id = withContext(io) {
+                    support(origin).uploadLogs(parts, meta) { sent, total -> supportState.update { it.copy(sentParts = sent, totalParts = total) } }
+                }
+                Diagnostics.event("support", "log uploaded", "id" to id, "parts" to parts.size)
+                supportState.update { it.copy(uploading = false, uploadId = id) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                Diagnostics.warn("support", "log upload failed", "error" to Diagnostics.describe(e))
+                supportState.update { it.copy(uploading = false, uploadProblem = supportProblem(e)) }
+            }
+        }
+    }
+
+    /** Asks the server for a newer build. A [quiet] check (opening Settings) is skipped once one succeeded and shows no error. */
+    fun checkUpdate(quiet: Boolean = false) {
+        val current = supportState.value
+        if (current.checking || current.downloading || (quiet && current.checked)) return
+        supportState.update { it.copy(checking = true, updateProblem = null) }
+        viewModelScope.launch {
+            try {
+                val update = withContext(io) { support(state.value.origin).latestUpdate() }?.takeIf { it.versionCode > installedVersion }
+                supportState.update { it.copy(checking = false, checked = true, update = update, ready = it.ready?.takeIf { update != null }) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                // A failed quiet check leaves no verdict ("latest") behind; an explicit one says why it failed.
+                supportState.update { it.copy(checking = false, checked = !quiet, updateProblem = if (quiet) null else supportProblem(e)) }
+            }
+        }
+    }
+
+    /** Downloads the offered build into [dir] (replacing older downloads) and checks it before offering install. */
+    fun downloadUpdate(dir: File) {
+        val update = supportState.value.update ?: return
+        if (supportState.value.downloading) return
+        supportState.update { it.copy(downloading = true, downloadedBytes = 0, downloadBytes = update.size, updateProblem = null, ready = null) }
+        viewModelScope.launch {
+            val file = File(dir, "agentweb-${update.versionCode}.apk")
+            try {
+                var shown = 0L
+                withContext(io) {
+                    dir.listFiles()?.forEach { it.delete() }
+                    support(state.value.origin).downloadUpdate(update, file) { done, total ->
+                        if (done - shown >= 256 * 1024 || done == total) {
+                            shown = done
+                            supportState.update { it.copy(downloadedBytes = done, downloadBytes = if (total > 0) total else it.downloadBytes) }
+                        }
+                    }
+                }
+                Diagnostics.event("support", "update downloaded", "versionCode" to update.versionCode)
+                supportState.update { it.copy(downloading = false, ready = file, installNow = true) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                Diagnostics.warn("support", "update download failed", "error" to Diagnostics.describe(e))
+                supportState.update { it.copy(downloading = false, updateProblem = supportProblem(e)) }
+            }
+        }
+    }
+
+    fun installStarted() = supportState.update { it.copy(installNow = false) }
+
+    private fun supportProblem(e: Exception) = when {
+        e is UpdateMismatchException -> SupportProblem.MISMATCH
+        e is ApiException && e.status == 401 -> SupportProblem.SIGN_IN
+        e is ApiException && e.status == 404 -> SupportProblem.NOT_AVAILABLE
+        e is IOException -> SupportProblem.NETWORK
+        else -> SupportProblem.SERVER
+    }
 }

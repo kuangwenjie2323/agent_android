@@ -550,4 +550,30 @@
     <string name="turn_background_one">Waiting for background task: %1$s</string>
     <plurals name="turn_background"><item quantity="one">Waiting for %1$d background task</item><item quantity="other">Waiting for %1$d background tasks</item></plurals>
     <string name="turn_cached">%1$d%% cached</string>
+    <string name="support_group">Diagnostics &amp; updates</string>
+    <string name="upload_log">Upload diagnostic log</string>
+    <string name="upload_log_hint">Kept on this phone until you send it</string>
+    <string name="upload_log_last">Last upload: %1$s</string>
+    <string name="upload_log_explain">The log records connections, timings, errors, freezes and crashes. It holds no message text, attachments or sign-in data. It goes to your AgentWeb server; then tell Claude the upload number.</string>
+    <string name="upload_log_note">What happened (optional)</string>
+    <string name="upload_log_send">Upload</string>
+    <string name="upload_log_sending">Uploading %1$d of %2$d…</string>
+    <string name="upload_log_done">Uploaded. Number: %1$s</string>
+    <string name="check_update">Check for updates</string>
+    <string name="update_current">Installed: %1$s</string>
+    <string name="update_checking">Checking…</string>
+    <string name="update_latest">This is the latest build.</string>
+    <string name="update_available">New build from %1$s</string>
+    <string name="update_available_detail">New build %1$s, built %2$s, %3$s MB.</string>
+    <string name="update_download">Download and install</string>
+    <string name="update_downloading">Downloading %1$s of %2$s MB…</string>
+    <string name="update_install">Install</string>
+    <string name="update_check_again">Check again</string>
+    <string name="update_permission">On the page that opened, allow AgentWeb to install apps, then come back and tap Install.</string>
+    <string name="support_not_available">The server does not offer this yet; AgentWeb needs one restart.</string>
+    <string name="support_sign_in">Sign in first.</string>
+    <string name="support_network">Could not reach the server. Check the connection and try again.</string>
+    <string name="support_server">The server could not complete this. Try again later.</string>
+    <string name="support_mismatch">The download was damaged or a newer build replaced it. Check again.</string>
+    <string name="support_no_log">There is nothing in the log yet.</string>
 </resources>

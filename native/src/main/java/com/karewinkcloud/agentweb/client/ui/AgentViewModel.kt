@@ -1042,7 +1042,7 @@ fun problem(e: Throwable): ClientError = when (e) {
     is StreamProtocolException -> ClientError(e.message ?: "Stream verification failed.", "stream_mismatch", false)
     is IOException -> ClientError("Connection interrupted. Reconnect to check server history; no work is automatically resent.", "connection_lost")
     else -> ClientError("Unable to complete this request. Check Settings and reload.")
-}
+}.also { Diagnostics.warn("ui", "error shown", "code" to it.code, "error" to Diagnostics.describe(e)) }
 
 /** Excludes per-token and per-frame content while retaining all actionable server truth. */
 internal fun screenSnapshot(state: ClientState): ClientState = state.copy(chat = state.chat?.let { chat ->

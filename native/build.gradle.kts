@@ -1,3 +1,4 @@
+import java.time.Duration
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.io.File
@@ -49,12 +50,16 @@ tasks.configureEach {
     }
 }
 
+val buildTime: LocalDateTime = LocalDateTime.now()
 val buildLabel = run {
     val commit = providers.exec { commandLine("git", "rev-parse", "--short", "HEAD"); isIgnoreExitValue = true }
         .standardOutput.asText.map { it.trim() }.getOrElse("")
-    val built = LocalDateTime.now().format(DateTimeFormatter.ofPattern("MM-dd HH:mm"))
+    val built = buildTime.format(DateTimeFormatter.ofPattern("MM-dd HH:mm"))
     listOf(commit, built).filter { it.isNotBlank() }.joinToString(" · ")
 }
+// Minutes since 2026-01-01: every build gets a higher code, so Settings > Check for updates (and Android's
+// installer) can tell a newer build from the installed one. Two builds within one minute share a code.
+val buildVersionCode = Duration.between(LocalDateTime.of(2026, 1, 1, 0, 0), buildTime).toMinutes().toInt()
 
 android {
     namespace = "com.karewinkcloud.agentweb.client"
@@ -64,7 +69,7 @@ android {
         applicationId = "com.karewinkcloud.agentweb.client"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
+        versionCode = buildVersionCode
         versionName = "0.8.0"
         // Shown in Settings so a tester can tell which build is installed.
         buildConfigField("String", "BUILD_LABEL", "\"$buildLabel\"")

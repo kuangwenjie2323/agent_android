@@ -19,6 +19,7 @@ import com.karewinkcloud.agentweb.client.core.ChatBlock
 import com.karewinkcloud.agentweb.client.core.ComfyJob
 import com.karewinkcloud.agentweb.client.core.ComfyJobPhase
 import com.karewinkcloud.agentweb.client.core.phase
+import com.karewinkcloud.agentweb.client.data.Diagnostics
 import com.karewinkcloud.agentweb.client.data.HttpAgentRepository
 import com.karewinkcloud.agentweb.client.data.HttpComfyRepository
 import com.karewinkcloud.agentweb.client.data.SettingsStore
@@ -47,10 +48,14 @@ class AgentWorkService : Service() {
         if (turns.isEmpty() && creations.isEmpty()) { stopSelf(); return START_NOT_STICKY }
         createChannels(this)
         turnsLeft = turns.size; creationsLeft = creations.size
+        Diagnostics.event("work", "following in the background", "turns" to turns.size, "creations" to creations.size)
         try {
             ServiceCompat.startForeground(this, ID_ONGOING, ongoing(),
                 if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0)
-        } catch (_: Exception) { stopSelf(); return START_NOT_STICKY }
+        } catch (e: Exception) {
+            Diagnostics.warn("work", "foreground service refused", "error" to Diagnostics.describe(e))
+            stopSelf(); return START_NOT_STICKY
+        }
         work?.cancel()
         work = scope.launch {
             val store = SettingsStore(applicationContext)
@@ -93,7 +98,10 @@ class AgentWorkService : Service() {
                     throw CancellationException("turn finished")
                 }
             }
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            if (e !is CancellationException) Diagnostics.warn("work", "turn follow failed", "conversation" to turn.conversationId,
+                "error" to Diagnostics.describe(e))
+        }
         finally { turnsLeft--; refreshOngoing() }
     }
 
@@ -153,7 +161,7 @@ class AgentWorkService : Service() {
         notify(this, question.id.hashCode(), builder.build())
     }
 
-    override fun onDestroy() { scope.cancel(); super.onDestroy() }
+    override fun onDestroy() { Diagnostics.event("work", "background follow stopped"); scope.cancel(); super.onDestroy() }
 
     data class Turn(val conversationId: String, val controlId: String, val title: String)
     data class Creation(val requestId: String, val title: String)
@@ -182,7 +190,7 @@ class AgentWorkService : Service() {
                 .putStringArrayListExtra(EXTRA_TURN_TITLES, ArrayList(turns.map { it.title }))
                 .putStringArrayListExtra(EXTRA_JOB_IDS, ArrayList(creations.map { it.requestId }))
                 .putStringArrayListExtra(EXTRA_JOB_TITLES, ArrayList(creations.map { it.title })))
-        }
+        }.onFailure { Diagnostics.warn("work", "could not start background follow", "error" to Diagnostics.describe(it)) }
 
         fun stop(context: Context) = runCatching { context.stopService(Intent(context, AgentWorkService::class.java)) }
 

@@ -86,7 +86,7 @@ class HttpAgentRepository(
             // POST /message and New Chat are deliberately never replayed by the HTTP stack.
             .retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false)
             .connectTimeout(15, TimeUnit.SECONDS).readTimeout(45, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS).build()
+            .writeTimeout(30, TimeUnit.SECONDS).addInterceptor(Diagnostics.interceptor).build()
     }
 
     private fun request(path: String, body: JsonObject? = null, lastId: String? = null): Request {
@@ -423,20 +423,28 @@ class HttpAgentRepository(
                         }
                     }
                 }
-                if (state?.done == true) return@flow
+                if (state?.done == true) {
+                    Diagnostics.event("stream", "done", "conversation" to conversationId, "lastSequence" to state?.lastSequence)
+                    return@flow
+                }
                 throw IOException("Stream ended before done.")
             } catch (e: IOException) {
                 currentCoroutineContext().ensureActive()
                 failures = (failures + 1).coerceAtMost(64)
+                Diagnostics.warn("stream", "reconnecting", "conversation" to conversationId, "failures" to failures,
+                    "lastSequence" to state?.lastSequence, "error" to Diagnostics.describe(e))
                 state?.let { emit(TurnSnapshot(it, Connection.RECONNECTING)) }
                 delay(ReconnectPolicy.delayMillis(failures, reconnectDelayMs))
             } catch (e: ApiException) {
                 if (post == null && e.problem.retryable != false && ReconnectPolicy.retryStatus(e.status)) {
                     failures = (failures + 1).coerceAtMost(64)
+                    Diagnostics.warn("stream", "reconnecting", "conversation" to conversationId, "failures" to failures,
+                        "lastSequence" to state?.lastSequence, "status" to e.status)
                     state?.let { emit(TurnSnapshot(it, Connection.RECONNECTING)) }
                     delay(ReconnectPolicy.delayMillis(failures, reconnectDelayMs))
                     continue
                 }
+                Diagnostics.warn("stream", "failed", "conversation" to conversationId, "status" to e.status, "code" to e.problem.code)
                 throw ApiException(e.status, e.problem, directSendRejected = post != null && e.status in 400..499)
             }
         }
