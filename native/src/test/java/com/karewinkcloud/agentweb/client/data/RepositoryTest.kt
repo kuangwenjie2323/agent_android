@@ -56,6 +56,25 @@ class RepositoryTest {
         assertEquals(1, server.requestCount)
     }
 
+    @Test fun aFileIsReadWithWhatTheServerSaysAboutIt() = runBlocking {
+        server.enqueue(MockResponse().addHeader("Content-Type", "text/plain; charset=utf-8").addHeader("X-AgentWeb-Protocol-Version", "1.0")
+            .addHeader("AgentWeb-File-Kind", "text").addHeader("AgentWeb-File-Path", "/w/%E6%8A%A5%E5%91%8A%20v2.md")
+            .addHeader("AgentWeb-File-Size", "4096").addHeader("AgentWeb-File-Modified", "1792244969000")
+            .addHeader("AgentWeb-File-Truncated", "1").setBody("# 结果"))
+        val file = repo.readFile("c/1", "docs/报告 v2.md")
+        val sent = next()
+        assertEquals("/api/chat/conversations/c%2F1/file", sent.requestUrl!!.encodedPath)
+        assertEquals("docs/报告 v2.md", sent.requestUrl!!.queryParameter("path"))
+        assertEquals(listOf("/w/报告 v2.md", "text", "text/plain", "# 结果"), listOf(file.path, file.kind, file.mime, file.text))
+        assertEquals(Triple(4096L, 1792244969000L, true), Triple(file.size, file.modifiedAt, file.truncated))
+        assertEquals("报告 v2.md", file.name)
+    }
+    @Test fun aRefusedFileKeepsTheServersReason() = runBlocking {
+        server.enqueue(json("""{"error":"This file may hold passwords or keys, so it is not shown here.","code":"file_private","retryable":false}""", 403))
+        try { repo.readFile("c1", "/home/me/.env"); fail("Expected refusal") }
+        catch (e: ApiException) { assertEquals(403 to "file_private", e.status to e.problem.code) }
+    }
+
     @Test fun onlyReadsToAnHttpsOriginShareAConnection() {
         assertTrue(reusesConnection("https://agent.example.com", read = true))
         assertFalse(reusesConnection("https://agent.example.com", read = false))

@@ -326,6 +326,15 @@ private fun ToolDetail(tool: ChatBlock.Tool, kind: StepKind, error: Boolean, tas
             Text((if (kind == StepKind.COMMAND) "$ " else "") + command, fontFamily = FontFamily.Monospace,
                 fontSize = 12.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurface)
             if (task == null) tool.result?.trim()?.takeIf { it.isNotEmpty() }?.let { result -> OutputPreview(result, error) }
+            // The file a step read opens in full, at the part it read.
+            val openFile = LocalOpenFile.current
+            val file = remember(tool) { stepFileRef(tool) }
+            if (openFile != null && file != null) TextButton({ openFile(file) }, Modifier.heightIn(min = 40.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp)) {
+                Icon(androidx.compose.ui.res.painterResource(R.drawable.aw_file), null, Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(tr(S.step_open_file), style = MaterialTheme.typography.labelLarge)
+            }
         }
     }
     if (task != null && LocalTaskControls.current != null) TaskOutputView(task.id, task.running && live)
@@ -365,12 +374,18 @@ internal fun FileDiffView(diff: FileDiff) {
     val numbered = diff.rows.any { it.oldLine != null || it.newLine != null }
     val width = (diff.rows.maxOfOrNull { maxOf(it.oldLine ?: 0, it.newLine ?: 0) } ?: 0).toString().length.coerceAtLeast(2)
     val mono = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 18.sp)
+    val openFile = LocalOpenFile.current?.takeIf { diff.path.isNotBlank() && diff.rows.isNotEmpty() }
     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(12.dp)) {
         Column(Modifier.fillMaxWidth()) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            // The file's name opens the whole file, at the first line this change added when the diff says where.
+            Row(Modifier.fillMaxWidth().then(if (openFile != null) Modifier.clickable {
+                    openFile(FileRef(diff.path, diff.rows.firstOrNull { it.kind == DiffKind.ADD }?.newLine?.takeIf { numbered }))
+                } else Modifier).heightIn(min = 40.dp).padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically) {
                 Text(fileName(diff.path).ifBlank { tr(S.step_edit) }, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.labelLarge, fontFamily = FontFamily.Monospace)
                 DiffStats(diff.added, diff.removed)
+                if (openFile != null) { Spacer(Modifier.width(8.dp)); OpenFileLabel() }
             }
             if (diff.rows.isEmpty()) {
                 Text(tr(S.step_file_removed), Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp),

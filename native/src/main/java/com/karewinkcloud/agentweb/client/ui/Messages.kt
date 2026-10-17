@@ -182,17 +182,27 @@ private fun TurnBlock(block: ChatBlock, streaming: Boolean, onAnswer: ((String, 
         is ChatBlock.Media -> block.items.forEach { ChatMediaCard(it) }
         is ChatBlock.Question -> QuestionCard(block, onAnswer)
         is ChatBlock.TaskNotice -> TaskNoticeRow(block)
-        is ChatBlock.Steer -> grokBotMessage(block.content)?.let { GrokBotCard(it) } ?: Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = MaterialTheme.shapes.large,
-                modifier = Modifier.widthIn(max = 300.dp)) {
-                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(tr(S.steer_label), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (block.items.isNotEmpty()) UserAttachments(block.items)
-                    if (block.content.isNotBlank()) Text(block.content, style = MaterialTheme.typography.bodyMedium)
-                }
+        is ChatBlock.Steer -> grokBotMessage(block.content)?.let { GrokBotCard(it) } ?: SteerMessage(block)
+        else -> Unit
+    }
+}
+
+/**
+ * What the user sent while the turn ran, drawn like their other messages: pictures on their own, words in
+ * the bubble, with a small note above. (Inside one grey card, a picture alone left the card's width empty.)
+ */
+@Composable
+private fun SteerMessage(block: ChatBlock.Steer) {
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(tr(S.steer_label), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (block.items.isNotEmpty()) UserAttachments(block.items)
+        if (block.content.isNotBlank()) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Spacer(Modifier.weight(.15f))
+            Surface(modifier = Modifier.weight(.85f, fill = false).widthIn(max = 560.dp), color = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurface, shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)) {
+                Text(block.content, Modifier.padding(horizontal = 16.dp, vertical = 12.dp), style = MaterialTheme.typography.bodyLarge)
             }
         }
-        else -> Unit
     }
 }
 

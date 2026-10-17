@@ -288,119 +288,140 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
     var outline by remember(chat.conversation.id) { mutableStateOf(false) }
     var sideChat by remember(chat.conversation.id) { mutableStateOf(false) }
     var jumpTo by remember(chat.conversation.id) { mutableStateOf<String?>(null) }
-    if (outline) OutlineSheet(chat.messages, chat.nextCursor != null, vm::loadOlder, { id -> outline = false; jumpTo = id }) { outline = false }
-    if (sideChat) SideChatSheet(chat.side, vm::askSide, { failed -> vm.dropSide(failed); vm.askSide(failed.question) }) { sideChat = false }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.weight(1f)) { Toolbar(conversationTitle(chat.conversation), chat.conversation.project ?: tr(S.default_project), vm::back) }
-        if (!chat.conversation.nativeControl) ActionIcon(R.drawable.aw_side_chat, tr(S.side_title)) { sideChat = true }
-        if (chat.messages.any { it.role == "user" }) ActionIcon(R.drawable.aw_outline, tr(S.outline_title)) { outline = true }
-        Box {
-            ActionIcon(R.drawable.aw_more, tr(S.more)) { overflow = true }
-            DropdownMenu(overflow, { overflow = false }) {
-                DropdownMenuItem(text = { Text(tr(S.model_settings)) }, onClick = { overflow = false; onModels() })
-                DropdownMenuItem(text = { Text(tr(S.reconnect)) }, onClick = { overflow = false; vm.reload() })
-            }
-        }
-    }
-    // Background tasks: steps, notices and the pill open one list, where output is read and tasks stopped.
-    var taskSheet by remember(chat.conversation.id) { mutableStateOf<String?>(null) }
-    val taskControls = remember(vm, chat.conversation.id) { TaskControls(vm::taskOutput, vm::stopTask) { id -> taskSheet = id ?: "" } }
-    CompositionLocalProvider(LocalTaskControls provides taskControls) {
-        taskSheet?.let { request -> TaskSheetHost(vm, chat, request) { taskSheet = null } }
-        chat.browserError?.let { error ->
-            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                ErrorBlock(error, vm::dismissBrowserError, tr(S.close))
-            }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        chat.conversation.lineage?.let { lineage ->
-            val parentTitle = lineage.parentTitle?.takeIf { it.isNotBlank() }
-                ?: state.conversations.find { it.id == lineage.parentConversationId }?.let { conversationTitle(it) }
-                ?: tr(S.variant_parent)
-            AssistChip(onClick = vm::openParent, label = { Text(tr(S.variant_of, parentTitle), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                leadingIcon = { AppIcon(R.drawable.aw_back) }, modifier = Modifier.padding(horizontal = 16.dp).heightIn(min = 48.dp))
-        }
-        key(chat.conversation.id) {
-            val list = rememberLazyListState()
-            var followTail by remember { mutableStateOf(true) }
-            // Selected text clears like anywhere on Android: a tap elsewhere or a scroll ends it (selection
-            // lives while its container is focused; the handles would otherwise stay behind when the list moves).
-            val focus = LocalFocusManager.current
-            // Only the user's own drag stops following the newest text. Watching "a scroll is in progress"
-            // also caught the list's own jumps to the end (seen a moment late), which left a streaming
-            // answer running on below the screen.
-            LaunchedEffect(list) {
-                list.interactionSource.interactions.collect { interaction ->
-                    if (interaction is DragInteraction.Start) { followTail = false; focus.clearFocus(force = true) }
+    // Also from the desktop app: files the chat names open at full length (a step's file, a path in an answer),
+    // and a list of the files the chat changed.
+    var filesSheet by remember(chat.conversation.id) { mutableStateOf(false) }
+    var openedFile by remember(chat.conversation.id) { mutableStateOf<FileRef?>(null) }
+    val openFile: (FileRef) -> Unit = remember(chat.conversation.id) { { ref -> openedFile = ref } }
+    val changedAny = remember(chat.messages) { changedFiles(chat.messages.map { it.blocks }).isNotEmpty() }
+    CompositionLocalProvider(LocalOpenFile provides openFile) {
+        if (outline) OutlineSheet(chat.messages, chat.nextCursor != null, vm::loadOlder, { id -> outline = false; jumpTo = id }) { outline = false }
+        if (sideChat) SideChatSheet(chat.side, vm::askSide, { failed -> vm.dropSide(failed); vm.askSide(failed.question) }) { sideChat = false }
+        if (filesSheet) ChatFilesHost(vm, chat, { path -> openedFile = FileRef(path) }) { filesSheet = false }
+        openedFile?.let { ref -> FileViewer(ref, vm::readFile) { openedFile = null } }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) { Toolbar(conversationTitle(chat.conversation), chat.conversation.project ?: tr(S.default_project), vm::back) }
+            if (!chat.conversation.nativeControl) ActionIcon(R.drawable.aw_side_chat, tr(S.side_title)) { sideChat = true }
+            if (chat.messages.any { it.role == "user" }) ActionIcon(R.drawable.aw_outline, tr(S.outline_title)) { outline = true }
+            Box {
+                ActionIcon(R.drawable.aw_more, tr(S.more)) { overflow = true }
+                DropdownMenu(overflow, { overflow = false }) {
+                    DropdownMenuItem(text = { Text(tr(S.model_settings)) }, onClick = { overflow = false; onModels() })
+                    if (changedAny || chat.live != null) DropdownMenuItem(text = { Text(tr(S.files_title)) }, onClick = { overflow = false; filesSheet = true })
+                    DropdownMenuItem(text = { Text(tr(S.reconnect)) }, onClick = { overflow = false; vm.reload() })
                 }
             }
-            LaunchedEffect(list) {
-                snapshotFlow { list.isScrollInProgress to list.canScrollForward }.distinctUntilChanged().collect { (scrolling, canForward) ->
-                    if (!scrolling && !canForward) followTail = true
+        }
+        // Background tasks: steps, notices and the pill open one list, where output is read and tasks stopped.
+        var taskSheet by remember(chat.conversation.id) { mutableStateOf<String?>(null) }
+        val taskControls = remember(vm, chat.conversation.id) { TaskControls(vm::taskOutput, vm::stopTask) { id -> taskSheet = id ?: "" } }
+        CompositionLocalProvider(LocalTaskControls provides taskControls) {
+            taskSheet?.let { request -> TaskSheetHost(vm, chat, request) { taskSheet = null } }
+            chat.browserError?.let { error ->
+                Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    ErrorBlock(error, vm::dismissBrowserError, tr(S.close))
                 }
             }
-            LaunchedEffect(list, followTail, chat.loading) {
-                snapshotFlow { list.layoutInfo.let { info ->
-                    Triple(info.totalItemsCount, info.visibleItemsInfo.lastOrNull()?.size, info.viewportEndOffset)
-                } }.distinctUntilChanged().collect {
-                    if (followTail && !chat.loading) {
-                        val total = list.layoutInfo.totalItemsCount
-                        // One clamped jump to the very end. Scrolling to the item's top and then
-                        // down by its height showed an intermediate frame on every growth (jitter).
-                        if (total > 0) list.scrollToItem(total - 1, Int.MAX_VALUE)
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            chat.conversation.lineage?.let { lineage ->
+                val parentTitle = lineage.parentTitle?.takeIf { it.isNotBlank() }
+                    ?: state.conversations.find { it.id == lineage.parentConversationId }?.let { conversationTitle(it) }
+                    ?: tr(S.variant_parent)
+                AssistChip(onClick = vm::openParent, label = { Text(tr(S.variant_of, parentTitle), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingIcon = { AppIcon(R.drawable.aw_back) }, modifier = Modifier.padding(horizontal = 16.dp).heightIn(min = 48.dp))
+            }
+            key(chat.conversation.id) {
+                val list = rememberLazyListState()
+                var followTail by remember { mutableStateOf(true) }
+                // Selected text clears like anywhere on Android: a tap elsewhere or a scroll ends it (selection
+                // lives while its container is focused; the handles would otherwise stay behind when the list moves).
+                val focus = LocalFocusManager.current
+                // Only the user's own drag stops following the newest text. Watching "a scroll is in progress"
+                // also caught the list's own jumps to the end (seen a moment late), which left a streaming
+                // answer running on below the screen.
+                LaunchedEffect(list) {
+                    list.interactionSource.interactions.collect { interaction ->
+                        if (interaction is DragInteraction.Start) { followTail = false; focus.clearFocus(force = true) }
+                    }
+                }
+                LaunchedEffect(list) {
+                    snapshotFlow { list.isScrollInProgress to list.canScrollForward }.distinctUntilChanged().collect { (scrolling, canForward) ->
+                        if (!scrolling && !canForward) followTail = true
+                    }
+                }
+                LaunchedEffect(list, followTail, chat.loading) {
+                    snapshotFlow { list.layoutInfo.let { info ->
+                        Triple(info.totalItemsCount, info.visibleItemsInfo.lastOrNull()?.size, info.viewportEndOffset)
+                    } }.distinctUntilChanged().collect {
+                        if (followTail && !chat.loading) {
+                            val total = list.layoutInfo.totalItemsCount
+                            // One clamped jump to the very end. Scrolling to the item's top and then
+                            // down by its height showed an intermediate frame on every growth (jitter).
+                            if (total > 0) list.scrollToItem(total - 1, Int.MAX_VALUE)
+                        }
+                    }
+                }
+                LazyColumn(state = list, modifier = Modifier.weight(1f).fillMaxWidth().clearSelectionOnTap(focus), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    if (chat.loading) item("loading") { LoadingState(tr(S.loading_chat)) }
+                    if (chat.nextCursor != null) item("older") {
+                        TextButton(onClick = { followTail = false; vm.loadOlder() }, enabled = !chat.loadingOlder,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(if (chat.loadingOlder) tr(S.loading) else countLabel(R.plurals.load_older, chat.olderCount)) }
+                    }
+                    if (!chat.loading && chat.messages.isEmpty() && chat.live == null && chat.error == null) item("empty") {
+                        EmptyState(R.drawable.aw_chat, tr(S.empty_chat), tr(S.empty_chat_hint))
+                    }
+                    items(chat.messages, key = { it.id }, contentType = { it.role }) { message ->
+                        MessageView(message, modelLabel = message.model?.let { model -> state.agents.find { model.removeSuffix("[1m]") in it.models }?.label(model) ?: readableModelId(model) },
+                            canFork = chat.canFork,
+                            onRetry = if (message.role == "assistant" && message.id == chat.messages.lastOrNull { it.role == "assistant" }?.id) ({ vm.retry(message.id) }) else null,
+                            onEdit = if (message.role == "user" && message.id == chat.messages.lastOrNull { it.role == "user" }?.id) ({ text -> vm.edit(message.id, text) }) else null)
+                    }
+                    if (chat.live != null) item("live-${chat.live.runId}") {
+                        LiveMessage(vm, (chat.liveModel ?: chat.conversation.choice.model).takeIf { it.isNotBlank() }?.let { model ->
+                            state.agents.find { model in it.models }?.label(model) ?: model
+                        }, chat.connection)
+                    }
+                    if (chat.suggestions.isNotEmpty() && !chat.running && chat.live == null && chat.messages.lastOrNull()?.id == chat.suggestionsFor)
+                        item("suggestions-${chat.suggestionsFor}") { QuickReplies(chat.suggestions, enabled = chat.canSend, onPick = vm::sendSuggestion) }
+                    if (chat.error != null) item("error") { ErrorBlock(chat.error, vm::reload, tr(S.reconnect)) }
+                }
+                val lastId = chat.messages.lastOrNull()?.id
+                LaunchedEffect(chat.conversation.id, lastId, chat.running, chat.live == null) { vm.loadSuggestions() }
+                if (!followTail) TextButton({ followTail = true }, Modifier.align(Alignment.CenterHorizontally).heightIn(min = 48.dp)) {
+                    AppIcon(R.drawable.aw_down); Text(tr(S.latest_messages))
+                }
+                // Sending (a message, a mid-turn message, a queued one) shows the newest, like any messenger.
+                LaunchedEffect(chat.sends) { if (chat.sends > 0) followTail = true }
+                // A question picked in the outline: its message at the top of the screen.
+                LaunchedEffect(jumpTo) {
+                    val target = jumpTo ?: return@LaunchedEffect
+                    val index = chat.messages.indexOfFirst { it.id == target }
+                    if (index >= 0) {
+                        followTail = false
+                        list.scrollToItem(index + (if (chat.loading) 1 else 0) + (if (chat.nextCursor != null) 1 else 0))
+                    }
+                    jumpTo = null
+                }
+                LaunchedEffect(followTail) {
+                    if (followTail && list.layoutInfo.totalItemsCount > 0) {
+                        list.scrollToItem(list.layoutInfo.totalItemsCount - 1, Int.MAX_VALUE)
                     }
                 }
             }
-            LazyColumn(state = list, modifier = Modifier.weight(1f).fillMaxWidth().clearSelectionOnTap(focus), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                if (chat.loading) item("loading") { LoadingState(tr(S.loading_chat)) }
-                if (chat.nextCursor != null) item("older") {
-                    TextButton(onClick = { followTail = false; vm.loadOlder() }, enabled = !chat.loadingOlder,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(if (chat.loadingOlder) tr(S.loading) else countLabel(R.plurals.load_older, chat.olderCount)) }
-                }
-                if (!chat.loading && chat.messages.isEmpty() && chat.live == null && chat.error == null) item("empty") {
-                    EmptyState(R.drawable.aw_chat, tr(S.empty_chat), tr(S.empty_chat_hint))
-                }
-                items(chat.messages, key = { it.id }, contentType = { it.role }) { message ->
-                    MessageView(message, modelLabel = message.model?.let { model -> state.agents.find { model.removeSuffix("[1m]") in it.models }?.label(model) ?: readableModelId(model) },
-                        canFork = chat.canFork,
-                        onRetry = if (message.role == "assistant" && message.id == chat.messages.lastOrNull { it.role == "assistant" }?.id) ({ vm.retry(message.id) }) else null,
-                        onEdit = if (message.role == "user" && message.id == chat.messages.lastOrNull { it.role == "user" }?.id) ({ text -> vm.edit(message.id, text) }) else null)
-                }
-                if (chat.live != null) item("live-${chat.live.runId}") {
-                    LiveMessage(vm, (chat.liveModel ?: chat.conversation.choice.model).takeIf { it.isNotBlank() }?.let { model ->
-                        state.agents.find { model in it.models }?.label(model) ?: model
-                    }, chat.connection)
-                }
-                if (chat.suggestions.isNotEmpty() && !chat.running && chat.live == null && chat.messages.lastOrNull()?.id == chat.suggestionsFor)
-                    item("suggestions-${chat.suggestionsFor}") { QuickReplies(chat.suggestions, enabled = chat.canSend, onPick = vm::sendSuggestion) }
-                if (chat.error != null) item("error") { ErrorBlock(chat.error, vm::reload, tr(S.reconnect)) }
-            }
-            val lastId = chat.messages.lastOrNull()?.id
-            LaunchedEffect(chat.conversation.id, lastId, chat.running, chat.live == null) { vm.loadSuggestions() }
-            if (!followTail) TextButton({ followTail = true }, Modifier.align(Alignment.CenterHorizontally).heightIn(min = 48.dp)) {
-                AppIcon(R.drawable.aw_down); Text(tr(S.latest_messages))
-            }
-            // Sending (a message, a mid-turn message, a queued one) shows the newest, like any messenger.
-            LaunchedEffect(chat.sends) { if (chat.sends > 0) followTail = true }
-            // A question picked in the outline: its message at the top of the screen.
-            LaunchedEffect(jumpTo) {
-                val target = jumpTo ?: return@LaunchedEffect
-                val index = chat.messages.indexOfFirst { it.id == target }
-                if (index >= 0) {
-                    followTail = false
-                    list.scrollToItem(index + (if (chat.loading) 1 else 0) + (if (chat.nextCursor != null) 1 else 0))
-                }
-                jumpTo = null
-            }
-            LaunchedEffect(followTail) {
-                if (followTail && list.layoutInfo.totalItemsCount > 0) {
-                    list.scrollToItem(list.layoutInfo.totalItemsCount - 1, Int.MAX_VALUE)
-                }
-            }
+            Composer(chat, state, vm, (availableHeight * .55f).coerceAtLeast(100.dp), onModels)
         }
-        Composer(chat, state, vm, (availableHeight * .55f).coerceAtLeast(100.dp), onModels)
     }
+}
+
+/** The files the open chat changed, the running turn's included. */
+@Composable
+private fun ChatFilesHost(vm: AgentViewModel, chat: ChatState, onOpen: (String) -> Unit, onClose: () -> Unit) {
+    val turn by vm.liveTurn.collectAsStateWithLifecycle()
+    // Keyed on the running turn's steps, not its text: a new word must not redo every diff.
+    val liveSteps = turn?.blocks?.filterIsInstance<ChatBlock.Tool>().orEmpty()
+    val files = remember(chat.messages, liveSteps) { changedFiles(chat.messages.map { it.blocks } + listOf(liveSteps)) }
+    ChatFilesSheet(files, onOpen, onClose)
 }
 
 /** The task list for the open conversation: the running turn's tasks, or those of the saved turn a notice is in. */

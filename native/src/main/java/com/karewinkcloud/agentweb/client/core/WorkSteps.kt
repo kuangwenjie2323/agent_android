@@ -91,6 +91,10 @@ fun stepInput(tool: ChatBlock.Tool): String? =
 /** (path, kind) for each change of a Codex file_change step. */
 private fun changes(input: JsonObject?) = changeTriples(input).map { it.first to it.second }
 
+/** (path, kind) for each change of a Codex file_change step: add, delete or update; empty for other steps. */
+fun fileChanges(tool: ChatBlock.Tool): List<Pair<String, String>> =
+    if (tool.name.equals("file_change", true)) changes(input(tool)) else emptyList()
+
 /** (path, kind, diff) for each change of a Codex file_change step; an added file's diff is its content. */
 private fun changeTriples(input: JsonObject?) = (input?.get("changes") as? JsonArray).orEmpty().mapNotNull { item ->
     val change = item as? JsonObject ?: return@mapNotNull null

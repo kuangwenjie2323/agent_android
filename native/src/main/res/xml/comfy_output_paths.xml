@@ -4,4 +4,5 @@
     <cache-path name="chat-input" path="chat-input/" />
     <cache-path name="chat-camera" path="chat-camera/" />
     <cache-path name="updates" path="updates/" />
+    <cache-path name="chat-files" path="chat-files/" />
 </paths>

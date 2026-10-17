@@ -1061,6 +1061,12 @@ class AgentViewModel(
         return repository.taskOutput(chat.conversation.id, taskId)
     }
 
+    /** A file the open conversation names, read from the computer for the file viewer. */
+    suspend fun readFile(path: String): FileContent {
+        val chat = state.value.chat ?: throw ApiException(404, ClientError("No chat is open.", "not_found", false))
+        return repository.readFile(chat.conversation.id, path)
+    }
+
     /** Stops one background task, as in Claude Code's task list; its step updates from the turn's own events. */
     fun stopTask(taskId: String) {
         val chat = state.value.chat ?: return

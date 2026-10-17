@@ -69,11 +69,17 @@ interface AgentRepository {
     /** A side question about the chat: answered from its transcript, never added to it or sent to its agent. */
     suspend fun sideQuestion(conversationId: String, question: String, history: List<SideQuestion> = emptyList()): String =
         throw ApiException(404, ClientError("Side questions are not available on this server.", "side_unavailable", false))
+    /** A file the chat names, read from the computer for viewing: text cut at 1 MB, pictures and PDFs whole. */
+    suspend fun readFile(conversationId: String, path: String): FileContent =
+        throw ApiException(404, ClientError("Files cannot be opened on this server.", "not_found", false))
     suspend fun resume(conversationId: String, headId: String): JsonObject
     suspend fun claudeSessions(cursor: String? = null, project: String? = null): ClaudeSessionPage
     suspend fun claudeHistory(id: String, cursor: String? = null): ClaudeSessionHistory
     suspend fun adoptClaudeSession(id: String): String
 }
+
+/** The most the file viewer takes: the server sends at most 20 MB of a picture or PDF. */
+private const val MAX_FILE_BYTES = 21L * 1024 * 1024
 
 /** Whether a request may share a pooled connection: reads to an HTTPS origin only. */
 internal fun reusesConnection(origin: String, read: Boolean) = read && origin.startsWith("https://", ignoreCase = true)
@@ -363,6 +369,32 @@ class HttpAgentRepository(
             putJsonArray("history") { history.filter { it.answer != null }.forEach { item -> addJsonObject {
                 put("question", item.question); put("answer", item.answer.orEmpty()) } } }
         }, timeoutSeconds = 120).string("answer").orEmpty()
+    override suspend fun readFile(conversationId: String, path: String): FileContent = withContext(Dispatchers.IO) {
+        val owner = currentCoroutineContext()
+        val request = request("/api/chat/conversations/${segment(conversationId)}/file?path=${java.net.URLEncoder.encode(path, "UTF-8")}")
+        execute(request, 120) { response ->
+            validate(response)
+            val body = response.body ?: throw IOException("Empty file response")
+            if (body.contentLength() > MAX_FILE_BYTES) throw IOException("File too large")
+            val bytes = body.byteStream().use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(32 * 1024)
+                while (true) {
+                    owner.ensureActive()
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    out.write(buffer, 0, count)
+                    if (out.size() > MAX_FILE_BYTES) throw IOException("File too large")
+                }
+                out.toByteArray()
+            }
+            fun header(name: String) = response.header("AgentWeb-File-$name")
+            FileContent(header("Path")?.let { runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrNull() } ?: path,
+                header("Kind") ?: "text", body.contentType()?.let { "${it.type}/${it.subtype}" } ?: "application/octet-stream",
+                bytes, header("Size")?.toLongOrNull() ?: bytes.size.toLong(), header("Modified")?.toLongOrNull() ?: 0L,
+                header("Truncated") == "1")
+        }
+    }
     override suspend fun resume(conversationId: String, headId: String) = json("/api/chat/queue/resume", buildJsonObject {
         put("conversationId", conversationId); put("expectedHeadItemId", headId)
     })
