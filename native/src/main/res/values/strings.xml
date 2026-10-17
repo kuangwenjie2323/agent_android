@@ -552,6 +552,14 @@
     <string name="error_offline">You are offline. The message was not sent; it is still in the box.</string>
     <string name="error_not_sent">The connection broke before the message left the phone. It was not sent; it is back in the box.</string>
     <string name="error_server_unreachable">Your computer cannot be reached right now: it may be asleep, offline or restarting.</string>
+    <string name="usage_limit_resets">Claude\'s usage limit is reached. It resets at %1$s; DeepSeek can carry on meanwhile.</string>
+    <string name="usage_limit_reached">Claude\'s usage limit is reached; DeepSeek can carry on meanwhile.</string>
+    <string name="tomorrow_at">tomorrow %1$s</string>
+    <string name="limits_exhausted">Claude usage is used up · resets %1$s</string>
+    <string name="limits_five_hour">5 hours: %1$d%% used</string>
+    <string name="limits_seven_day">7 days: %1$d%% used</string>
+    <string name="limits_resets">" (resets %1$s)"</string>
+    <string name="limits_as_of">as of %1$s</string>
     <string name="task_not_running">This background task has already ended.</string>
     <string name="tasks_title">Background tasks</string>
     <string name="tasks_running_group">Running</string>

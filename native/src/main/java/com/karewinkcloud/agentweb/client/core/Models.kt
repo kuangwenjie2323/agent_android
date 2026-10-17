@@ -29,6 +29,8 @@ data class Agent(
     val supportsImages: Boolean = false,
     /** Per-model image support; older servers send only [supportsImages]. */
     val modelImages: Map<String, Boolean> = emptyMap(),
+    /** The subscription's usage windows from the last turn's report (Claude only). */
+    val limits: UsageLimits? = null,
 ) {
     fun label(model: String) = model.removeSuffix("[1m]").let { id -> labels[id] ?: id.substringAfterLast('/') }
     /** Whether [model] reads attached photos (DeepSeek V4.1 Flash does, V4 Pro does not). */
@@ -47,7 +49,31 @@ data class Agent(
             j.obj("modelEffortLevels")?.mapValues { (_, v) -> (v as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty() }.orEmpty(),
             j.boolean("supportsImages") == true,
             j.obj("modelSupportsImages")?.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.booleanOrNull?.let { k to it } }?.toMap().orEmpty(),
+            UsageLimits.from(j.obj("limits")),
         )
+    }
+}
+
+/**
+ * How much of a subscription's usage windows is used (Claude Code reports it during each turn): [windows] maps
+ * "five_hour" / "seven_day" to the share used (0..1) and when it resets (epoch seconds); [exhausted] when the
+ * last turn was refused for the limit. [updatedAt] is when that report came.
+ */
+data class UsageLimits(val windows: Map<String, LimitWindow>, val exhausted: Boolean, val resetsAt: Long?, val updatedAt: Long?) {
+    data class LimitWindow(val used: Double, val resetsAt: Long?)
+    val highest get() = windows.values.maxOfOrNull { it.used } ?: 0.0
+    companion object {
+        fun from(j: JsonObject?): UsageLimits? {
+            j ?: return null
+            val windows = j.obj("windows")?.mapNotNull { (name, value) ->
+                val window = value as? JsonObject ?: return@mapNotNull null
+                val used = (window["used"] as? JsonPrimitive)?.doubleOrNull ?: return@mapNotNull null
+                name to LimitWindow(used, window.long("resetsAt"))
+            }?.toMap().orEmpty()
+            if (windows.isEmpty() && j.string("status") == null) return null
+            return UsageLimits(windows, j.string("status") == "rejected", j.long("resetsAt"),
+                (j["updatedAt"] as? JsonPrimitive)?.doubleOrNull?.toLong())
+        }
     }
 }
 

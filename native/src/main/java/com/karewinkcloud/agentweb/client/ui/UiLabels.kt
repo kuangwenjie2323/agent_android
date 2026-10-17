@@ -156,6 +156,11 @@ internal fun comfyErrorResource(code: String) = when(code) {
 /** Transport text remains data; local status/error copy follows the selected app locale. */
 @Composable internal fun localMessage(message: String): String {
     SIGN_IN_EXPIRED.find(message)?.let { return tr(S.provider_signin_expired, it.groupValues[1]) }
+    USAGE_LIMIT.find(message)?.let { match ->
+        val at = match.groupValues[1].takeIf(String::isNotEmpty)?.let { runCatching {
+            java.time.OffsetDateTime.parse(it, java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssxx")).toEpochSecond() }.getOrNull() }
+        return if (at != null) tr(S.usage_limit_resets, resetLabel(at)) else tr(S.usage_limit_reached)
+    }
     val resource = when (message) {
         "passkey_none" -> S.passkey_none
         "passkey_cancelled" -> S.passkey_cancelled
@@ -203,3 +208,32 @@ internal fun comfyErrorResource(code: String) = when(code) {
 }
 
 private val SIGN_IN_EXPIRED = Regex("^(\\S+) sign-in on the server has expired")
+private val USAGE_LIMIT = Regex("^Claude's usage limit is reached\\.(?: It resets at (\\S+)\\.)?$")
+
+/** When a usage window resets, as short as it reads: "23:00" today, "周二 09:00" this week, "10/24" later. */
+@Composable internal fun resetLabel(epochSeconds: Long, now: java.time.ZonedDateTime = java.time.ZonedDateTime.now()): String {
+    val at = java.time.Instant.ofEpochSecond(epochSeconds).atZone(now.zone)
+    val days = java.time.temporal.ChronoUnit.DAYS.between(now.toLocalDate(), at.toLocalDate())
+    val time = at.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+    return when {
+        days <= 0L -> time
+        days == 1L -> tr(S.tomorrow_at, time)
+        days < 7L -> at.format(java.time.format.DateTimeFormatter.ofPattern("EEE HH:mm", java.util.Locale.getDefault()))
+        else -> at.format(java.time.format.DateTimeFormatter.ofPattern("M/d"))
+    }
+}
+
+/** "5 hours 84% used (resets 23:00) · 7 days 73% used (resets Tue 09:00)", or used up and when it resets. */
+@Composable internal fun usageLimitsLabel(limits: UsageLimits, nowSeconds: Long = System.currentTimeMillis() / 1000): String {
+    if (limits.exhausted) return tr(S.limits_exhausted, limits.resetsAt?.let { resetLabel(it) } ?: "—")
+    val parts = listOf("five_hour" to S.limits_five_hour, "seven_day" to S.limits_seven_day).mapNotNull { (name, label) ->
+        limits.windows[name]?.let { window ->
+            val reset = window.resetsAt?.takeIf { it > nowSeconds }?.let { resetLabel(it) }
+            tr(label, (window.used * 100).toInt().coerceIn(0, 100)) + (reset?.let { tr(S.limits_resets, it) } ?: "")
+        }
+    }
+    val stale = limits.updatedAt?.takeIf { nowSeconds - it > 3 * 3600 }?.let {
+        tr(S.limits_as_of, java.time.Instant.ofEpochSecond(it).atZone(java.time.ZoneId.systemDefault())
+            .format(java.time.format.DateTimeFormatter.ofPattern("M/d HH:mm"))) }
+    return (parts + listOfNotNull(stale)).joinToString(" · ")
+}

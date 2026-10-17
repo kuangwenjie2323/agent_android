@@ -548,6 +548,14 @@
     <string name="error_offline">现在没有网络，消息没有发出，还留在输入框里。</string>
     <string name="error_not_sent">消息还没离开手机连接就断了，没有发出去，已放回输入框。</string>
     <string name="error_server_unreachable">暂时连不上你的电脑：它可能在睡眠、断网或正在重启。</string>
+    <string name="usage_limit_resets">Claude 订阅用量已用完，%1$s 重置。这段时间可以先换 DeepSeek 继续。</string>
+    <string name="usage_limit_reached">Claude 订阅用量已用完。这段时间可以先换 DeepSeek 继续。</string>
+    <string name="tomorrow_at">明天 %1$s</string>
+    <string name="limits_exhausted">Claude 用量已用完 · %1$s 重置</string>
+    <string name="limits_five_hour">5 小时已用 %1$d%%</string>
+    <string name="limits_seven_day">7 天已用 %1$d%%</string>
+    <string name="limits_resets">（%1$s 重置）</string>
+    <string name="limits_as_of">截至 %1$s</string>
     <string name="task_not_running">这个后台任务已经结束了。</string>
     <string name="tasks_title">后台任务</string>
     <string name="tasks_running_group">运行中</string>

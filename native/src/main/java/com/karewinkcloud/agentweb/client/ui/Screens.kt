@@ -468,6 +468,8 @@ private fun Composer(chat: ChatState, state: ClientState, vm: AgentViewModel, ma
             Text(tr(S.queue_paused), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
             TextButton(vm::resumeQueue, enabled = !chat.running && !chat.controlBusy && chat.queued.isNotEmpty(), modifier = Modifier.heightIn(min = 48.dp)) { Text(tr(S.resume_queue)) }
         }
+        // The chosen subscription is used up or nearly: say so before the message fails on it.
+        agent?.limits?.takeIf { it.exhausted || it.highest >= .9 }?.let { limits -> StatusNotice(usageLimitsLabel(limits)) }
         // Connecting shows in the turn's own status line; a notice here made the box grow and shrink at every send.
         if (chat.connection == Connection.RECONNECTING || chat.stopRequested) StatusNotice(tr(
             if (chat.stopRequested) S.stop_requested else S.reconnecting), busy = true)
@@ -503,7 +505,8 @@ internal fun ModelSheet(agents: List<Agent>, choice: ModelChoice, onChoice: (Mod
                     if (!pinControls) item("controls") { ModelChoiceControls(agent, choice, onChoice) }
                     if (agents.isEmpty()) item { TextButton(onRefresh, Modifier.heightIn(min = 48.dp)) { Text(tr(S.refresh)) } }
                     items(visibleAgents, key = { "agent-${it.id}" }) { agent ->
-                        GroupedSection(agent.name) {
+                        // Claude: how much of the subscription's usage windows is used, from the last turn's report.
+                        GroupedSection(agent.name, footer = agent.limits?.let { usageLimitsLabel(it) }) {
                             agent.models.forEachIndexed { index, model ->
                                 if (index > 0) RowDivider()
                                 CheckRow(agent.label(model), choice.agent == agent.id && choice.model == model, agent.available,
