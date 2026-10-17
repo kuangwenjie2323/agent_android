@@ -59,6 +59,51 @@ class AgentViewModelTest {
         assertEquals(0, repo.sendCalls)
     }
 
+    @Test fun aSendThatNeverLeftThePhoneComesBackToTheBox() = modelTest {
+        repo.followFlow = { _, _, send, _ -> flow { if (send != null) throw javax.net.ssl.SSLHandshakeException("connection closed"); awaitCancellation() } }
+        runCurrent()
+        vm.open(conversation("one")); runCurrent()
+        vm.draft("看这个"); vm.send(); runCurrent()
+        val chat = vm.state.value.chat!!
+        assertEquals("not_sent", chat.error?.code)
+        assertEquals("看这个", chat.draft)
+        assertNull(chat.live)
+        assertFalse(chat.running)  // the next message goes out as a normal send, not into a turn that never was
+    }
+
+    @Test fun aChatStuckOnALostSendRecoversWhenTheServerHasNoSuchTurn() = modelTest {
+        // The send's connection dropped mid-way (ambiguous), and the server never saved it.
+        repo.followFlow = { _, run, send, _ -> flow {
+            if (send != null) throw java.net.SocketException("Software caused connection abort")
+            throw ApiException(404, ClientError("no active stream", "no_active_stream"))
+        } }
+        runCurrent()
+        vm.open(conversation("one")); runCurrent()
+        vm.draft("撤单吗"); vm.send(); runCurrent()
+        assertTrue(vm.state.value.chat!!.running)  // ambiguous: held, not resent
+        vm.reload(); runCurrent()
+        assertTrue(vm.state.value.chat!!.running)  // it may still be on its way in
+        advanceTimeBy(61_000); runCurrent()
+        val chat = vm.state.value.chat!!
+        assertFalse(chat.running)
+        assertEquals("撤单吗", chat.draft)
+        assertEquals("not_sent", chat.error?.code)
+        assertTrue(chat.messages.none { it.id.startsWith("pending-") })
+    }
+
+    @Test fun aQueuedMessageForAChatThatOnlyLookedBusyIsSentNormally() = modelTest {
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        repo.admit = { throw ApiException(409, ClientError("conversation is not active", "conversation_idle")) }
+        repo.followFlow = { _, _, send, _ -> flow { if (send == null) awaitCancellation() else awaitCancellation() } }
+        runCurrent()
+        vm.open(conversation("one", running = true)); runCurrent()
+        repo.getDetail = { id, _ -> detail(id) }
+        vm.draft("在吗"); vm.queue(); runCurrent()
+        assertEquals(1, repo.queueCalls.size)
+        assertEquals(1, repo.sendCalls)
+        assertEquals("在吗", repo.followCalls.last().third?.text)
+    }
+
     @Test fun staleDetailCannotReplaceNewSelection() = modelTest {
         runCurrent()
         val delayed = CompletableDeferred<ConversationDetail>()

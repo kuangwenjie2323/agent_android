@@ -87,6 +87,8 @@ class AgentViewModel(
     /** When the user last looked at each listed chat (seconds on the server's clock). */
     val seen: StateFlow<Map<String, Long>> = seenMarks.asStateFlow()
     private val sideQuestions = mutableMapOf<String, List<SideQuestion>>()
+    /** When each unresolved send started (wall clock), to know when the server can no longer be taking it. */
+    private val unresolvedAt = mutableMapOf<String, Long>()
     val liveTurn = livePresentation.asStateFlow()
     internal var frameClock: androidx.compose.runtime.MonotonicFrameClock? = null
     internal var appliedConnection: ServerConnection? = null
@@ -637,6 +639,8 @@ class AgentViewModel(
         try {
             val id = state.value.chat?.conversation?.id ?: return
             var first = true
+            var missingStreams = 0
+            var settleWaited = false
             while (owned(owner)) {
                 val detail = repository.detail(id)
                 if (!owned(owner)) return
@@ -667,7 +671,9 @@ class AgentViewModel(
                     },
                         queued = detail.queued, queuePaused = detail.queuePaused,
                         olderCount = if (prefix.isEmpty()) detail.olderCount else old.olderCount,
-                        nextCursor = if (prefix.isEmpty()) detail.nextCursor else old.nextCursor, loading = false, error = null,
+                        nextCursor = if (prefix.isEmpty()) detail.nextCursor else old.nextCursor, loading = false,
+                        // A message given back to the box keeps its note until the user acts on it.
+                        error = old.error?.takeIf { it.code == "not_sent" },
                         live = (unresolved?.controlId ?: forkRun ?: detail.conversation.controlId?.takeIf { detail.conversation.running })?.let { run ->
                             prior?.takeIf { p -> p.runId == run && !p.done } ?: TurnState(id, run,
                                 startedAt = prior?.takeIf { p -> p.runId.isBlank() && !p.done }?.startedAt ?: monotonicMillis())
@@ -687,7 +693,26 @@ class AgentViewModel(
                     val run = detail.conversation.controlId ?: unresolved?.controlId ?: forkRun
                     // An observed successor proves the old turn is no longer our active owner.
                     if (unresolved != null && run != unresolved.controlId) unresolvedSends.remove(id)
-                    follow(owner, id, run, previous = prior?.takeIf { it.runId == run && !it.done })
+                    try {
+                        follow(owner, id, run, previous = prior?.takeIf { it.runId == run && !it.done })
+                    } catch (e: ApiException) {
+                        if (e.status != 404 || e.problem.code !in setOf("no_active_stream", null)) throw e
+                        if (detail.conversation.running && ++missingStreams < 3) { delay(1000); continue }
+                        if (detail.conversation.running) throw e
+                        // A send whose connection broke mid-way may still be on its way in: hold it until the
+                        // server cannot still be taking it, so the user never sends it twice.
+                        if (unresolved != null && !settleWaited) {
+                            val age = System.currentTimeMillis() - (unresolvedAt[id] ?: 0L)
+                            if (age < SEND_SETTLE_MS) { settleWaited = true; delay(SEND_SETTLE_MS - age); continue }
+                        }
+                        // The server has no stream for this run and nothing runs: the turn ended unseen, or a
+                        // send never arrived. Stop waiting on it (the chat stayed "running" and refused new
+                        // messages until the app was killed) and give back a message the server never saved.
+                        unresolved?.let { lost -> if (!unresolvedSettled(lost, detail.messages, priorChat?.beforeSendId ?: 0)) restoreUnsent(owner, lost) }
+                        unresolvedSends.remove(id); forkRuns.remove(id)
+                        editChat(owner) { it.copy(live = null, connection = null) }
+                        continue
+                    }
                     if (!owned(owner)) return
                     unresolvedSends.remove(id)
                     forkRuns.remove(id)
@@ -717,6 +742,16 @@ class AgentViewModel(
         catch (e: Exception) {
             editChat(owner) { it.copy(loading = false, error = problem(e)) }
         }
+    }
+
+    /** A send the server never saved: its words and files go back in the box, with a plain note. */
+    private fun restoreUnsent(owner: Long, send: SendRequest) {
+        editChat(owner) { current -> current.copy(
+            draft = current.draft.ifEmpty { send.text },
+            attachments = current.attachments.ifEmpty { send.attachments },
+            messages = current.messages.filterNot { it.id == "pending-${send.controlId}" },
+            error = ClientError(NOT_SENT_MESSAGE, "not_sent", true)) }
+        saveDraft()
     }
 
     private fun unresolvedSettled(send: SendRequest, messages: List<ChatMessage>, beforeSendId: Long): Boolean {
@@ -787,6 +822,7 @@ class AgentViewModel(
         val initial = TurnState(request.conversationId, request.controlId, startedAt = monotonicMillis())
         livePresentation.value = initial
         unresolvedSends[request.conversationId] = request
+        unresolvedAt[request.conversationId] = System.currentTimeMillis()
         drafts[request.conversationId] = ""
         attachmentDrafts.remove(request.conversationId)
         editChat(owner) { it.copy(draft = "", attachments = emptyList(), error = null, revealing = false, live = initial,
@@ -806,10 +842,12 @@ class AgentViewModel(
                 }
             }
             catch (e: Exception) {
-                // Explicit pre-stream 4xx rejection is safe to restore. Ambiguous failures stay locked.
-                val rejected = e is ApiException && e.directSendRejected && state.value.chat?.live?.lastSequence == 0L
+                // Explicit pre-stream 4xx rejection is safe to restore, and so is a failure before the request
+                // left the phone (no connection, no TLS): the server cannot have it. Ambiguous failures stay locked.
+                val neverSent = e.failedBeforeSending() && (state.value.chat?.live?.lastSequence ?: 0L) == 0L
+                val rejected = neverSent || (e is ApiException && e.directSendRejected && state.value.chat?.live?.lastSequence == 0L)
                 if (rejected) unresolvedSends.remove(request.conversationId)
-                editChat(owner) { current -> current.copy(error = problem(e),
+                editChat(owner) { current -> current.copy(error = if (neverSent) ClientError(NOT_SENT_MESSAGE, "not_sent", true) else problem(e),
                     draft = if (rejected && current.draft.isEmpty()) request.text else current.draft,
                     attachments = if (rejected && current.attachments.isEmpty()) request.attachments else current.attachments,
                     live = if (rejected) null else current.live,
@@ -1085,6 +1123,14 @@ class AgentViewModel(
             } catch (e: Exception) {
                 val rejected = e is ApiException && e.status in 400..499
                 if (rejected) unresolvedQueues.remove(request.conversationId)
+                if (e is ApiException && e.problem.code == "conversation_idle" && owned(owner)) {
+                    // The chat only looked busy here (a turn that ended unseen): send it as a normal message.
+                    unresolvedSends.remove(request.conversationId)
+                    editChat(owner) { it.copy(controlBusy = false, queueUncertain = false, pendingQueue = null, live = null,
+                        connection = null, conversation = it.conversation.copy(active = false, starting = false)) }
+                    send()
+                    return@launch
+                }
                 editChat(owner) { it.copy(controlBusy = false, queueUncertain = !rejected,
                     pendingQueue = if (rejected) null else request, error = problem(e)) }
             }
@@ -1119,6 +1165,9 @@ fun problem(e: Throwable): ClientError = when (e) {
     is IOException -> ClientError("Connection interrupted. Reconnect to check server history; no work is automatically resent.", "connection_lost")
     else -> ClientError("Unable to complete this request. Check Settings and reload.")
 }.also { Diagnostics.warn("ui", "error shown", "code" to it.code, "error" to Diagnostics.describe(e)) }
+
+/** How long a send whose connection broke may still be on its way to the server (admission takes seconds). */
+private const val SEND_SETTLE_MS = 60_000L
 
 /** Excludes per-token and per-frame content while retaining all actionable server truth. */
 internal fun screenSnapshot(state: ClientState): ClientState = state.copy(chat = state.chat?.let { chat ->

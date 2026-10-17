@@ -176,6 +176,8 @@ internal fun comfyErrorResource(code: String) = when(code) {
         "Your session has ended. Sign in again in Settings." -> S.error_auth
         TOO_LARGE_MESSAGE -> S.error_send_too_large
         OFFLINE_MESSAGE -> S.error_offline
+        NOT_SENT_MESSAGE -> S.error_not_sent
+        SERVER_UNREACHABLE_MESSAGE -> S.error_server_unreachable
         "Your session has expired. Sign in again." -> S.auth_expired
         "Saved sign-in could not be unlocked. Sign in again." -> S.auth_unlocked
         "Sign-in could not be saved securely. Sign in again." -> S.auth_save

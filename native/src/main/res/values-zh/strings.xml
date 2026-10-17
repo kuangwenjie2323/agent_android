@@ -546,6 +546,8 @@
     <string name="side_failed">暂时没答上来。</string>
     <string name="waiting_for_you">等你回答</string>
     <string name="error_offline">现在没有网络，消息没有发出，还留在输入框里。</string>
+    <string name="error_not_sent">消息还没离开手机连接就断了，没有发出去，已放回输入框。</string>
+    <string name="error_server_unreachable">暂时连不上你的电脑：它可能在睡眠、断网或正在重启。</string>
     <string name="task_not_running">这个后台任务已经结束了。</string>
     <string name="tasks_title">后台任务</string>
     <string name="tasks_running_group">运行中</string>
