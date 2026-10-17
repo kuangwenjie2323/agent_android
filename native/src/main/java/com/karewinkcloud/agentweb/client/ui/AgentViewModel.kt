@@ -18,11 +18,18 @@ data class ChatState(
     val olderCount: Int = 0, val nextCursor: String? = null,
     val loading: Boolean = true, val loadingOlder: Boolean = false,
     val draft: String = "", val live: TurnState? = null,
+    /** Quick replies for the latest answer (message id -> chips); cleared once the user sends. */
+    val suggestionsFor: String? = null, val suggestions: List<String> = emptyList(),
     val connection: Connection? = null, val error: ClientError? = null,
+    val browserError: ClientError? = null,
     val controlBusy: Boolean = false, val stopRequested: Boolean = false,
     val pendingQueue: QueueRequest? = null, val queueUncertain: Boolean = false,
     val liveModel: String? = null, val beforeSendId: Long = 0, val revealing: Boolean = false,
     val attachments: List<Attachment> = emptyList(), val attachmentLoading: Boolean = false,
+    /** Counts the user's sends (message, mid-turn message, queued one): each brings the list to the newest. */
+    val sends: Int = 0,
+    /** Side questions asked in this chat (kept while the app runs; never part of the chat). */
+    val side: List<SideQuestion> = emptyList(),
 ) {
     val running get() = conversation.running || live?.done == false
     val controlId get() = live?.runId?.takeIf(String::isNotBlank) ?: conversation.controlId
@@ -63,6 +70,12 @@ class AgentViewModel(
     private var repository: AgentRepository,
     initialChoice: ModelChoice,
     initialSignInRequired: Boolean = false,
+    /** Keep watching an open idle chat for turns the server starts on its own (off in tests: it never settles). */
+    private val watchIdleChats: Boolean = false,
+    /** When the user last looked at each chat, for the list's "new reply" dot. */
+    private val seenChats: SeenChats = MemorySeenChats(),
+    /** Whether the phone has a working network; a send without one fails at once instead of timing out. */
+    private val online: () -> Boolean = { true },
     private val saveChoice: (ModelChoice) -> Unit,
 ) : ViewModel() {
     private val mutable = MutableStateFlow(ClientState(choice = initialChoice, signInRequired = initialSignInRequired))
@@ -70,6 +83,12 @@ class AgentViewModel(
     // Token-bearing blocks are observed only by the live LazyColumn item.
     val screenState = state.map(::screenSnapshot).distinctUntilChanged()
     private val livePresentation = MutableStateFlow<TurnState?>(null)
+    private val seenMarks = MutableStateFlow<Map<String, Long>>(emptyMap())
+    /** When the user last looked at each listed chat (seconds on the server's clock). */
+    val seen: StateFlow<Map<String, Long>> = seenMarks.asStateFlow()
+    private val sideQuestions = mutableMapOf<String, List<SideQuestion>>()
+    /** When each unresolved send started (wall clock), to know when the server can no longer be taking it. */
+    private val unresolvedAt = mutableMapOf<String, Long>()
     val liveTurn = livePresentation.asStateFlow()
     internal var frameClock: androidx.compose.runtime.MonotonicFrameClock? = null
     internal var appliedConnection: ServerConnection? = null
@@ -94,6 +113,19 @@ class AgentViewModel(
     private val drafts = mutableMapOf<String, String>()
     private val attachmentDrafts = mutableMapOf<String, List<Attachment>>()
     private val unresolvedSends = mutableMapOf<String, SendRequest>()
+    /** Last seen history per conversation: reopening shows it at once while a refresh runs. */
+    /** History, and a reply still streaming when the chat was left (resumed from its last event, not replayed). */
+    private data class CachedChat(val messages: List<ChatMessage>, val olderCount: Int, val nextCursor: String?, val live: TurnState? = null)
+    private val chatCache = java.util.concurrent.ConcurrentHashMap<String, CachedChat>()
+    // Read-only PC session history from this app run, shown at once while it refreshes.
+    private val claudeHistoryCache = java.util.concurrent.ConcurrentHashMap<String, ClaudePreviewState>()
+    private var prefetchJob: Job? = null
+    private fun cacheChat() {
+        state.value.chat?.takeIf { !it.loading && it.error == null }?.let { chat ->
+            chatCache[chat.conversation.id] = CachedChat(chat.messages.filterNot { it.id.startsWith("pending-") }, chat.olderCount, chat.nextCursor,
+                chat.live?.takeIf { !it.done && it.runId.isNotBlank() })
+        }
+    }
     private val unresolvedQueues = mutableMapOf<String, QueueRequest>()
 
     init { observeAuthentication(); refresh() }
@@ -109,9 +141,10 @@ class AgentViewModel(
 
     private fun requireSignIn() {
         generation++; attachmentScope = newControlId(); epoch++; livePresentation.value = null
+        repository.clearConversationCache()
         // Close followers and pending client requests; never send Stop or replay mutations.
         viewModelScope.coroutineContext.cancelChildren()
-        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear()
+        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear(); chatCache.clear(); claudeHistoryCache.clear()
         previews.clear(); messageModels.clear(); messageUsage.clear(); lineages.clear(); unresolvedForks.clear(); forkRuns.clear(); lineageTitleReads.clear()
         mutable.value = ClientState(choice = state.value.choice, tab = state.value.tab, signInRequired = true, error = signInRequiredError)
     }
@@ -120,7 +153,7 @@ class AgentViewModel(
         generation++; attachmentScope = newControlId(); epoch++; livePresentation.value = null
         viewModelScope.coroutineContext.cancelChildren()
         repository = newRepository
-        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear()
+        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear(); chatCache.clear(); claudeHistoryCache.clear()
         previews.clear(); messageModels.clear(); messageUsage.clear(); lineages.clear(); unresolvedForks.clear(); forkRuns.clear(); lineageTitleReads.clear()
         // An open PC-session scope belongs to the old server; clear it on replacement.
         val tab = if (state.value.claudeVisible) AppTab.CONVERSATIONS else state.value.tab
@@ -139,6 +172,17 @@ class AgentViewModel(
         val projectOwner = projectVersion
         mutable.update { it.copy(refreshing = true, error = null) }
         listJob = viewModelScope.launch {
+            // Show the last saved list at once on a cold start; the network result replaces it.
+            if (state.value.conversations.isEmpty()) {
+                val savedAgents = source.cachedAgents()
+                if (owner == epoch && savedAgents.isNotEmpty()) mutable.update { old -> if (old.agents.isEmpty()) old.copy(agents = savedAgents) else old }
+                val cached = source.cachedConversations()
+                if (owner == epoch && cached.isNotEmpty()) {
+                    // Saved previews stay valid while a row's updated_at is unchanged.
+                    cached.forEach { row -> if (row.messageCount != null) previews.putIfAbsent(row.id, row) }
+                    mutable.update { old -> if (old.conversations.isEmpty()) old.copy(conversations = cached) else old }
+                }
+            }
             supervisorScope {
                 val catalog = async { runCatching { source.agents() } }
                 val projects = async { runCatching { source.projects() } }
@@ -166,8 +210,30 @@ class AgentViewModel(
                         projectError = if (projectOwner == projectVersion) projectResult.exceptionOrNull()?.let(::problem) else old.projectError,
                         error = (conversations.exceptionOrNull() ?: agents.exceptionOrNull())?.let(::problem))
                 }
+                // Save at once (previews over a slow link can take a while); saved again with previews below.
+                if (conversations.isSuccess && state.value.conversations.isNotEmpty()) launch { source.saveConversations(state.value.conversations) }
                 loadPreviews()
             }
+        }
+    }
+
+    /**
+     * Only the chat rows, quietly: while a chat runs or waits on the user, the list keeps its statuses current
+     * the way the session list in Claude's desktop app does (a full refresh also reloads models and projects).
+     */
+    fun refreshList() {
+        if (state.value.signInRequired || listJob?.isActive == true || state.value.chat != null) return
+        val source = repository; val owner = epoch
+        listJob = viewModelScope.launch {
+            val rows = try { source.conversations() } catch (e: CancellationException) { throw e } catch (_: Exception) { return@launch }
+            if (owner != epoch) return@launch
+            mutable.update { old -> old.copy(conversations = rows.map { row ->
+                previews[row.id]?.takeIf { it.updatedAt == row.updatedAt && !row.running }?.let {
+                    row.copy(preview = it.preview, messageCount = it.messageCount,
+                        title = if (row.title.isBlank() || row.title.equals("New chat", true)) it.title else row.title)
+                } ?: row
+            }) }
+            loadPreviews()
         }
     }
 
@@ -194,6 +260,25 @@ class AgentViewModel(
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { /* Unknown is visible; a failed read never hides a conversation. */ }
             } } }.joinAll() }
+            if (owner == epoch && rows.isNotEmpty() && state.value.error == null) source.saveConversations(state.value.conversations)
+        }
+        prefetchRecent(owner)
+    }
+
+    /** Warm the history cache for the few most recent chats, so their first open is instant. */
+    private fun prefetchRecent(owner: Long) {
+        if (prefetchJob?.isActive == true) return
+        val source = repository
+        // The rows actually shown (empty placeholder chats are hidden), most recent first.
+        val ids = state.value.sections.flatMap { it.conversations }.map { it.id }.filterNot { chatCache.containsKey(it) }.take(3)
+        prefetchJob = viewModelScope.launch {
+            for (id in ids) {
+                if (owner != epoch || state.value.chat?.conversation?.id == id) continue
+                try {
+                    val detail = source.detail(id)
+                    if (owner == epoch && !chatCache.containsKey(id)) chatCache[id] = CachedChat(detail.messages, detail.olderCount, detail.nextCursor)
+                } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+            }
         }
     }
 
@@ -268,21 +353,88 @@ class AgentViewModel(
     /** [fresh] marks a conversation just created here: it is known to be empty, so skip the loading state. */
     fun open(conversation: Conversation, fresh: Boolean = false) {
         if (state.value.signInRequired) return
+        markSeen(conversation.id, maxOf(conversation.updatedAt, System.currentTimeMillis() / 1000))
         saveDraft()
         attachmentScope = newControlId()
-        val initial = if (conversation.running) TurnState(conversation.id, conversation.controlId.orEmpty(), startedAt = monotonicMillis()) else null
+        val cached = chatCache[conversation.id]
+        // A reply that was streaming when this chat was left shows as it was and continues from its last
+        // event; starting empty made the follower replay and rebuild the whole turn.
+        val resumed = cached?.live?.takeIf { conversation.running && (conversation.controlId == null || it.runId == conversation.controlId) }
+        val initial = resumed ?: if (conversation.running) TurnState(conversation.id, conversation.controlId.orEmpty(), startedAt = monotonicMillis()) else null
         livePresentation.value = initial
         val owner = ++generation
         sessionJob?.cancel()
+        // Show this chat's own model and settings at once: waiting for its detail left the previous
+        // chat's choice in the composer for a moment, which read as the screen jumping.
+        if (!fresh) conversation.choice.takeIf { it.agent.isNotBlank() && it.model.isNotBlank() }?.let { choice ->
+            val agent = state.value.agents.firstOrNull { it.id == choice.agent }
+            mutable.update { it.copy(choice = choice.copy(model = agent?.resumeModel(choice.model) ?: choice.model,
+                effort = if (agent?.supportsEffort == true) choice.effort else null)) }
+        }
         mutable.update { it.copy(tab = if (it.claudeVisible) AppTab.CLAUDE else AppTab.CONVERSATIONS, claudePreview = null, chat = ChatState(withLineage(conversation), draft = drafts[conversation.id].orEmpty(),
-            live = initial,
+            messages = cached?.messages.orEmpty(), olderCount = cached?.olderCount ?: 0, nextCursor = cached?.nextCursor,
+            live = initial, side = sideQuestions[conversation.id].orEmpty(),
             connection = if (conversation.running) Connection.CONNECTING else null,
             attachments = attachmentDrafts[conversation.id].orEmpty(),
-            pendingQueue = unresolvedQueues[conversation.id], queueUncertain = unresolvedQueues.containsKey(conversation.id), loading = !fresh)) }
-        sessionJob = viewModelScope.launch { loadAndFollow(owner, applyChoice = true) }
+            pendingQueue = unresolvedQueues[conversation.id], queueUncertain = unresolvedQueues.containsKey(conversation.id), loading = !fresh && cached == null)) }
+        // Creation only stores agent/model; its empty detail has default effort and
+        // permissions. Keep the user's selection for the first send in a fresh chat.
+        sessionJob = viewModelScope.launch { loadAndFollow(owner, applyChoice = !fresh) }
     }
+    /** Opens a conversation by id (a tapped notification); reads the list first when it is not loaded yet. */
+    fun openById(id: String) {
+        if (state.value.signInRequired) return
+        state.value.conversations.firstOrNull { it.id == id }?.let { open(it); return }
+        val owner = epoch; val source = repository
+        viewModelScope.launch {
+            val found = try { source.conversations().firstOrNull { it.id == id } } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { null }
+            if (found != null && owner == epoch) open(found)
+        }
+    }
+    /** Chats the list shows for the first time count as read; the rest keep their marks. */
+    fun adoptSeen(rows: List<Conversation>) {
+        seenChats.adopt(rows)
+        seenMarks.value = rows.associate { it.id to (seenChats.seenAt(it.id) ?: it.updatedAt) }
+    }
+    private fun markSeen(id: String, at: Long = System.currentTimeMillis() / 1000) {
+        seenChats.markSeen(id, at)
+        seenMarks.update { it + (id to (seenChats.seenAt(id) ?: at)) }
+    }
+
+    /**
+     * A side question, like the side chats in Claude's desktop app: answered from this chat's transcript
+     * (the running turn included) without adding to the chat or reaching its agent.
+     */
+    fun askSide(question: String) {
+        val chat = state.value.chat ?: return
+        val text = question.trim()
+        if (text.isEmpty() || chat.side.any { it.answer == null && !it.failed }) return
+        if (!online()) { editChat(generation) { it.copy(error = ClientError(OFFLINE_MESSAGE, "offline", true)) }; return }
+        val id = chat.conversation.id
+        val source = repository
+        val history = chat.side.filter { it.answer != null }
+        editSide(id) { it + SideQuestion(text) }
+        viewModelScope.launch {
+            val reply = try { source.sideQuestion(id, text, history) } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { null }
+            editSide(id) { list -> list.map { item ->
+                if (item.question != text || item.answer != null || item.failed) item
+                else if (reply.isNullOrBlank()) item.copy(failed = true) else item.copy(answer = reply)
+            } }
+        }
+    }
+    /** Drops a side question that could not be answered (to ask it again). */
+    fun dropSide(question: SideQuestion) { state.value.chat?.conversation?.id?.let { id -> editSide(id) { it - question } } }
+    private fun editSide(id: String, change: (List<SideQuestion>) -> List<SideQuestion>) {
+        val next = change(sideQuestions[id].orEmpty())
+        sideQuestions[id] = next
+        mutable.update { current -> current.chat?.takeIf { it.conversation.id == id }?.let { current.copy(chat = it.copy(side = next)) } ?: current }
+    }
+
     fun back() {
-        saveDraft(); generation++; attachmentScope = newControlId(); sessionJob?.cancel()
+        state.value.chat?.conversation?.id?.let { markSeen(it) }
+        cacheChat(); saveDraft(); generation++; attachmentScope = newControlId(); sessionJob?.cancel()
         val current = state.value
         mutable.update { it.copy(chat = null, claudePreview = null,
             claudeVisible = current.claudeVisible && (current.chat != null || current.claudePreview != null),
@@ -290,6 +442,11 @@ class AgentViewModel(
         if (state.value.claudeVisible) refreshClaudeSessions() else refresh()
     }
     private fun saveDraft() { state.value.chat?.let { drafts[it.conversation.id] = it.draft; attachmentDrafts[it.conversation.id] = it.attachments } }
+    fun browserUnavailable() {
+        mutable.update { it.copy(chat = it.chat?.copy(browserError =
+            ClientError("Could not open a browser. Install or enable a browser and try again."))) }
+    }
+    fun dismissBrowserError() { mutable.update { it.copy(chat = it.chat?.copy(browserError = null)) } }
     fun draft(text: String) { mutable.update { it.copy(chat = it.chat?.copy(draft = text)) }; saveDraft() }
     fun attachmentOwner() = attachmentScope
     private fun ownsAttachments(owner: String) = owner == attachmentScope && state.value.chat != null
@@ -312,7 +469,7 @@ class AgentViewModel(
         val chat = state.value.chat ?: return false
         val combined = chat.attachments + items
         val error = attachmentError(combined.map { it.size }) ?: if (combined.any { it.kind == AttachmentKind.IMAGE } &&
-            state.value.agents.find { it.id == state.value.choice.agent }?.supportsImages != true) "当前模型不支持图片，请切换模型或移除图片" else null
+            !modelReadsImages()) "当前模型不支持图片，请切换模型或移除图片" else null
         if (error != null) { attachmentFailure(owner, error); return false }
         // Bound in-memory drafts across conversations as well as per-message limits.
         val otherBytes = attachmentDrafts.filterKeys { it != chat.conversation.id }.values.flatten().sumOf { it.size.toLong() }
@@ -322,10 +479,12 @@ class AgentViewModel(
         mutable.update { it.copy(chat = it.chat?.copy(attachments = combined, attachmentLoading = false, error = null)) }; saveDraft()
         return true
     }
+    private fun modelReadsImages() = state.value.choice.let { choice ->
+        state.value.agents.find { it.id == choice.agent }?.readsImages(choice.model) == true }
     fun removeAttachment(id: String) { mutable.update { it.copy(chat = it.chat?.copy(attachments = it.chat.attachments.filterNot { a -> a.id == id })) }; saveDraft() }
     private fun validAttachments(chat: ChatState): Boolean {
         if (chat.attachmentLoading) return false
-        if (chat.attachments.any { it.kind == AttachmentKind.IMAGE } && state.value.agents.find { it.id == state.value.choice.agent }?.supportsImages != true) {
+        if (chat.attachments.any { it.kind == AttachmentKind.IMAGE } && !modelReadsImages()) {
             attachmentFailure(attachmentScope, "当前模型不支持图片，请切换模型或移除图片"); return false
         }
         return true
@@ -343,7 +502,11 @@ class AgentViewModel(
         editChat(owner) { it.copy(error = null) }
         sessionJob = viewModelScope.launch { loadAndFollow(owner) }
     }
+    /** The app is on screen; an idle open chat watches the server only then. */
+    @Volatile private var inForeground = true
+    fun onBackground() { inForeground = false }
     fun onForeground() {
+        inForeground = true
         if (state.value.signInRequired) return
         if (state.value.claudeVisible && state.value.chat == null) {
             if (sessionJob?.isActive != true && state.value.claudePreview != null) refreshClaudePreview()
@@ -366,6 +529,9 @@ class AgentViewModel(
         refreshClaudeSessions()
     }
 
+    /** Load the PC session list before the Claude Code tab is first opened. */
+    fun preloadClaudeSessions() { if (state.value.claude.sessions.isEmpty()) refreshClaudeSessions() }
+
     fun refreshClaudeSessions(older: Boolean = false) {
         if (state.value.signInRequired) return
         if (claudeListJob?.isActive == true) return
@@ -375,6 +541,9 @@ class AgentViewModel(
         mutable.update { it.copy(claude = it.claude.copy(loading = true, error = null)) }
         claudeListJob = viewModelScope.launch {
             try {
+                if (!older && state.value.claude.sessions.isEmpty()) source.cachedClaudeSessions()?.let { saved ->
+                    if (owner == epoch) mutable.update { if (it.claude.sessions.isEmpty()) it.copy(claude = it.claude.copy(sessions = saved.sessions, nextCursor = saved.nextCursor)) else it }
+                }
                 val page = source.claudeSessions(cursor)
                 if (owner == epoch) mutable.update { it.copy(claude = ClaudeListState(
                     (if (older) it.claude.sessions + page.sessions else page.sessions).distinctBy { s -> s.id }, page.nextCursor)) }
@@ -393,7 +562,9 @@ class AgentViewModel(
         livePresentation.value = null
         val owner = ++generation
         sessionJob?.cancel()
-        mutable.update { it.copy(chat = null, claudeVisible = true, claudePreview = ClaudePreviewState(session)) }
+        val saved = claudeHistoryCache[session.id]
+        mutable.update { it.copy(chat = null, claudeVisible = true, claudePreview = ClaudePreviewState(session,
+            saved?.messages.orEmpty(), saved?.nextCursor, saved?.olderCount ?: 0)) }
         val source = repository
         sessionJob = viewModelScope.launch { loadClaudePreview(source, owner, session.id) }
     }
@@ -408,6 +579,7 @@ class AgentViewModel(
             editPreview(owner) { it.copy(session = result.session,
                 messages = if (cursor == null) result.messages else (result.messages + it.messages).distinctBy { m -> m.id },
                 nextCursor = result.nextCursor, olderCount = result.olderCount, loading = false, loadingOlder = false, error = null) }
+            if (cursor == null) state.value.claudePreview?.takeIf { owner == generation && it.session.id == id }?.let { claudeHistoryCache[id] = it }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) { editPreview(owner) { it.copy(loading = false, loadingOlder = false, error = problem(e)) } }
     }
@@ -447,16 +619,40 @@ class AgentViewModel(
         }
     }
 
+    /** True once the open, idle conversation changed on the server; false when the chat was left. Checks only
+     *  in the foreground, against the light list row (running, last update, message count). */
+    private suspend fun awaitServerActivity(owner: Long, id: String): Boolean {
+        var baseline: Conversation? = null
+        while (owned(owner)) {
+            delay(if (baseline == null) 1_000 else 6_000)
+            if (!inForeground) continue
+            val row = try { repository.conversations().firstOrNull { it.id == id } } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { null } ?: continue
+            val before = baseline
+            if (before == null) { baseline = row; if (row.running) return true; continue }
+            if (row.running || row.updatedAt != before.updatedAt || row.messageCount != before.messageCount) return true
+        }
+        return false
+    }
+
     private suspend fun loadAndFollow(owner: Long, applyChoice: Boolean = false, allowReconcile: Boolean = true) {
         try {
             val id = state.value.chat?.conversation?.id ?: return
             var first = true
+            var missingStreams = 0
+            var settleWaited = false
             while (owned(owner)) {
                 val detail = repository.detail(id)
                 if (!owned(owner)) return
-                val unresolved = unresolvedSends[id]
+                var unresolved = unresolvedSends[id]
                 val forkRun = forkRuns[id]
                 val priorChat = state.value.chat
+                // A send whose stream dropped is settled once the server has saved its message and
+                // nothing runs: a later (queued) turn may own the stream now, so following the old
+                // run would fail forever with "run changed" and keep the chat looking busy.
+                if (unresolved != null && !detail.conversation.running && unresolvedSettled(unresolved, detail.messages, priorChat?.beforeSendId ?: 0)) {
+                    unresolvedSends.remove(id); unresolved = null
+                }
                 val prior = priorChat?.live
                 // Attribute only a completed locally observed turn to its captured send model.
                 // The API does not persist models for all historical messages.
@@ -475,13 +671,16 @@ class AgentViewModel(
                     },
                         queued = detail.queued, queuePaused = detail.queuePaused,
                         olderCount = if (prefix.isEmpty()) detail.olderCount else old.olderCount,
-                        nextCursor = if (prefix.isEmpty()) detail.nextCursor else old.nextCursor, loading = false, error = null,
+                        nextCursor = if (prefix.isEmpty()) detail.nextCursor else old.nextCursor, loading = false,
+                        // A message given back to the box keeps its note until the user acts on it.
+                        error = old.error?.takeIf { it.code == "not_sent" },
                         live = (unresolved?.controlId ?: forkRun ?: detail.conversation.controlId?.takeIf { detail.conversation.running })?.let { run ->
                             prior?.takeIf { p -> p.runId == run && !p.done } ?: TurnState(id, run,
                                 startedAt = prior?.takeIf { p -> p.runId.isBlank() && !p.done }?.startedAt ?: monotonicMillis())
                         } ?: prior?.takeIf { detail.conversation.running && !it.done && it.runId.isBlank() },
                         connection = null, stopRequested = false, revealing = false)
                 }
+                cacheChat()
                 resolveParentTitle(owner)
                 if (applyChoice && first) {
                     val choice = detail.conversation.choice
@@ -494,7 +693,26 @@ class AgentViewModel(
                     val run = detail.conversation.controlId ?: unresolved?.controlId ?: forkRun
                     // An observed successor proves the old turn is no longer our active owner.
                     if (unresolved != null && run != unresolved.controlId) unresolvedSends.remove(id)
-                    follow(owner, id, run, previous = prior?.takeIf { it.runId == run && !it.done })
+                    try {
+                        follow(owner, id, run, previous = prior?.takeIf { it.runId == run && !it.done })
+                    } catch (e: ApiException) {
+                        if (e.status != 404 || e.problem.code !in setOf("no_active_stream", null)) throw e
+                        if (detail.conversation.running && ++missingStreams < 3) { delay(1000); continue }
+                        if (detail.conversation.running) throw e
+                        // A send whose connection broke mid-way may still be on its way in: hold it until the
+                        // server cannot still be taking it, so the user never sends it twice.
+                        if (unresolved != null && !settleWaited) {
+                            val age = System.currentTimeMillis() - (unresolvedAt[id] ?: 0L)
+                            if (age < SEND_SETTLE_MS) { settleWaited = true; delay(SEND_SETTLE_MS - age); continue }
+                        }
+                        // The server has no stream for this run and nothing runs: the turn ended unseen, or a
+                        // send never arrived. Stop waiting on it (the chat stayed "running" and refused new
+                        // messages until the app was killed) and give back a message the server never saved.
+                        unresolved?.let { lost -> if (!unresolvedSettled(lost, detail.messages, priorChat?.beforeSendId ?: 0)) restoreUnsent(owner, lost) }
+                        unresolvedSends.remove(id); forkRuns.remove(id)
+                        editChat(owner) { it.copy(live = null, connection = null) }
+                        continue
+                    }
                     if (!owned(owner)) return
                     unresolvedSends.remove(id)
                     forkRuns.remove(id)
@@ -502,7 +720,12 @@ class AgentViewModel(
                     delay(200)
                     continue
                 }
-                if (detail.queued.isEmpty() || detail.queuePaused) return
+                if (detail.queued.isEmpty() || detail.queuePaused) {
+                    // Idle and open: keep a light watch, so a turn the server starts on its own (a Grok Bot
+                    // reply, a follow-up queued elsewhere) shows up live instead of only after reopening.
+                    if (!watchIdleChats || !awaitServerActivity(owner, id)) return
+                    continue
+                }
                 delay(1000)
             }
         } catch (e: CancellationException) { throw e }
@@ -510,11 +733,31 @@ class AgentViewModel(
             if (allowReconcile && owned(owner)) {
                 editChat(owner) { it.copy(live = null) }
                 loadAndFollow(owner, allowReconcile = false)
-            } else editChat(owner) { it.copy(loading = false, error = problem(e)) }
+            } else {
+                // Reconciling failed too: stop following, so the chat is usable again instead of spinning.
+                state.value.chat?.conversation?.id?.let { unresolvedSends.remove(it) }
+                editChat(owner) { it.copy(loading = false, error = problem(e), live = null, connection = null) }
+            }
         }
         catch (e: Exception) {
             editChat(owner) { it.copy(loading = false, error = problem(e)) }
         }
+    }
+
+    /** A send the server never saved: its words and files go back in the box, with a plain note. */
+    private fun restoreUnsent(owner: Long, send: SendRequest) {
+        editChat(owner) { current -> current.copy(
+            draft = current.draft.ifEmpty { send.text },
+            attachments = current.attachments.ifEmpty { send.attachments },
+            messages = current.messages.filterNot { it.id == "pending-${send.controlId}" },
+            error = ClientError(NOT_SENT_MESSAGE, "not_sent", true)) }
+        saveDraft()
+    }
+
+    private fun unresolvedSettled(send: SendRequest, messages: List<ChatMessage>, beforeSendId: Long): Boolean {
+        val text = send.text.trim()
+        return messages.any { message -> message.role == "user" && (message.id.toLongOrNull() ?: 0) > beforeSendId &&
+            (text.isEmpty() || message.text.contains(text)) }
     }
 
     private suspend fun follow(owner: Long, id: String, run: String?, send: SendRequest? = null, previous: TurnState? = null) = coroutineScope {
@@ -571,6 +814,7 @@ class AgentViewModel(
         if (state.value.creating) return
         val chat = state.value.chat ?: return
         if (!chat.canSend || !chat.hasDraft || !validAttachments(chat)) return
+        if (!online()) { editChat(generation) { it.copy(error = ClientError(OFFLINE_MESSAGE, "offline", true)) }; return }
         val request = SendRequest(chat.conversation.id, chat.draft, state.value.choice, attachments = chat.attachments)
         attachmentScope = newControlId()
         val owner = ++generation
@@ -578,10 +822,11 @@ class AgentViewModel(
         val initial = TurnState(request.conversationId, request.controlId, startedAt = monotonicMillis())
         livePresentation.value = initial
         unresolvedSends[request.conversationId] = request
+        unresolvedAt[request.conversationId] = System.currentTimeMillis()
         drafts[request.conversationId] = ""
         attachmentDrafts.remove(request.conversationId)
         editChat(owner) { it.copy(draft = "", attachments = emptyList(), error = null, revealing = false, live = initial,
-            liveModel = request.choice.model, beforeSendId = it.messages.mapNotNull { message -> message.id.toLongOrNull() }.maxOrNull() ?: 0,
+            sends = it.sends + 1, liveModel = request.choice.model, beforeSendId = it.messages.mapNotNull { message -> message.id.toLongOrNull() }.maxOrNull() ?: 0,
             connection = Connection.CONNECTING, messages = it.messages + ChatMessage("pending-${request.controlId}", "user",
                 listOf(ChatBlock.Text(request.text)) + if (request.attachments.isNotEmpty()) listOf(ChatBlock.Media(request.attachments.map(Attachment::media))) else emptyList())) }
         sessionJob = viewModelScope.launch {
@@ -597,10 +842,12 @@ class AgentViewModel(
                 }
             }
             catch (e: Exception) {
-                // Explicit pre-stream 4xx rejection is safe to restore. Ambiguous failures stay locked.
-                val rejected = e is ApiException && e.directSendRejected && state.value.chat?.live?.lastSequence == 0L
+                // Explicit pre-stream 4xx rejection is safe to restore, and so is a failure before the request
+                // left the phone (no connection, no TLS): the server cannot have it. Ambiguous failures stay locked.
+                val neverSent = e.failedBeforeSending() && (state.value.chat?.live?.lastSequence ?: 0L) == 0L
+                val rejected = neverSent || (e is ApiException && e.directSendRejected && state.value.chat?.live?.lastSequence == 0L)
                 if (rejected) unresolvedSends.remove(request.conversationId)
-                editChat(owner) { current -> current.copy(error = problem(e),
+                editChat(owner) { current -> current.copy(error = if (neverSent) ClientError(NOT_SENT_MESSAGE, "not_sent", true) else problem(e),
                     draft = if (rejected && current.draft.isEmpty()) request.text else current.draft,
                     attachments = if (rejected && current.attachments.isEmpty()) request.attachments else current.attachments,
                     live = if (rejected) null else current.live,
@@ -771,6 +1018,94 @@ class AgentViewModel(
         }
     }
 
+    /** Fetches quick replies once per finished answer; failures just show none. */
+    fun loadSuggestions() {
+        val chat = state.value.chat ?: return
+        val last = chat.messages.lastOrNull() ?: return
+        if (chat.running || chat.live != null || last.role != "assistant" || chat.suggestionsFor == last.id) return
+        val owner = generation
+        val source = repository
+        editChat(owner) { it.copy(suggestionsFor = last.id, suggestions = emptyList()) }
+        viewModelScope.launch {
+            val (forId, items) = try { source.suggestions(chat.conversation.id) } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { return@launch }
+            editChat(owner) { if (it.suggestionsFor == last.id && (forId == null || forId == last.id)) it.copy(suggestions = items) else it }
+        }
+    }
+
+    /** A quick reply is sent as the next message. */
+    fun sendSuggestion(text: String) {
+        editChat(generation) { it.copy(draft = text, suggestions = emptyList()) }
+        send()
+    }
+
+    /** The user's pick for a question the agent asked; the card updates from the turn's answer event. */
+    fun answer(questionId: String, text: String) {
+        val chat = state.value.chat ?: return
+        val control = chat.controlId ?: return
+        if (chat.controlBusy) return
+        val owner = generation
+        val source = repository
+        editChat(owner) { it.copy(controlBusy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                val answered = source.answer(chat.conversation.id, control, questionId, text)
+                editChat(owner) { it.copy(controlBusy = false, error = if (answered) null else ClientError("这个问题已经结束了，可以直接发消息告诉它。", "question_closed")) }
+            } catch (e: Exception) { editChat(owner) { it.copy(controlBusy = false, error = problem(e)) } }
+        }
+    }
+
+    /** The latest output of a background task in the open conversation; null once the server no longer has it. */
+    suspend fun taskOutput(taskId: String): TaskOutput? {
+        val chat = state.value.chat ?: return null
+        return repository.taskOutput(chat.conversation.id, taskId)
+    }
+
+    /** A file the open conversation names, read from the computer for the file viewer. */
+    suspend fun readFile(path: String): FileContent {
+        val chat = state.value.chat ?: throw ApiException(404, ClientError("No chat is open.", "not_found", false))
+        return repository.readFile(chat.conversation.id, path)
+    }
+
+    /** Stops one background task, as in Claude Code's task list; its step updates from the turn's own events. */
+    fun stopTask(taskId: String) {
+        val chat = state.value.chat ?: return
+        val control = chat.controlId ?: return
+        if (!chat.running || chat.conversation.nativeControl) return
+        val owner = generation
+        val source = repository
+        viewModelScope.launch {
+            try {
+                if (!source.stopTask(chat.conversation.id, control, taskId))
+                    editChat(owner) { it.copy(error = ClientError("This background task has already ended.", "task_not_running", false)) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { editChat(owner) { it.copy(error = problem(e)) } }
+        }
+    }
+
+    /** Like Claude Code: a message sent while the agent works reaches it at its next step. */
+    fun steer() {
+        val chat = state.value.chat ?: return
+        val control = chat.controlId ?: return
+        if (!chat.running || !chat.hasDraft || chat.controlBusy || chat.conversation.nativeControl || !validAttachments(chat)) {
+            queue(); return
+        }
+        if (!online()) { editChat(generation) { it.copy(error = ClientError(OFFLINE_MESSAGE, "offline", true)) }; return }
+        val owner = generation
+        val source = repository
+        val text = chat.draft
+        val attachments = chat.attachments
+        editChat(owner) { it.copy(controlBusy = true, error = null, sends = it.sends + 1) }
+        viewModelScope.launch {
+            val steered = try { source.steer(chat.conversation.id, control, text, attachments) }
+                catch (e: Exception) { editChat(owner) { it.copy(controlBusy = false, error = problem(e)) }; return@launch }
+            editChat(owner) { it.copy(controlBusy = false, draft = if (steered && it.draft == text) "" else it.draft,
+                attachments = if (steered) it.attachments.filterNot { a -> attachments.any { sent -> sent.id == a.id } } else it.attachments) }
+            if (owned(owner)) saveDraft()
+            if (!steered && owned(owner)) queue()
+        }
+    }
+
     fun queue() {
         val chat = state.value.chat ?: return
         if (chat.controlBusy || chat.conversation.nativeControl) return
@@ -781,7 +1116,7 @@ class AgentViewModel(
         val owner = generation
         val source = repository
         unresolvedQueues[request.conversationId] = request
-        editChat(owner) { it.copy(pendingQueue = request, controlBusy = true, queueUncertain = false, error = null) }
+        editChat(owner) { it.copy(pendingQueue = request, controlBusy = true, queueUncertain = false, error = null, sends = it.sends + 1) }
         viewModelScope.launch {
             try {
                 source.queue(request)
@@ -794,6 +1129,14 @@ class AgentViewModel(
             } catch (e: Exception) {
                 val rejected = e is ApiException && e.status in 400..499
                 if (rejected) unresolvedQueues.remove(request.conversationId)
+                if (e is ApiException && e.problem.code == "conversation_idle" && owned(owner)) {
+                    // The chat only looked busy here (a turn that ended unseen): send it as a normal message.
+                    unresolvedSends.remove(request.conversationId)
+                    editChat(owner) { it.copy(controlBusy = false, queueUncertain = false, pendingQueue = null, live = null,
+                        connection = null, conversation = it.conversation.copy(active = false, starting = false)) }
+                    send()
+                    return@launch
+                }
                 editChat(owner) { it.copy(controlBusy = false, queueUncertain = !rejected,
                     pendingQueue = if (rejected) null else request, error = problem(e)) }
             }
@@ -827,7 +1170,10 @@ fun problem(e: Throwable): ClientError = when (e) {
     is StreamProtocolException -> ClientError(e.message ?: "Stream verification failed.", "stream_mismatch", false)
     is IOException -> ClientError("Connection interrupted. Reconnect to check server history; no work is automatically resent.", "connection_lost")
     else -> ClientError("Unable to complete this request. Check Settings and reload.")
-}
+}.also { Diagnostics.warn("ui", "error shown", "code" to it.code, "error" to Diagnostics.describe(e)) }
+
+/** How long a send whose connection broke may still be on its way to the server (admission takes seconds). */
+private const val SEND_SETTLE_MS = 60_000L
 
 /** Excludes per-token and per-frame content while retaining all actionable server truth. */
 internal fun screenSnapshot(state: ClientState): ClientState = state.copy(chat = state.chat?.let { chat ->

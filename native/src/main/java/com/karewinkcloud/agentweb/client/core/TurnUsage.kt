@@ -6,12 +6,15 @@ import kotlinx.serialization.json.*
 data class TurnUsage(
     val inputTokens: Long? = null, val outputTokens: Long? = null,
     val cacheReadInputTokens: Long? = null, val reasoningTokens: Long? = null,
-    val durationMs: Long? = null,
+    val durationMs: Long? = null, val cacheCreationInputTokens: Long? = null,
 ) {
+    /** Everything the model read: Claude reports cache reads/writes separately from input_tokens. */
+    val promptTokens: Long? get() = inputTokens?.let { it + (cacheReadInputTokens ?: 0) + (cacheCreationInputTokens ?: 0) }
+
     fun merge(newer: TurnUsage?) = if (newer == null) this else TurnUsage(
         newer.inputTokens ?: inputTokens, newer.outputTokens ?: outputTokens,
         newer.cacheReadInputTokens ?: cacheReadInputTokens, newer.reasoningTokens ?: reasoningTokens,
-        newer.durationMs ?: durationMs,
+        newer.durationMs ?: durationMs, newer.cacheCreationInputTokens ?: cacheCreationInputTokens,
     )
     companion object {
         fun from(j: JsonObject?): TurnUsage? {
@@ -19,7 +22,7 @@ data class TurnUsage(
             fun counter(key: String) = (j[key] as? JsonPrimitive)?.takeUnless { it.isString }
                 ?.longOrNull?.takeIf { it >= 0 }
             return TurnUsage(counter("input_tokens"), counter("output_tokens"), counter("cache_read_input_tokens"),
-                counter("reasoning_tokens"), counter("duration_ms")).takeUnless { it == TurnUsage() }
+                counter("reasoning_tokens"), counter("duration_ms"), counter("cache_creation_input_tokens")).takeUnless { it == TurnUsage() }
         }
     }
 }

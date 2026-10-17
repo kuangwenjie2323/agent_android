@@ -17,6 +17,25 @@ class TurnChromeTest {
         return FooterLabels(value("turn_input"), value("turn_output"), value("turn_steps"))
     }
 
+    @Test fun stylesAppendOnceAndInspirationsAreVaried() {
+        val anime = comfyStyles.first { it.key == "anime" }
+        assertEquals(anime.phrase, applyStyle("", anime))
+        assertEquals("a cat, ${anime.phrase}", applyStyle("a cat，", anime))
+        assertEquals("a cat, ${anime.phrase}", applyStyle("a cat, ${anime.phrase}", anime))
+        assertTrue(comfyInspirations.size >= 10 && comfyInspirations.toSet().size == comfyInspirations.size)
+    }
+    @Test fun sizeChipsAreShortAndUpscaledSizesAreGrouped() {
+        assertEquals("4K · 16:9", sizeChipLabel("16:9 4K · 3840×2160"))
+        assertEquals("1:1 · 1024", sizeChipLabel("1:1 · 1024×1024"))
+        assertEquals("9:16 · 1664", sizeChipLabel("9:16 · 928×1664"))
+        assertEquals("1024x1024", sizeChipLabel("1024x1024"))
+        assertTrue(sizeIsUpscaled("9:16 1080p · 1080×1920"))
+        assertFalse(sizeIsUpscaled("4:3 · 1472×1104"))
+    }
+    @Test fun composerModelChipListsOnlyNonDefaultSettings() {
+        assertEquals("DS V4.1 Flash", composerModelLabel("DS V4.1 Flash", null, null))
+        assertEquals("Opus 5.5 · 高 · 只读规划", composerModelLabel("Opus 5.5", "高", "只读规划"))
+    }
     @Test fun footerUsesRealChineseResourcesAndUsageDuration() {
         assertEquals("18s · 输入 19.5k · 输出 752 · 3 步", turnFooter(TurnUsage(inputTokens = 19524, outputTokens = 752, durationMs = 18000), 5000, 3, labels("zh")))
     }
@@ -25,6 +44,9 @@ class TurnChromeTest {
     }
     @Test fun missingAndNegativePartsAreOmitted() {
         assertEquals("", turnFooter(null, null, null, labels("en")))
+        // The share the prompt cache served, after the input it belongs to.
+        assertEquals("4:08 · 输入 777.7k · 缓存 99% · 输出 17k · 40 步", turnFooter(TurnUsage(inputTokens = 4286, outputTokens = 17000,
+            cacheReadInputTokens = 773376, durationMs = 248000), null, 40, labels("zh").copy(cached = "缓存 %1\$d%%")))
         assertEquals("", turnFooter(TurnUsage(), null, 0, labels("zh")))
         assertEquals("输出 0", turnFooter(TurnUsage(inputTokens = -1, outputTokens = 0), null, 0, labels("zh")))
         assertEquals("0s · Input 0", turnFooter(TurnUsage(inputTokens = 0, durationMs = 0), null, null, labels("en")))
@@ -49,6 +71,9 @@ class TurnChromeTest {
         assertEquals(WorkingStatus(WorkingPhase.TOOL, "read_file"), workingStatus(base.copy(blocks = listOf(thought, tool)), Connection.LIVE))
         assertEquals(WorkingPhase.THINKING, workingStatus(base.copy(blocks = listOf(tool.copy(status = StepStatus.COMPLETE))), Connection.LIVE)?.phase)
         assertEquals(WorkingPhase.WRITING, workingStatus(base.copy(blocks = listOf(ChatBlock.Text("Answer"))), Connection.LIVE)?.phase)
+        val question = ChatBlock.Question("q", "Which?", listOf("a", "b"))
+        assertEquals(WorkingPhase.CHOOSING, workingStatus(base.copy(blocks = listOf(tool, question)), Connection.LIVE)?.phase)
+        assertEquals(WorkingPhase.TOOL, workingStatus(base.copy(blocks = listOf(question.copy(answer = "a"), tool)), Connection.LIVE)?.phase)
         assertEquals(WorkingPhase.THINKING, workingStatus(base.copy(blocks = listOf(ChatBlock.Text("Before"), thought)), Connection.LIVE)?.phase)
     }
     @Test fun connectionAndTerminalTruthOverrideContent() {

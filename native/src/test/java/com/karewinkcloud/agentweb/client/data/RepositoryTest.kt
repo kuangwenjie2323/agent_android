@@ -56,6 +56,40 @@ class RepositoryTest {
         assertEquals(1, server.requestCount)
     }
 
+    @Test fun aFileIsReadWithWhatTheServerSaysAboutIt() = runBlocking {
+        server.enqueue(MockResponse().addHeader("Content-Type", "text/plain; charset=utf-8").addHeader("X-AgentWeb-Protocol-Version", "1.0")
+            .addHeader("AgentWeb-File-Kind", "text").addHeader("AgentWeb-File-Path", "/w/%E6%8A%A5%E5%91%8A%20v2.md")
+            .addHeader("AgentWeb-File-Size", "4096").addHeader("AgentWeb-File-Modified", "1792244969000")
+            .addHeader("AgentWeb-File-Truncated", "1").setBody("# 结果"))
+        val file = repo.readFile("c/1", "docs/报告 v2.md")
+        val sent = next()
+        assertEquals("/api/chat/conversations/c%2F1/file", sent.requestUrl!!.encodedPath)
+        assertEquals("docs/报告 v2.md", sent.requestUrl!!.queryParameter("path"))
+        assertEquals(listOf("/w/报告 v2.md", "text", "text/plain", "# 结果"), listOf(file.path, file.kind, file.mime, file.text))
+        assertEquals(Triple(4096L, 1792244969000L, true), Triple(file.size, file.modifiedAt, file.truncated))
+        assertEquals("报告 v2.md", file.name)
+    }
+    @Test fun aRefusedFileKeepsTheServersReason() = runBlocking {
+        server.enqueue(json("""{"error":"This file may hold passwords or keys, so it is not shown here.","code":"file_private","retryable":false}""", 403))
+        try { repo.readFile("c1", "/home/me/.env"); fail("Expected refusal") }
+        catch (e: ApiException) { assertEquals(403 to "file_private", e.status to e.problem.code) }
+    }
+
+    @Test fun onlyReadsToAnHttpsOriginShareAConnection() {
+        assertTrue(reusesConnection("https://agent.example.com", read = true))
+        assertFalse(reusesConnection("https://agent.example.com", read = false))
+        // The AgentWeb server itself (LAN, adb reverse) speaks HTTP/1.0 and closes every connection.
+        assertFalse(reusesConnection("http://192.168.1.5:18791", read = true))
+    }
+    @Test fun aPlainHttpOriginStillClosesEveryConnection() = runBlocking {
+        server.enqueue(json("""{"messageId":null,"suggestions":[]}"""))
+        repo.suggestions("c1")
+        assertEquals("close", next().getHeader("Connection"))
+        server.enqueue(json("""{"steered":true}""", 202))
+        assertTrue(repo.steer("c1", control, "hi"))
+        assertEquals("close", next().getHeader("Connection"))
+    }
+
     @Test fun claudeSessionPagingEncodesOpaqueCursorAndProjectPath() = runBlocking {
         server.enqueue(json("""{"sessions":[{"id":"session","project":{"cwd":"/synthetic/项目","name":"项目"},"title":"你好","state":"maybe_active","provider":"deepseek","model":"deepseek-v4-pro"}],"nextCursor":"next"}"""))
         val page = repo.claudeSessions("page+one=", "/synthetic/项目")
@@ -113,7 +147,7 @@ class RepositoryTest {
         val req = next()
         assertEquals("1.0", req.getHeader("AgentWeb-Protocol-Min"))
         assertEquals("1.0", req.getHeader("AgentWeb-Protocol-Max"))
-        assertEquals("android/0.5.0", req.getHeader("AgentWeb-Client"))
+        assertEquals("android/${com.karewinkcloud.agentweb.client.BuildConfig.VERSION_NAME}", req.getHeader("AgentWeb-Client"))
         assertEquals("Bearer test-token", req.getHeader("Authorization"))
         assertEquals("close", req.getHeader("Connection"))
     }
@@ -267,7 +301,7 @@ class RepositoryTest {
     @Test fun historyPagingUsesFortyAndExclusiveCursor() = runBlocking {
         server.enqueue(json("""{"conversation":{"id":"conversation","title":"Chat","agent":"agent","model":"model","pinned":1,"active":false,"project":{"name":"Project"}},"messages":[],"queued":[],"queuePaused":true,"messagePage":{"olderCount":41,"nextCursor":"123","limit":40,"compactionCount":0}}"""))
         val detail = repo.detail("conversation", "456")
-        assertEquals("/api/chat/conversations/conversation?messageLimit=40&messageCursor=456", next().path)
+        assertEquals("/api/chat/conversations/conversation?compact=1&messageLimit=40&messageCursor=456", next().path)
         assertTrue(detail.conversation.pinned)
         assertTrue(detail.queuePaused)
         assertEquals("Project", detail.conversation.project)
