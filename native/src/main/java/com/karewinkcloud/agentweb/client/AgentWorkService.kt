@@ -19,6 +19,7 @@ import com.karewinkcloud.agentweb.client.core.ChatBlock
 import com.karewinkcloud.agentweb.client.core.ComfyJob
 import com.karewinkcloud.agentweb.client.core.ComfyJobPhase
 import com.karewinkcloud.agentweb.client.core.phase
+import com.karewinkcloud.agentweb.client.core.StreamProtocolException
 import com.karewinkcloud.agentweb.client.data.Diagnostics
 import com.karewinkcloud.agentweb.client.data.HttpAgentRepository
 import com.karewinkcloud.agentweb.client.data.HttpComfyRepository
@@ -84,8 +85,11 @@ class AgentWorkService : Service() {
     private suspend fun followTurn(repository: HttpAgentRepository, turn: Turn) {
         val asked = mutableSetOf<String>()
         var sawRunning = false
-        try {
-            repository.follow(turn.conversationId, turn.controlId).collect { snapshot ->
+        // The run the app knew can be gone by now (a queued message started the next one): then the chat's
+        // current run is followed instead, once, so its question and its end still reach the user.
+        var run: String? = turn.controlId
+        while (true) try {
+            repository.follow(turn.conversationId, run).collect { snapshot ->
                 if (!snapshot.turn.done) sawRunning = true
                 val questions = snapshot.turn.blocks.filterIsInstance<ChatBlock.Question>()
                 questions.filter { it.answer == null && asked.add(it.id) }.forEach { notifyQuestion(turn, it) }
@@ -98,11 +102,18 @@ class AgentWorkService : Service() {
                     throw CancellationException("turn finished")
                 }
             }
+            break
+        } catch (e: StreamProtocolException) {
+            if (run == null) { Diagnostics.warn("work", "turn follow failed", "conversation" to turn.conversationId,
+                "error" to Diagnostics.describe(e)); break }
+            Diagnostics.event("work", "following the chat's current run", "conversation" to turn.conversationId)
+            run = null
         } catch (e: Exception) {
             if (e !is CancellationException) Diagnostics.warn("work", "turn follow failed", "conversation" to turn.conversationId,
                 "error" to Diagnostics.describe(e))
+            break
         }
-        finally { turnsLeft--; refreshOngoing() }
+        turnsLeft--; refreshOngoing()
     }
 
     private suspend fun followCreations(studio: HttpComfyRepository, creations: List<Creation>) {
