@@ -7,12 +7,20 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.unit.sp
+import com.karewinkcloud.agentweb.client.R
 
 private val LocalWorkingAccent = staticCompositionLocalOf { Color(0xffd97757) }
+
+/**
+ * Code, commands, diffs and files: a monospace font of our own (DejaVu Sans Mono). Some phones' font themes
+ * replace the system "monospace" with a proportional font, which left code and its indentation misaligned.
+ */
+val CodeFont = FontFamily(Font(R.font.code_mono))
 val workingAccent: Color @Composable get() = LocalWorkingAccent.current
 
 // Apple Music-like palette: plain white (black) canvas, grey secondary text, hairline

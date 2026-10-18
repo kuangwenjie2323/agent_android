@@ -618,4 +618,9 @@
     <string name="files_empty">这个对话还没有改动过文件。</string>
     <string name="files_created">新建</string>
     <string name="files_deleted">已删除</string>
+    <string name="file_changes">本对话的改动</string>
+    <string name="file_next_change">下一处</string>
+    <plurals name="file_lines_removed">
+        <item quantity="other">删除了 %1$d 行</item>
+    </plurals>
 </resources>

@@ -391,6 +391,34 @@ class AgentViewModelTest {
         assertTrue(vm.state.value.chat!!.queuePaused)
         assertEquals("queue_head_changed", vm.state.value.chat!!.error!!.code)
     }
+    @Test fun aResumedQueueRunsAtOnceTalksToItsNewTurnAndASecondTapIsNoError() = modelTest {
+        val next = "b".repeat(32)
+        val gate = CompletableDeferred<Unit>()
+        var resumed = false
+        repo.getDetail = { id, _ ->
+            if (!resumed) detail(id).copy(queuePaused = true, queued = listOf(QueueItem(CONTROL, "later")))
+            else { gate.await(); detail(id, running = true).let { d -> d.copy(conversation = d.conversation.copy(controlId = next)) } }
+        }
+        repo.resumeCall = { _, _ -> resumed = true
+            buildJsonObject { put("started", true); put("active", true); put("starting", false); put("controlId", next) } }
+        vm.open(conversation("one")); runCurrent()
+        vm.resumeQueue(); runCurrent()
+        // The reload is still on its way: the turn already shows, the button is gone, a message goes to the new turn.
+        val chat = vm.state.value.chat!!
+        assertFalse(chat.queuePaused)
+        assertTrue(chat.queued.isEmpty())
+        assertTrue(chat.running)
+        assertEquals(next, chat.controlId)
+        vm.draft("also this"); vm.steer(); runCurrent()
+        assertEquals(listOf(next), repo.steerControls)
+        gate.complete(Unit); runCurrent()
+        // A second resume (another tap, another device) finds the queue already running: nothing to report.
+        repo.resumeCall = { _, _ -> throw ApiException(409, ClientError("queue is empty", "queue_empty", false)) }
+        repo.getDetail = { id, _ -> detail(id).copy(queuePaused = true, queued = listOf(QueueItem(CONTROL, "later"))) }
+        vm.reload(); runCurrent()
+        vm.resumeQueue(); runCurrent()
+        assertNull(vm.state.value.chat!!.error)
+    }
     @Test fun stopUsesObservedOwnerAndNeverStopsOnNavigation() = modelTest {
         repo.getDetail = { id, _ -> detail(id, running = true) }
         vm.open(conversation("one", true)); runCurrent()
@@ -787,7 +815,8 @@ class AgentViewModelTest {
         override suspend fun suggestions(conversationId: String) = "a1" to suggestionItems
         val steerCalls = mutableListOf<String>()
         var steerAccepts = true
-        override suspend fun steer(conversationId: String, controlId: String, message: String, attachments: List<Attachment>): Boolean { steerCalls += message; steerAttachments += attachments; return steerAccepts }
+        val steerControls = mutableListOf<String>()
+        override suspend fun steer(conversationId: String, controlId: String, message: String, attachments: List<Attachment>): Boolean { steerCalls += message; steerControls += controlId; steerAttachments += attachments; return steerAccepts }
         val steerAttachments = mutableListOf<Attachment>()
         override suspend fun resume(conversationId: String, headId: String): JsonObject {
             resumeCalls += conversationId to headId

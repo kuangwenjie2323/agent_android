@@ -32,7 +32,9 @@ data class ChatState(
     val side: List<SideQuestion> = emptyList(),
 ) {
     val running get() = conversation.running || live?.done == false
-    val controlId get() = live?.runId?.takeIf(String::isNotBlank) ?: conversation.controlId
+    /** The turn that takes stop, mid-turn messages and answers: never one that has finished (a resumed queue's
+     *  new turn replaced it, and a message sent to the old one was refused). */
+    val controlId get() = live?.takeUnless { it.done }?.runId?.takeIf(String::isNotBlank) ?: conversation.controlId
     val hasDraft get() = draft.isNotBlank() || attachments.isNotEmpty()
     val canFork get() = !loading && !loadingOlder && !running && !revealing && !controlBusy && queued.isEmpty() &&
         pendingQueue == null && !attachmentLoading && !conversation.nativeControl
@@ -1152,13 +1154,25 @@ class AgentViewModel(
         editChat(owner) { it.copy(controlBusy = true, error = null) }
         viewModelScope.launch {
             try {
-                source.resume(chat.conversation.id, head.id)
-                if (owned(owner)) { editChat(owner) { it.copy(controlBusy = false) }; reload() }
-            } catch (e: Exception) {
-                // Refresh truth after every outcome; never optimistically unpause or repeat the mutation.
+                val started = source.resume(chat.conversation.id, head.id)
+                // The server started the head as a turn: show that at once, with the turn it named, so the
+                // button does not invite a second tap (that one found the queue empty and showed an error)
+                // while the reload is on its way.
                 if (owned(owner)) {
+                    editChat(owner) { it.copy(controlBusy = false, queuePaused = false, queued = it.queued.filterNot { q -> q.id == head.id },
+                        conversation = it.conversation.copy(active = started.boolean("active") ?: it.conversation.active,
+                            starting = started.boolean("starting") ?: true,
+                            controlId = started.string("controlId") ?: it.conversation.controlId)) }
+                    reload()
+                }
+            } catch (e: Exception) {
+                // Refresh truth after every outcome; never optimistically unpause or repeat the mutation. A queue
+                // already running or emptied (another tap, another device) is not an error to show.
+                if (owned(owner)) {
+                    val settled = e is ApiException && e.problem.code in setOf("queue_empty", "queue_not_paused")
                     runCatching { syncControls(owner, chat.conversation.id) }
-                    editChat(owner) { it.copy(controlBusy = false, error = problem(e)) }
+                    editChat(owner) { it.copy(controlBusy = false, error = if (settled) null else problem(e)) }
+                    if (settled) reload()
                 }
             }
         }

@@ -323,7 +323,7 @@ private fun ToolDetail(tool: ChatBlock.Tool, kind: StepKind, error: Boolean, tas
     val command = remember(tool) { stepInput(tool) ?: toolCommand(tool) }
     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(12.dp)) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text((if (kind == StepKind.COMMAND) "$ " else "") + command, fontFamily = FontFamily.Monospace,
+            Text((if (kind == StepKind.COMMAND) "$ " else "") + command, fontFamily = CodeFont,
                 fontSize = 12.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurface)
             if (task == null) tool.result?.trim()?.takeIf { it.isNotEmpty() }?.let { result -> OutputPreview(result, error) }
             // The file a step read opens in full, at the part it read.
@@ -346,7 +346,7 @@ private fun OutputPreview(result: String, error: Boolean) {
     val lines = remember(result) { result.lines() }
     val shown = if (all) lines.take(400) else lines.take(OUTPUT_PREVIEW_LINES)
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-    Text(shown.joinToString("\n"), Modifier.horizontalScroll(rememberScrollState()), fontFamily = FontFamily.Monospace,
+    Text(shown.joinToString("\n"), Modifier.horizontalScroll(rememberScrollState()), fontFamily = CodeFont,
         fontSize = 12.sp, lineHeight = 18.sp, softWrap = false,
         color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
     if (lines.size > shown.size) Text(tr(S.step_more_lines, lines.size - shown.size),
@@ -358,9 +358,9 @@ private fun OutputPreview(result: String, error: Boolean) {
 internal fun DiffStats(added: Int, removed: Int) {
     val dark = MaterialTheme.colorScheme.surface.luminance() < .5f
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (added > 0) Text("+$added", style = MaterialTheme.typography.labelMedium, fontFamily = FontFamily.Monospace,
+        if (added > 0) Text("+$added", style = MaterialTheme.typography.labelMedium, fontFamily = CodeFont,
             color = if (dark) Color(0xff4cd964) else Color(0xff1f8a3b))
-        if (removed > 0) Text("−$removed", style = MaterialTheme.typography.labelMedium, fontFamily = FontFamily.Monospace,
+        if (removed > 0) Text("−$removed", style = MaterialTheme.typography.labelMedium, fontFamily = CodeFont,
             color = MaterialTheme.colorScheme.error)
     }
 }
@@ -373,7 +373,7 @@ internal fun FileDiffView(diff: FileDiff) {
     val rows = if (all) diff.rows else diff.rows.take(DIFF_PREVIEW_ROWS)
     val numbered = diff.rows.any { it.oldLine != null || it.newLine != null }
     val width = (diff.rows.maxOfOrNull { maxOf(it.oldLine ?: 0, it.newLine ?: 0) } ?: 0).toString().length.coerceAtLeast(2)
-    val mono = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 18.sp)
+    val mono = TextStyle(fontFamily = CodeFont, fontSize = 12.sp, lineHeight = 18.sp)
     val openFile = LocalOpenFile.current?.takeIf { diff.path.isNotBlank() && diff.rows.isNotEmpty() }
     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(12.dp)) {
         Column(Modifier.fillMaxWidth()) {
@@ -383,7 +383,7 @@ internal fun FileDiffView(diff: FileDiff) {
                 } else Modifier).heightIn(min = 40.dp).padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Text(fileName(diff.path).ifBlank { tr(S.step_edit) }, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.labelLarge, fontFamily = FontFamily.Monospace)
+                    style = MaterialTheme.typography.labelLarge, fontFamily = CodeFont)
                 DiffStats(diff.added, diff.removed)
                 if (openFile != null) { Spacer(Modifier.width(8.dp)); OpenFileLabel() }
             }

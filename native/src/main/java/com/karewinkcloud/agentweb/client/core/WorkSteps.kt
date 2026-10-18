@@ -147,6 +147,30 @@ fun stepDiffs(tool: ChatBlock.Tool): List<FileDiff> {
     }
 }
 
+/**
+ * The edits a step made to [path], one hunk per edit (or per @@ section of a patch), unshortened, for marking
+ * them on the file. A file written whole has none: every line of it would be new.
+ */
+fun editHunks(tool: ChatBlock.Tool, path: String): List<List<DiffRow>> {
+    val input = input(tool) ?: return emptyList()
+    val own = input.text("file_path", "path")
+    fun sections(diff: String) = unifiedRows(diff).fold(mutableListOf<MutableList<DiffRow>>()) { all, row ->
+        if (row.kind == DiffKind.HEADER || all.isEmpty()) all += mutableListOf<DiffRow>()
+        if (row.kind != DiffKind.HEADER) all.last() += row
+        all
+    }.filter { it.isNotEmpty() }
+    tool.diff?.takeIf { it.isNotBlank() && own == path }?.let { return sections(it) }
+    return when (tool.name.lowercase()) {
+        "edit", "str_replace_editor" -> if (own != path) emptyList() else listOf(
+            lineDiff(input.string("old_string") ?: input.string("old_str") ?: return emptyList(),
+                input.string("new_string") ?: input.string("new_str") ?: return emptyList()))
+        "multiedit" -> if (own != path) emptyList() else (input["edits"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+            .map { edit -> lineDiff(edit.string("old_string").orEmpty(), edit.string("new_string").orEmpty()) }
+        "file_change" -> changeTriples(input).filter { it.first == path && it.second == "update" }.flatMap { sections(it.third) }
+        else -> emptyList()
+    }
+}
+
 private val HUNK = Regex("""^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@""")
 
 /** A unified diff, numbered from its hunk headers; file headers are dropped. */

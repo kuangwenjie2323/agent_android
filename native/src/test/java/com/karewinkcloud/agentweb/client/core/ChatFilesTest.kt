@@ -74,6 +74,31 @@ class ChatFilesTest {
         assertEquals("---\nno end", markdownForPreview("---\nno end"))
     }
 
+    @Test fun theChatsEditsAreFoundInTheFileAsItIsNow() {
+        val edit = tool("Edit", """{"file_path":"/w/a.py","old_string":"x = 1\ny = 2\nz = 3","new_string":"x = 1\ny = 20\nz = 3"}""")
+        val multi = tool("MultiEdit", """{"file_path":"/w/a.py","edits":[{"old_string":"def f():\n    pass","new_string":"def f():\n    return 1\n    # done"},{"old_string":"old\nline","new_string":"line"}]}""")
+        val other = tool("Edit", """{"file_path":"/w/b.py","old_string":"a","new_string":"b"}""")
+        val written = tool("Write", """{"file_path":"/w/a.py","content":"whole"}""")
+        val hunks = chatEdits(listOf(listOf(edit, other, written), listOf(multi)), "/w/a.py")
+        assertEquals(3, hunks.size)  // one per edit; the other file and a whole-file write add none
+        val file = listOf("import os", "x = 1", "y = 20", "z = 3", "", "def f():", "    return 1", "    # done", "line", "end")
+        val changes = fileChanges(file, hunks)
+        assertEquals(setOf(3, 7, 8), changes.added)
+        assertEquals(mapOf(3 to 1, 7 to 1, 9 to 1), changes.removedBefore)
+        assertEquals(listOf(3, 7, 9), changes.starts)
+        // An edit the file no longer holds (changed again since) is left out.
+        assertFalse(fileChanges(listOf("x = 1", "y = 3", "z = 3"), hunks.take(1)).any)
+    }
+
+    @Test fun aPatchIsMarkedSectionBySection() {
+        val patch = tool("file_change", """{"changes":[{"path":"/w/c.kt","kind":{"type":"update"},"diff":"@@ -1,2 +1,2 @@\n a\n-b\n+B\n@@ -10,2 +10,3 @@\n x\n+y\n z"}]}""")
+        val sections = chatEdits(listOf(listOf(patch)), "/w/c.kt")
+        assertEquals(2, sections.size)
+        val changes = fileChanges(listOf("a", "B", "q", "x", "y", "z"), sections)
+        assertEquals(setOf(2, 5), changes.added)
+        assertEquals(mapOf(2 to 1), changes.removedBefore)
+    }
+
     @Test fun howAFileIsShown() {
         fun shown(name: String, kind: String = "text") = filePreview(FileContent("/w/$name", kind, "text/plain", ByteArray(0), 0, 0, false))
         assertEquals(FilePreview.MARKDOWN, shown("README.md"))

@@ -39,6 +39,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -59,6 +60,7 @@ import com.karewinkcloud.agentweb.client.R
 import com.karewinkcloud.agentweb.client.R.string as S
 import com.karewinkcloud.agentweb.client.core.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -83,7 +85,8 @@ private const val ROW_CHARS = 2000
 private const val MAX_RENDERED_MARKDOWN = 300_000
 
 @Composable
-internal fun FileViewer(ref: FileRef, load: suspend (String) -> FileContent, onClose: () -> Unit) {
+internal fun FileViewer(ref: FileRef, load: suspend (String) -> FileContent,
+    editsFor: (String) -> List<List<DiffRow>> = { emptyList() }, onClose: () -> Unit) {
     var revision by remember(ref) { mutableIntStateOf(0) }
     var content by remember(ref) { mutableStateOf<FileContent?>(null) }
     var failure by remember(ref) { mutableStateOf<Throwable?>(null) }
@@ -95,10 +98,13 @@ internal fun FileViewer(ref: FileRef, load: suspend (String) -> FileContent, onC
         catch (e: Exception) { failure = e }
         busy = false
     }
+    // The chat's edits to this file, by the path it was opened with or the one the computer resolved it to.
+    val asked = remember(ref) { editsFor(ref.path) }
+    val edits = remember(asked, content?.path) { asked.ifEmpty { content?.path?.let(editsFor).orEmpty() } }
     val preview = content?.let(::filePreview)
     val rendered = preview == FilePreview.WEB || (preview == FilePreview.MARKDOWN && (content?.bytes?.size ?: 0) <= MAX_RENDERED_MARKDOWN)
-    // A file opened at a line shows that line in its source.
-    var source by rememberSaveable(ref) { mutableStateOf(ref.line != null) }
+    // A file opened at a line shows that line in its source, and one this chat edited shows its edits there.
+    var source by rememberSaveable(ref) { mutableStateOf(ref.line != null || asked.isNotEmpty()) }
     Dialog(onClose, DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
@@ -124,7 +130,7 @@ internal fun FileViewer(ref: FileRef, load: suspend (String) -> FileContent, onC
                                         }
                                     }
                                     rendered && !source -> WebPreview(shown)
-                                    else -> TextLines(shown, ref.line)
+                                    else -> TextLines(shown, ref.line, edits)
                                 }
                             }
                         }
@@ -227,8 +233,11 @@ private fun handOver(context: Context, content: FileContent, action: String): Bo
     context.startActivity((if (action == Intent.ACTION_SEND) Intent.createChooser(intent, null) else intent).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }.isSuccess
 
-/** One row of the text view: a line's number (none for the rest of a long line) and its text. */
-private data class TextRow(val number: Int?, val text: String)
+/**
+ * One row of the text view: a line's number (none for the rest of a long line), its text, whether this chat
+ * added or rewrote it, and for a note row, how many lines the chat removed there.
+ */
+private data class TextRow(val number: Int?, val text: String, val added: Boolean = false, val removed: Int = 0)
 
 @OptIn(ExperimentalSerializationApi::class)
 private val prettyJson = Json { prettyPrint = true; prettyPrintIndent = "  " }
@@ -240,37 +249,80 @@ internal fun readableText(name: String, text: String): String {
     return text
 }
 
-private fun textRows(text: String): List<TextRow> = buildList {
-    text.removeSuffix("\n").split('\n').forEachIndexed { index, raw ->
-        val line = raw.removeSuffix("\r").replace("\t", "    ")
-        if (line.length <= ROW_CHARS) add(TextRow(index + 1, line))
-        else line.chunked(ROW_CHARS).forEachIndexed { piece, part -> add(TextRow(if (piece == 0) index + 1 else null, part)) }
+private fun textRows(lines: List<String>, changes: FileChanges): List<TextRow> = buildList {
+    lines.forEachIndexed { index, raw ->
+        val number = index + 1
+        changes.removedBefore[number]?.let { add(TextRow(null, "", removed = it)) }
+        val line = raw.replace("\t", "    ")
+        val added = number in changes.added
+        if (line.length <= ROW_CHARS) add(TextRow(number, line, added))
+        else line.chunked(ROW_CHARS).forEachIndexed { piece, part -> add(TextRow(if (piece == 0) number else null, part, added)) }
     }
+    changes.removedBefore[lines.size + 1]?.let { add(TextRow(null, "", removed = it)) }
 }
 
-/** The file's text with line numbers; the line it was opened at is marked and in view. */
+/**
+ * The file's text with line numbers; the line it was opened at is marked and in view. What this chat changed
+ * shows as a diff does: added and rewritten lines green, a red note where lines were removed, with a bar to
+ * step from one change to the next.
+ */
 @Composable
-private fun TextLines(content: FileContent, line: Int?) {
-    val rows = remember(content) { textRows(readableText(content.name, content.text)) }
+private fun TextLines(content: FileContent, line: Int?, edits: List<List<DiffRow>>) {
+    val lines = remember(content) { readableText(content.name, content.text).removeSuffix("\n").split('\n').map { it.removeSuffix("\r") } }
+    val changes = remember(lines, edits) { fileChanges(lines, edits) }
+    val rows = remember(lines, changes) { textRows(lines, changes) }
+    // Where each change starts, in row order: the "next change" stops.
+    val stops = remember(rows) { rows.indices.filter { i -> rows[i].removed > 0 || (rows[i].added && (i == 0 || !rows[i - 1].added)) } }
     val target = line?.let { wanted -> rows.indexOfFirst { it.number == wanted } }?.takeIf { it >= 0 }
-    val list = rememberLazyListState(initialFirstVisibleItemIndex = ((target ?: 0) - 3).coerceAtLeast(0))
+    val list = rememberLazyListState(initialFirstVisibleItemIndex = ((target ?: stops.firstOrNull() ?: 0) - 3).coerceAtLeast(0))
+    val scope = rememberCoroutineScope()
     val width = (rows.lastOrNull { it.number != null }?.number ?: 1).toString().length
-    val mono = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 18.sp)
+    val mono = TextStyle(fontFamily = CodeFont, fontSize = 12.sp, lineHeight = 18.sp)
     val mark = MaterialTheme.colorScheme.primary.copy(alpha = .14f)
+    val dark = MaterialTheme.colorScheme.surface.luminance() < .5f
+    val addedBackground = if (dark) Color(0xff16341f) else Color(0xffe6f6e9)
+    val addedInk = if (dark) Color(0xff7ee29a) else Color(0xff1f6b34)
+    val removedBackground = if (dark) Color(0xff3c1618) else Color(0xffffebe9)
+    val removedInk = if (dark) Color(0xffff9c97) else Color(0xffb3261e)
     if (rows.size == 1 && rows[0].text.isEmpty()) {
         Text(tr(S.file_empty), Modifier.padding(24.dp), style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
         return
     }
-    SelectionContainer {
-        LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(vertical = 8.dp)) {
-            itemsIndexed(rows) { index, row ->
-                Row(Modifier.fillMaxWidth().background(if (index == target) mark else Color.Transparent).padding(end = 12.dp)) {
-                    DisableSelection {
-                        Text((row.number?.toString() ?: "").padStart(width), Modifier.padding(start = 10.dp, end = 10.dp), style = mono,
-                            color = MaterialTheme.colorScheme.outline)
+    Column(Modifier.fillMaxSize()) {
+        if (changes.any) Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(tr(S.file_changes), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(8.dp))
+            DiffStats(changes.added.size, changes.removedBefore.values.sum())
+            Spacer(Modifier.weight(1f))
+            TextButton({
+                val from = list.firstVisibleItemIndex + 3
+                val next = stops.firstOrNull { it > from } ?: stops.first()
+                scope.launch { list.animateScrollToItem((next - 3).coerceAtLeast(0)) }
+            }, Modifier.heightIn(min = 40.dp)) { Text(tr(S.file_next_change)) }
+        }
+        SelectionContainer(Modifier.weight(1f)) {
+            LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(vertical = 8.dp)) {
+                itemsIndexed(rows) { index, row ->
+                    val background = when {
+                        index == target -> mark
+                        row.removed > 0 -> removedBackground
+                        row.added -> addedBackground
+                        else -> Color.Transparent
                     }
-                    Text(row.text.ifEmpty { " " }, Modifier.weight(1f), style = mono, color = MaterialTheme.colorScheme.onSurface)
+                    Row(Modifier.fillMaxWidth().background(background).padding(end = 12.dp)) {
+                        DisableSelection {
+                            Text((row.number?.toString() ?: "").padStart(width), Modifier.padding(start = 10.dp, end = 4.dp), style = mono,
+                                color = if (row.added) addedInk else MaterialTheme.colorScheme.outline)
+                            Text(when { row.removed > 0 -> "−"; row.added -> "+"; else -> " " }, Modifier.width(12.dp), style = mono,
+                                color = if (row.removed > 0) removedInk else addedInk)
+                        }
+                        if (row.removed > 0) DisableSelection {
+                            Text(countLabel(R.plurals.file_lines_removed, row.removed), Modifier.weight(1f), style = mono, color = removedInk)
+                        } else Text(row.text.ifEmpty { " " }, Modifier.weight(1f), style = mono,
+                            color = if (row.added) addedInk else MaterialTheme.colorScheme.onSurface)
+                    }
                 }
             }
         }
@@ -449,7 +501,7 @@ internal fun ChatFilesSheet(files: List<ChangedFile>, onOpen: (String) -> Unit, 
                                 }
                                 Column(Modifier.weight(1f)) {
                                     Text(fileName(file.path), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                        style = MaterialTheme.typography.bodyLarge, fontFamily = FontFamily.Monospace)
+                                        style = MaterialTheme.typography.bodyLarge, fontFamily = CodeFont)
                                     Text(file.path.substringBeforeLast('/', ""), maxLines = 1, overflow = TextOverflow.MiddleEllipsis,
                                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }

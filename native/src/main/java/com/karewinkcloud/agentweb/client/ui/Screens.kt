@@ -298,7 +298,11 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
         if (outline) OutlineSheet(chat.messages, chat.nextCursor != null, vm::loadOlder, { id -> outline = false; jumpTo = id }) { outline = false }
         if (sideChat) SideChatSheet(chat.side, vm::askSide, { failed -> vm.dropSide(failed); vm.askSide(failed.question) }) { sideChat = false }
         if (filesSheet) ChatFilesHost(vm, chat, { path -> openedFile = FileRef(path) }) { filesSheet = false }
-        openedFile?.let { ref -> FileViewer(ref, vm::readFile) { openedFile = null } }
+        openedFile?.let { ref ->
+            FileViewer(ref, vm::readFile, { path -> chatEdits(chat.messages.map { it.blocks } + listOfNotNull(vm.liveTurn.value?.blocks), path) }) {
+                openedFile = null
+            }
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f)) { Toolbar(conversationTitle(chat.conversation), chat.conversation.project ?: tr(S.default_project), vm::back) }
             if (!chat.conversation.nativeControl) ActionIcon(R.drawable.aw_side_chat, tr(S.side_title)) { sideChat = true }

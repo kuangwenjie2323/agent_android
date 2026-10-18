@@ -622,4 +622,10 @@
     <string name="files_empty">No files have been changed in this chat yet.</string>
     <string name="files_created">New</string>
     <string name="files_deleted">Deleted</string>
+    <string name="file_changes">Changed in this chat</string>
+    <string name="file_next_change">Next change</string>
+    <plurals name="file_lines_removed">
+        <item quantity="one">%1$d line removed</item>
+        <item quantity="other">%1$d lines removed</item>
+    </plurals>
 </resources>

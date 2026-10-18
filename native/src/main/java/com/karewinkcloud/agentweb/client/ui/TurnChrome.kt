@@ -142,7 +142,7 @@ internal fun WorkingIndicator(turn: TurnState, connection: Connection?) {
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(elapsedLabel(now - (turn.startedAt ?: origin)), Modifier.width(timerWidth), textAlign = TextAlign.End,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall, fontFamily = CodeFont,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

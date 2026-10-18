@@ -133,7 +133,7 @@ internal fun TaskOutputView(taskId: String, running: Boolean, modifier: Modifier
                     if (output?.truncated == true) Text(tr(S.task_output_truncated), style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     SelectionContainer {
-                        Text(text, Modifier.heightIn(max = maxHeight).verticalScroll(scroll), fontFamily = FontFamily.Monospace,
+                        Text(text, Modifier.heightIn(max = maxHeight).verticalScroll(scroll), fontFamily = CodeFont,
                             fontSize = 12.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurface)
                     }
                 }
@@ -233,7 +233,7 @@ internal fun BackgroundTasksSheet(tasks: List<Pair<ChatBlock.Tool, BackgroundTas
                             RowDivider()
                             Text((if (task.agent) "" else "$ ") + command, Modifier.fillMaxWidth().heightIn(max = 120.dp)
                                 .verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp),
-                                fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 18.sp,
+                                fontFamily = CodeFont, fontSize = 12.sp, lineHeight = 18.sp,
                                 color = MaterialTheme.colorScheme.onSurface)
                         }
                     }

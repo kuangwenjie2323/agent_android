@@ -131,7 +131,7 @@ private fun inlineText(node: Node): AnnotatedString {
                     is SoftLineBreak -> append("\n")
                     is HardLineBreak -> append("\n")
                     is Code -> {
-                        val code = SpanStyle(fontFamily = FontFamily.Monospace, background = colors.surfaceContainerLow)
+                        val code = SpanStyle(fontFamily = CodeFont, background = colors.surfaceContainerLow)
                         val file = if (openFile != null) namedFile(current.literal) else null
                         if (file != null) fileLink(file, code.copy(color = colors.primary)) { append(current.literal) }
                         else withStyle(code) { append(current.literal) }
@@ -173,7 +173,7 @@ internal fun CodeBlock(code: String, language: String) {
             SelectionContainer {
                 if (language.lowercase() in setOf("diff", "patch")) DiffView(code)
                 else Text(highlightedCode(code, language), Modifier.horizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
-                    fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 21.sp)
+                    fontFamily = CodeFont, fontSize = 13.sp, lineHeight = 21.sp)
             }
         }
     }
@@ -203,10 +203,10 @@ internal fun DiffView(diff: String) {
             val background = when(line.kind) { DiffKind.ADD -> if (dark) Color(0xff213c28) else Color(0xffe0f0de)
                 DiffKind.REMOVE -> MaterialTheme.colorScheme.errorContainer; else -> Color.Transparent }
             Row(Modifier.fillMaxWidth().background(background).padding(horizontal = 8.dp, vertical = 1.dp)) {
-                Text(line.gutter, Modifier.width(24.dp), fontFamily = FontFamily.Monospace,
+                Text(line.gutter, Modifier.width(24.dp), fontFamily = CodeFont,
                     color = when (line.kind) { DiffKind.ADD -> if (dark) Color(0xffb2e3b3) else Color(0xff285b30)
                         DiffKind.REMOVE -> MaterialTheme.colorScheme.onErrorContainer; else -> MaterialTheme.colorScheme.onSurfaceVariant })
-                Text(line.text, fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 21.sp,
+                Text(line.text, fontFamily = CodeFont, fontSize = 13.sp, lineHeight = 21.sp,
                     color = if (line.kind == DiffKind.REMOVE) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface)
             }
         }
