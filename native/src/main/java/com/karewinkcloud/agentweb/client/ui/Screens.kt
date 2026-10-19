@@ -18,6 +18,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
+import kotlinx.coroutines.launch
+import androidx.compose.ui.res.painterResource
+import androidx.compose.foundation.background
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -174,6 +177,20 @@ internal fun Toolbar(title: String, subtitle: String? = null, onBack: (() -> Uni
 @Composable
 private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel) {
     var memoryOpen by remember { mutableStateOf(false) }
+    // A swipe right archives at once (with an undo bar), a swipe left asks before deleting, as in a mail app.
+    var deleting by remember { mutableStateOf<Conversation?>(null) }
+    deleting?.let { chat -> DeleteChatDialog({ deleting = null; vm.deleteConversation(chat.id) }) { deleting = null } }
+    val undoBar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val archivedNote = tr(S.chat_archived); val undoLabel = tr(S.undo)
+    val archive: (Conversation) -> Unit = { chat ->
+        vm.setArchived(chat.id, true)
+        scope.launch {
+            undoBar.currentSnackbarData?.dismiss()
+            if (undoBar.showSnackbar(archivedNote, undoLabel, duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed)
+                vm.setArchived(chat.id, false)
+        }
+    }
     if (memoryOpen) MemorySheet(vm) { memoryOpen = false }
     val focusManager = LocalFocusManager.current
     val list = rememberLazyListState()
@@ -240,8 +257,10 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
                         ConversationGroup.YESTERDAY -> S.yesterday; else -> S.older
                     })) }
                     itemsIndexed(section.conversations, key = { _, it -> it.id }) { index, conversation ->
-                        ConversationRow(conversation, state.agents, rowPosition(index, section.conversations.size),
-                            unread = conversation.unread(seen[conversation.id])) { vm.open(conversation) }
+                        SwipeRow(archived = false, canArchive = !conversation.running, { archive(conversation) }, { deleting = conversation }) {
+                            ConversationRow(conversation, state.agents, rowPosition(index, section.conversations.size),
+                                unread = conversation.unread(seen[conversation.id])) { vm.open(conversation) }
+                        }
                     }
                 }
                 // Chats left idle are archived, not lost: one row at the end opens them.
@@ -253,6 +272,7 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
                 }
             }
         }
+        SnackbarHost(undoBar, Modifier.align(Alignment.BottomCenter))
     }
 }
 
@@ -263,6 +283,8 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
 @Composable
 private fun ColumnScope.ArchiveList(state: ClientState, vm: AgentViewModel) {
     val rows = state.archivedList.orEmpty()
+    var deleting by remember { mutableStateOf<Conversation?>(null) }
+    deleting?.let { chat -> DeleteChatDialog({ deleting = null; vm.deleteConversation(chat.id) }) { deleting = null } }
     Toolbar(tr(S.archive_title), onBack = vm::closeArchive)
     LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(start = PageGutter, end = PageGutter, bottom = 24.dp)) {
         item("days") {
@@ -287,9 +309,56 @@ private fun ColumnScope.ArchiveList(state: ClientState, vm: AgentViewModel) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         itemsIndexed(rows, key = { _, it -> it.id }) { index, conversation ->
-            ConversationRow(conversation, state.agents, rowPosition(index, rows.size)) { vm.open(conversation) }
+            SwipeRow(archived = true, canArchive = true, { vm.setArchived(conversation.id, false) }, { deleting = conversation }) {
+                ConversationRow(conversation, state.agents, rowPosition(index, rows.size)) { vm.open(conversation) }
+            }
         }
     }
+}
+
+@Composable
+private fun DeleteChatDialog(onDelete: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(onDismissRequest = onDismiss,
+        title = { Text(tr(S.delete_chat_title)) }, text = { Text(tr(S.delete_chat_body)) },
+        confirmButton = { TextButton(onDelete, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+            Text(tr(S.delete)) } },
+        dismissButton = { TextButton(onDismiss) { Text(tr(S.cancel)) } })
+}
+
+/**
+ * A list row that swipes: right archives (in the archive: moves the chat back), left asks to delete. The row
+ * slides back once the swipe is taken; the list then lets an archived or deleted chat go. Screen readers get the
+ * same two actions.
+ */
+@Composable
+private fun SwipeRow(archived: Boolean, canArchive: Boolean, onArchive: () -> Unit, onDelete: () -> Unit, row: @Composable () -> Unit) {
+    val swipe = rememberSwipeToDismissBoxState(positionalThreshold = { it * .35f })
+    LaunchedEffect(swipe.currentValue) {
+        when (swipe.currentValue) {
+            SwipeToDismissBoxValue.StartToEnd -> { onArchive(); swipe.reset() }
+            SwipeToDismissBoxValue.EndToStart -> { onDelete(); swipe.reset() }
+            SwipeToDismissBoxValue.Settled -> Unit
+        }
+    }
+    val archiveLabel = tr(if (archived) S.swipe_restore else S.swipe_archive)
+    val deleteLabel = tr(S.swipe_delete)
+    SwipeToDismissBox(swipe, enableDismissFromStartToEnd = canArchive,
+        modifier = Modifier.semantics { customActions = listOfNotNull(
+            if (canArchive) CustomAccessibilityAction(archiveLabel) { onArchive(); true } else null,
+            CustomAccessibilityAction(deleteLabel) { onDelete(); true }) },
+        backgroundContent = {
+            val direction = swipe.dismissDirection
+            val toArchive = direction == SwipeToDismissBoxValue.StartToEnd
+            if (direction == SwipeToDismissBoxValue.Settled) return@SwipeToDismissBox
+            Row(Modifier.fillMaxSize().background(if (toArchive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                .padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = if (toArchive) Arrangement.Start else Arrangement.End) {
+                val ink = if (toArchive) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onError
+                Icon(painterResource(if (toArchive) R.drawable.aw_queue else R.drawable.aw_delete), null, tint = ink)
+                Spacer(Modifier.width(8.dp))
+                Text(if (toArchive) archiveLabel else deleteLabel, color = ink, style = MaterialTheme.typography.labelLarge)
+            }
+        }) { row() }
 }
 
 @Composable
@@ -348,11 +417,7 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
     val openFile: (FileRef) -> Unit = remember(chat.conversation.id) { { ref -> openedFile = ref } }
     val changedAny = remember(chat.messages) { changedFiles(chat.messages.map { it.blocks }).isNotEmpty() }
     var confirmDelete by remember(chat.conversation.id) { mutableStateOf(false) }
-    if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false },
-        title = { Text(tr(S.delete_chat_title)) }, text = { Text(tr(S.delete_chat_body)) },
-        confirmButton = { TextButton({ confirmDelete = false; vm.deleteConversation(chat.conversation.id) },
-            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text(tr(S.delete)) } },
-        dismissButton = { TextButton({ confirmDelete = false }) { Text(tr(S.cancel)) } })
+    if (confirmDelete) DeleteChatDialog({ confirmDelete = false; vm.deleteConversation(chat.conversation.id) }) { confirmDelete = false }
     CompositionLocalProvider(LocalOpenFile provides openFile) {
         if (outline) OutlineSheet(chat.messages, chat.nextCursor != null, vm::loadOlder, { id -> outline = false; jumpTo = id }) { outline = false }
         if (sideChat) SideChatSheet(chat.side, vm::askSide, { failed -> vm.dropSide(failed); vm.askSide(failed.question) }) { sideChat = false }

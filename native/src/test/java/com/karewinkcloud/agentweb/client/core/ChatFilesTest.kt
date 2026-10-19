@@ -84,7 +84,8 @@ class ChatFilesTest {
         val file = listOf("import os", "x = 1", "y = 20", "z = 3", "", "def f():", "    return 1", "    # done", "line", "end")
         val changes = fileChanges(file, hunks)
         assertEquals(setOf(3, 7, 8), changes.added)
-        assertEquals(mapOf(3 to 1, 7 to 1, 9 to 1), changes.removedBefore)
+        assertEquals(mapOf(3 to listOf("y = 2"), 7 to listOf("    pass"), 9 to listOf("old")), changes.removedBefore)
+        assertEquals(3, changes.removedCount)
         assertEquals(listOf(3, 7, 9), changes.starts)
         // An edit the file no longer holds (changed again since) is left out.
         assertFalse(fileChanges(listOf("x = 1", "y = 3", "z = 3"), hunks.take(1)).any)
@@ -96,7 +97,7 @@ class ChatFilesTest {
         assertEquals(2, sections.size)
         val changes = fileChanges(listOf("a", "B", "q", "x", "y", "z"), sections)
         assertEquals(setOf(2, 5), changes.added)
-        assertEquals(mapOf(2 to 1), changes.removedBefore)
+        assertEquals(mapOf(2 to listOf("b")), changes.removedBefore)
     }
 
     @Test fun howAFileIsShown() {

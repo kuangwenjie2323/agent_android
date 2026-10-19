@@ -622,9 +622,6 @@
     <string name="files_deleted">已删除</string>
     <string name="file_changes">本对话的改动</string>
     <string name="file_next_change">下一处</string>
-    <plurals name="file_lines_removed">
-        <item quantity="other">删除了 %1$d 行</item>
-    </plurals>
     <string name="delete_chat">删除对话</string>
     <string name="delete_chat_title">删除这个对话？</string>
     <string name="delete_chat_body">对话记录会从服务器上删除，删除后无法恢复。正在进行的回复会先停下。</string>
@@ -633,6 +630,11 @@
     <string name="unpin_chat">取消置顶</string>
     <string name="archive_chat">归档对话</string>
     <string name="unarchive_chat">移回列表</string>
+    <string name="chat_archived">已归档</string>
+    <string name="undo">撤销</string>
+    <string name="swipe_archive">归档</string>
+    <string name="swipe_restore">移回列表</string>
+    <string name="swipe_delete">删除</string>
     <string name="archived_chats">已归档的对话</string>
     <string name="archive_title">已归档</string>
     <string name="archive_auto">自动归档长时间不用的对话</string>

@@ -626,10 +626,6 @@
     <string name="files_deleted">Deleted</string>
     <string name="file_changes">Changed in this chat</string>
     <string name="file_next_change">Next change</string>
-    <plurals name="file_lines_removed">
-        <item quantity="one">%1$d line removed</item>
-        <item quantity="other">%1$d lines removed</item>
-    </plurals>
     <string name="delete_chat">Delete chat</string>
     <string name="delete_chat_title">Delete this chat?</string>
     <string name="delete_chat_body">Its messages are deleted from the server and cannot be brought back. A reply still running is stopped first.</string>
@@ -638,6 +634,11 @@
     <string name="unpin_chat">Unpin chat</string>
     <string name="archive_chat">Archive chat</string>
     <string name="unarchive_chat">Move back to the list</string>
+    <string name="chat_archived">Chat archived</string>
+    <string name="undo">Undo</string>
+    <string name="swipe_archive">Archive</string>
+    <string name="swipe_restore">Move back</string>
+    <string name="swipe_delete">Delete</string>
     <string name="archived_chats">Archived chats</string>
     <string name="archive_title">Archived</string>
     <string name="archive_auto">Archive chats left idle</string>

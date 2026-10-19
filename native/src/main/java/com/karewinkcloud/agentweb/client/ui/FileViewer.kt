@@ -237,7 +237,9 @@ private fun handOver(context: Context, content: FileContent, action: String): Bo
  * One row of the text view: a line's number (none for the rest of a long line), its text, whether this chat
  * added or rewrote it, and for a note row, how many lines the chat removed there.
  */
-private data class TextRow(val number: Int?, val text: String, val added: Boolean = false, val removed: Int = 0)
+private data class TextRow(val number: Int?, val text: String, val added: Boolean = false, val removed: Boolean = false) {
+    val changed get() = added || removed
+}
 
 @OptIn(ExperimentalSerializationApi::class)
 private val prettyJson = Json { prettyPrint = true; prettyPrintIndent = "  " }
@@ -250,21 +252,24 @@ internal fun readableText(name: String, text: String): String {
 }
 
 private fun textRows(lines: List<String>, changes: FileChanges): List<TextRow> = buildList {
+    fun line(number: Int?, raw: String, added: Boolean = false, removed: Boolean = false) {
+        val text = raw.replace("\t", "    ")
+        if (text.length <= ROW_CHARS) add(TextRow(number, text, added, removed))
+        else text.chunked(ROW_CHARS).forEachIndexed { piece, part -> add(TextRow(if (piece == 0) number else null, part, added, removed)) }
+    }
+    // Removed lines have no number in the file as it is now; they show where they were, as they read.
     lines.forEachIndexed { index, raw ->
         val number = index + 1
-        changes.removedBefore[number]?.let { add(TextRow(null, "", removed = it)) }
-        val line = raw.replace("\t", "    ")
-        val added = number in changes.added
-        if (line.length <= ROW_CHARS) add(TextRow(number, line, added))
-        else line.chunked(ROW_CHARS).forEachIndexed { piece, part -> add(TextRow(if (piece == 0) number else null, part, added)) }
+        changes.removedBefore[number]?.forEach { line(null, it, removed = true) }
+        line(number, raw, added = number in changes.added)
     }
-    changes.removedBefore[lines.size + 1]?.let { add(TextRow(null, "", removed = it)) }
+    changes.removedBefore[lines.size + 1]?.forEach { line(null, it, removed = true) }
 }
 
 /**
  * The file's text with line numbers; the line it was opened at is marked and in view. What this chat changed
- * shows as a diff does: added and rewritten lines green, a red note where lines were removed, with a bar to
- * step from one change to the next.
+ * shows as a diff does: added and rewritten lines green, removed lines red where they were, with a bar to step
+ * from one change to the next.
  */
 @Composable
 private fun TextLines(content: FileContent, line: Int?, edits: List<List<DiffRow>>) {
@@ -272,7 +277,7 @@ private fun TextLines(content: FileContent, line: Int?, edits: List<List<DiffRow
     val changes = remember(lines, edits) { fileChanges(lines, edits) }
     val rows = remember(lines, changes) { textRows(lines, changes) }
     // Where each change starts, in row order: the "next change" stops.
-    val stops = remember(rows) { rows.indices.filter { i -> rows[i].removed > 0 || (rows[i].added && (i == 0 || !rows[i - 1].added)) } }
+    val stops = remember(rows) { rows.indices.filter { i -> rows[i].changed && (i == 0 || !rows[i - 1].changed) } }
     val target = line?.let { wanted -> rows.indexOfFirst { it.number == wanted } }?.takeIf { it >= 0 }
     val list = rememberLazyListState(initialFirstVisibleItemIndex = ((target ?: stops.firstOrNull() ?: 0) - 3).coerceAtLeast(0))
     val scope = rememberCoroutineScope()
@@ -294,7 +299,7 @@ private fun TextLines(content: FileContent, line: Int?, edits: List<List<DiffRow
             .padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(tr(S.file_changes), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.width(8.dp))
-            DiffStats(changes.added.size, changes.removedBefore.values.sum())
+            DiffStats(changes.added.size, changes.removedCount)
             Spacer(Modifier.weight(1f))
             TextButton({
                 val from = list.firstVisibleItemIndex + 3
@@ -307,7 +312,7 @@ private fun TextLines(content: FileContent, line: Int?, edits: List<List<DiffRow
                 itemsIndexed(rows) { index, row ->
                     val background = when {
                         index == target -> mark
-                        row.removed > 0 -> removedBackground
+                        row.removed -> removedBackground
                         row.added -> addedBackground
                         else -> Color.Transparent
                     }
@@ -315,13 +320,11 @@ private fun TextLines(content: FileContent, line: Int?, edits: List<List<DiffRow
                         DisableSelection {
                             Text((row.number?.toString() ?: "").padStart(width), Modifier.padding(start = 10.dp, end = 4.dp), style = mono,
                                 color = if (row.added) addedInk else MaterialTheme.colorScheme.outline)
-                            Text(when { row.removed > 0 -> "−"; row.added -> "+"; else -> " " }, Modifier.width(12.dp), style = mono,
-                                color = if (row.removed > 0) removedInk else addedInk)
+                            Text(when { row.removed -> "−"; row.added -> "+"; else -> " " }, Modifier.width(12.dp), style = mono,
+                                color = if (row.removed) removedInk else addedInk)
                         }
-                        if (row.removed > 0) DisableSelection {
-                            Text(countLabel(R.plurals.file_lines_removed, row.removed), Modifier.weight(1f), style = mono, color = removedInk)
-                        } else Text(row.text.ifEmpty { " " }, Modifier.weight(1f), style = mono,
-                            color = if (row.added) addedInk else MaterialTheme.colorScheme.onSurface)
+                        Text(row.text.ifEmpty { " " }, Modifier.weight(1f), style = mono, color = when {
+                            row.removed -> removedInk; row.added -> addedInk; else -> MaterialTheme.colorScheme.onSurface })
                     }
                 }
             }

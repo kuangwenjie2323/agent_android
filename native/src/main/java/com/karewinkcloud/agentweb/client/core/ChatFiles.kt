@@ -118,10 +118,11 @@ fun stepFileRef(tool: ChatBlock.Tool): FileRef? {
     return FileRef(path, line)
 }
 
-/** What a chat changed in a file, placed on the file as it is now: the lines it added or rewrote, and how
- *  many lines it removed just before a line (1-based; one past the last line for the end). */
-data class FileChanges(val added: Set<Int> = emptySet(), val removedBefore: Map<Int, Int> = emptyMap()) {
+/** What a chat changed in a file, placed on the file as it is now: the lines it added or rewrote, and the lines
+ *  it removed just before a line (1-based; one past the last line for the end), as they read before. */
+data class FileChanges(val added: Set<Int> = emptySet(), val removedBefore: Map<Int, List<String>> = emptyMap()) {
     val any get() = added.isNotEmpty() || removedBefore.isNotEmpty()
+    val removedCount get() = removedBefore.values.sumOf { it.size }
     /** First lines of each change, in order: where "next change" goes. */
     val starts: List<Int> get() = (added.filter { it - 1 !in added } + removedBefore.keys).distinct().sorted()
 }
@@ -136,22 +137,22 @@ fun chatEdits(turns: List<List<ChatBlock>>, path: String): List<List<DiffRow>> =
  */
 fun fileChanges(lines: List<String>, hunks: List<List<DiffRow>>): FileChanges {
     val text = lines.map(String::trimEnd)
-    val added = mutableSetOf<Int>(); val removed = mutableMapOf<Int, Int>()
+    val added = mutableSetOf<Int>(); val removed = mutableMapOf<Int, List<String>>()
     for (hunk in hunks) {
         val kept = hunk.filter { it.kind == DiffKind.CONTEXT || it.kind == DiffKind.ADD }.map { it.text.trimEnd() }
         if (kept.none(String::isNotBlank) || hunk.none { it.kind != DiffKind.CONTEXT }) continue
         val start = (0..text.size - kept.size).firstOrNull { at -> kept.indices.all { text[at + it] == kept[it] } } ?: continue
-        var line = start + 1; var pending = 0
+        var line = start + 1; val pending = mutableListOf<String>()
         for (row in hunk) when (row.kind) {
-            DiffKind.REMOVE -> pending++
+            DiffKind.REMOVE -> pending += row.text
             DiffKind.ADD, DiffKind.CONTEXT -> {
-                if (pending > 0) { removed[line] = (removed[line] ?: 0) + pending; pending = 0 }
+                if (pending.isNotEmpty()) { removed[line] = removed[line].orEmpty() + pending; pending.clear() }
                 if (row.kind == DiffKind.ADD) added += line
                 line++
             }
             DiffKind.HEADER -> Unit
         }
-        if (pending > 0) removed[line] = (removed[line] ?: 0) + pending
+        if (pending.isNotEmpty()) removed[line] = removed[line].orEmpty() + pending
     }
     return FileChanges(added, removed)
 }
