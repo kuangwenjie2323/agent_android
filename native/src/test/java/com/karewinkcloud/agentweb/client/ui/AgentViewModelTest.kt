@@ -478,6 +478,20 @@ class AgentViewModelTest {
         assertEquals(0, vm.state.value.archivedCount)
         assertEquals("busy", vm.state.value.error!!.code)
     }
+    @Test fun anUndoNeverOvertakesTheArchiveItUndoes() = modelTest {
+        runCurrent()  // the first list read, from start-up
+        repo.list = listOf(conversation("one"), conversation("two"))
+        vm.refresh(); runCurrent()
+        val slow = CompletableDeferred<Unit>()
+        repo.slowChange = slow
+        vm.setArchived("one", true); runCurrent()  // still on its way to the server
+        vm.setArchived("one", false); runCurrent()
+        assertTrue(vm.state.value.conversations.any { it.id == "one" })
+        slow.complete(Unit); runCurrent()
+        assertEquals(listOf(Triple("one", null, true), Triple("one", null, false)), repo.changes)
+        assertEquals(setOf("one", "two"), vm.state.value.conversations.map { it.id }.toSet())
+        assertEquals(0, vm.state.value.archivedCount)
+    }
     @Test fun aChatDeletedFromTheArchiveLeavesItAndItsCount() = modelTest {
         runCurrent()  // the first list read, from start-up
         repo.list = listOf(conversation("one"))
@@ -919,7 +933,10 @@ class AgentViewModelTest {
         override suspend fun archiveInfo() = ArchiveInfo(14, listOf(0, 7, 14, 30), archivedRows.size)
         override suspend fun archivedConversations() = archivedRows
         var refuseChanges = false
+        /** Holds the next change in flight (a slow connection) until completed. */
+        var slowChange: CompletableDeferred<Unit>? = null
         override suspend fun updateConversation(id: String, pinned: Boolean?, archived: Boolean?) {
+            slowChange?.let { gate -> slowChange = null; gate.await() }
             if (refuseChanges) throw ApiException(503, ClientError("server busy", "busy", true))
             changes += Triple(id, pinned, archived)
             if (archived == true) { archivedRows = archivedRows + list.filter { it.id == id }; list = list.filterNot { it.id == id } }

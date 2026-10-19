@@ -187,7 +187,7 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
         vm.setArchived(chat.id, true)
         scope.launch {
             undoBar.currentSnackbarData?.dismiss()
-            if (undoBar.showSnackbar(archivedNote, undoLabel, duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed)
+            if (undoBar.showSnackbar(archivedNote, undoLabel, duration = SnackbarDuration.Long) == SnackbarResult.ActionPerformed)
                 vm.setArchived(chat.id, false)
         }
     }
@@ -350,11 +350,13 @@ private fun SwipeRow(archived: Boolean, canArchive: Boolean, onArchive: () -> Un
             val direction = swipe.dismissDirection
             val toArchive = direction == SwipeToDismissBoxValue.StartToEnd
             if (direction == SwipeToDismissBoxValue.Settled) return@SwipeToDismissBox
-            Row(Modifier.fillMaxSize().background(if (toArchive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+            // Archive is blue whatever the theme's accent, so it never reads as the red of delete.
+            Row(Modifier.fillMaxSize().background(if (toArchive) Color(0xff0a84ff) else MaterialTheme.colorScheme.error)
                 .padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = if (toArchive) Arrangement.Start else Arrangement.End) {
-                val ink = if (toArchive) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onError
-                Icon(painterResource(if (toArchive) R.drawable.aw_queue else R.drawable.aw_delete), null, tint = ink)
+                val ink = if (toArchive) Color.White else MaterialTheme.colorScheme.onError
+                Icon(painterResource(when { !toArchive -> R.drawable.aw_delete; archived -> R.drawable.aw_unarchive; else -> R.drawable.aw_archive }),
+                    null, tint = ink)
                 Spacer(Modifier.width(8.dp))
                 Text(if (toArchive) archiveLabel else deleteLabel, color = ink, style = MaterialTheme.typography.labelLarge)
             }

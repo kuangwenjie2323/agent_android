@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.karewinkcloud.agentweb.client.core.*
 import com.karewinkcloud.agentweb.client.data.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import java.io.IOException
@@ -125,8 +126,11 @@ class AgentViewModel(
     private val chatCache = java.util.concurrent.ConcurrentHashMap<String, CachedChat>()
     /** Chats archived from the list this session, so an undo can put one back before the list is read again. */
     private val recentlyArchived = mutableMapOf<String, Conversation>()
-    /** Pins and archive moves sent but not yet confirmed: chat id to (pinned, archived). */
-    private val pendingChanges = java.util.concurrent.ConcurrentHashMap<String, Pair<Boolean?, Boolean?>>()
+    /** Pins and archive moves sent but not yet confirmed, by chat id: the latest one for each chat. */
+    private val pendingChanges = java.util.concurrent.ConcurrentHashMap<String, PendingChange>()
+    private class PendingChange(val pinned: Boolean?, val archived: Boolean?)
+    /** Changes reach the server in the order they were made: an undo never overtakes the archive it undoes. */
+    private val changeOrder = kotlinx.coroutines.sync.Mutex()
     // Read-only PC session history from this app run, shown at once while it refreshes.
     private val claudeHistoryCache = java.util.concurrent.ConcurrentHashMap<String, ClaudePreviewState>()
     private var prefetchJob: Job? = null
@@ -466,7 +470,7 @@ class AgentViewModel(
     private fun loadArchive() {
         val source = repository
         viewModelScope.launch {
-            val rows = try { source.archivedConversations().filterNot { pendingChanges[it.id]?.second == false } }
+            val rows = try { source.archivedConversations().filterNot { pendingChanges[it.id]?.archived == false } }
                 catch (e: CancellationException) { throw e }
                 catch (e: Exception) { mutable.update { it.copy(archivedLoading = false, error = problem(e)) }; return@launch }
             mutable.update { it.copy(archivedList = if (it.archivedList != null) rows else null, archivedLoading = false,
@@ -483,18 +487,19 @@ class AgentViewModel(
     private fun changeConversation(id: String, pinned: Boolean? = null, archived: Boolean? = null) {
         val source = repository
         val wasOpen = state.value.chat?.conversation?.id == id
-        pendingChanges[id] = pinned to archived
+        val change = PendingChange(pinned, archived)
+        pendingChanges[id] = change
         moveLocally(id, pinned, archived)
         if (archived == true && wasOpen) back()
         viewModelScope.launch {
             try {
-                source.updateConversation(id, pinned, archived)
+                changeOrder.withLock { source.updateConversation(id, pinned, archived) }
                 listJob?.join()  // a list read that crossed the change ends with the change laid over it
-                pendingChanges.remove(id)
+                pendingChanges.remove(id, change)
                 refresh()
-            } catch (e: CancellationException) { pendingChanges.remove(id); throw e }
+            } catch (e: CancellationException) { pendingChanges.remove(id, change); throw e }
             catch (e: Exception) {
-                pendingChanges.remove(id)
+                pendingChanges.remove(id, change)
                 moveLocally(id, pinned?.not(), archived?.not())
                 mutable.update { s -> s.chat?.takeIf { it.conversation.id == id }?.let { chat -> s.copy(chat = chat.copy(error = problem(e))) }
                     ?: s.copy(error = problem(e)) }
@@ -505,9 +510,9 @@ class AgentViewModel(
     /** A list read laid under the pins and archive moves the server has not confirmed yet. */
     private fun withPending(rows: List<Conversation>, shown: List<Conversation>): List<Conversation> {
         if (pendingChanges.isEmpty()) return rows
-        val kept = rows.filterNot { pendingChanges[it.id]?.second == true }
-            .map { row -> pendingChanges[row.id]?.first?.let { row.copy(pinned = it) } ?: row }
-        return kept + shown.filter { pendingChanges[it.id]?.second == false && kept.none { row -> row.id == it.id } }
+        val kept = rows.filterNot { pendingChanges[it.id]?.archived == true }
+            .map { row -> pendingChanges[row.id]?.pinned?.let { row.copy(pinned = it) } ?: row }
+        return kept + shown.filter { pendingChanges[it.id]?.archived == false && kept.none { row -> row.id == it.id } }
     }
 
     /** Moves a chat between the list and the archive, and pins it, in what the screens show. */
