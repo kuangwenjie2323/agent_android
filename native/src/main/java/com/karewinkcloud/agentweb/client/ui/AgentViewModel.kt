@@ -60,6 +60,8 @@ data class ClientState(
      *  and the archive's rows while it is open (null when closed). */
     val archivedCount: Int = 0, val archiveDays: Int = 14, val archiveChoices: List<Int> = listOf(0, 7, 14, 30),
     val archivedList: List<Conversation>? = null, val archivedLoading: Boolean = false,
+    /** Chats whose words match the search (the server's search, archived chats too) and whether it is still looking. */
+    val contentHits: List<ChatHit> = emptyList(), val contentSearching: Boolean = false,
 ) {
     val sections get() = conversationSections(conversations, search, showEmpty)
 }
@@ -110,6 +112,7 @@ class AgentViewModel(
     private var claudeListJob: Job? = null
     private var authJob: Job? = null
     private var previewsJob: Job? = null
+    private var contentSearch: Job? = null
     private val previews = mutableMapOf<String, Conversation>()
     private val messageUsage = mutableMapOf<String, TurnUsage>()
     private val lineages = mutableMapOf<String, ConversationLineage>()
@@ -255,7 +258,23 @@ class AgentViewModel(
         }
     }
 
-    fun search(value: String) { mutable.update { it.copy(search = value) }; loadPreviews() }
+    /**
+     * Filters the list by title at once and, from two characters on, also asks the server which chats' words match
+     * (after a short pause in typing, so each keystroke is not a request), as Claude's search of past chats does.
+     */
+    fun search(value: String) {
+        mutable.update { it.copy(search = value) }; loadPreviews()
+        contentSearch?.cancel()
+        val words = value.trim()
+        if (words.length < 2) { mutable.update { it.copy(contentHits = emptyList(), contentSearching = false) }; return }
+        val source = repository
+        contentSearch = viewModelScope.launch {
+            delay(350)
+            mutable.update { it.copy(contentSearching = true) }
+            val hits = try { source.searchChats(words) } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+            mutable.update { s -> if (s.search.trim() != words) s else s.copy(contentHits = hits ?: s.contentHits, contentSearching = false) }
+        }
+    }
     fun showEmpty(value: Boolean) { mutable.update { it.copy(showEmpty = value) } }
 
     // The list API has no previews/counts. Fetch only one message for up to 40 rows
@@ -402,11 +421,12 @@ class AgentViewModel(
     /** Opens a conversation by id (a tapped notification); reads the list first when it is not loaded yet. */
     fun openById(id: String) {
         if (state.value.signInRequired) return
-        state.value.conversations.firstOrNull { it.id == id }?.let { open(it); return }
+        (state.value.conversations.firstOrNull { it.id == id } ?: state.value.archivedList?.firstOrNull { it.id == id })?.let { open(it); return }
         val owner = epoch; val source = repository
         viewModelScope.launch {
-            val found = try { source.conversations().firstOrNull { it.id == id } } catch (e: CancellationException) { throw e }
-                catch (_: Exception) { null }
+            // A chat found by search may be archived: it is not in the list.
+            val found = try { source.conversations().firstOrNull { it.id == id } ?: source.archivedConversations().firstOrNull { it.id == id } }
+                catch (e: CancellationException) { throw e } catch (_: Exception) { null }
             if (found != null && owner == epoch) open(found)
         }
     }

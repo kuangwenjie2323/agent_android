@@ -74,6 +74,8 @@ interface AgentRepository {
     suspend fun setArchiveDays(days: Int): ArchiveInfo? = null
     /** The chats the server archived (by hand or for idling), newest first. */
     suspend fun archivedConversations(): List<Conversation> = emptyList()
+    /** Every chat whose words contain all of [query]'s, archived ones too, newest first. */
+    suspend fun searchChats(query: String): List<ChatHit> = emptyList()
     /** Pins or archives a chat (null leaves that side unchanged). */
     suspend fun updateConversation(id: String, pinned: Boolean? = null, archived: Boolean? = null) {}
     /** The agents' shared memory and its last tidy; one memory's text; a tidy started now. */
@@ -419,6 +421,9 @@ class HttpAgentRepository(
     override suspend fun consolidateMemory() { json("/api/memory/consolidate", buildJsonObject { }) }
     override suspend fun setArchiveDays(days: Int) = ArchiveInfo.from(json("/api/chat/archive", buildJsonObject { put("days", days) }))
     override suspend fun archivedConversations() = json("/api/chat/conversations?archived=1").objects("conversations").map(Conversation::from)
+    override suspend fun searchChats(query: String) =
+        json("/api/chat/search?q=${java.net.URLEncoder.encode(query, "UTF-8").replace("+", "%20")}&limit=20")
+            .objects("results").map(ChatHit::from).filter { it.id.isNotBlank() }
     override suspend fun updateConversation(id: String, pinned: Boolean?, archived: Boolean?) = withContext(Dispatchers.IO) {
         val body = buildJsonObject { pinned?.let { put("pinned", it) }; archived?.let { put("archived", it) } }
         execute(idempotent(request("/api/chat/conversations/${segment(id)}").newBuilder()

@@ -634,6 +634,8 @@
     <string name="unpin_chat">Unpin chat</string>
     <string name="archive_chat">Archive chat</string>
     <string name="unarchive_chat">Move back to the list</string>
+    <string name="search_in_messages">In messages</string>
+    <string name="searching_messages">Searching messages…</string>
     <string name="chat_archived">Chat archived</string>
     <string name="undo">Undo</string>
     <string name="swipe_archive">Archive</string>

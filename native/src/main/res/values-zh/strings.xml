@@ -630,6 +630,8 @@
     <string name="unpin_chat">取消置顶</string>
     <string name="archive_chat">归档对话</string>
     <string name="unarchive_chat">移回列表</string>
+    <string name="search_in_messages">对话内容中</string>
+    <string name="searching_messages">正在搜索对话内容…</string>
     <string name="chat_archived">已归档</string>
     <string name="undo">撤销</string>
     <string name="swipe_archive">归档</string>

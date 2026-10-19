@@ -244,7 +244,10 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
                 modifier = Modifier.fillMaxSize()) {
                 if (state.error != null) item("error") { ErrorBlock(state.error, vm::refresh, tr(S.refresh)) }
                 if (state.sections.isEmpty() && state.refreshing) item("loading") { LoadingState(tr(S.loading)) }
-                if (state.sections.isEmpty() && !state.refreshing && state.error == null) item("empty") {
+                val hits = state.contentHits.filter { hit -> state.sections.none { section -> section.conversations.any { it.id == hit.id } } }
+                val searchingWords = state.search.trim().length >= 2
+                if (state.sections.isEmpty() && !state.refreshing && state.error == null && hits.isEmpty() &&
+                    !(searchingWords && state.contentSearching)) item("empty") {
                     EmptyState(if (state.search.isEmpty()) R.drawable.aw_chat else R.drawable.aw_search,
                         tr(if (state.search.isEmpty()) S.empty_list else S.no_matches),
                         tr(if (state.search.isEmpty()) S.empty_list_hint else S.search_hint),
@@ -261,6 +264,24 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
                             ConversationRow(conversation, state.agents, rowPosition(index, section.conversations.size),
                                 unread = conversation.unread(seen[conversation.id])) { vm.open(conversation) }
                         }
+                    }
+                }
+                // Chats whose words match, archived ones too, below those whose titles match.
+                if (searchingWords && (hits.isNotEmpty() || state.contentSearching)) {
+                    item("content-label") { GroupLabel(tr(S.search_in_messages)) }
+                    if (hits.isEmpty()) item("content-searching") {
+                        Text(tr(S.searching_messages), Modifier.padding(vertical = 12.dp, horizontal = 4.dp),
+                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    itemsIndexed(hits, key = { _, hit -> "hit-" + hit.id }) { index, hit ->
+                        ListRow(hit.title.ifBlank { tr(S.new_chat) }, hit.snippet.ifBlank { null }, rowPosition(index, hits.size),
+                            trailing = { Column(horizontalAlignment = Alignment.End) {
+                                Text(runCatching { java.time.LocalDate.parse(hit.date).format(DateTimeFormatter.ofPattern("M/d")) }
+                                    .getOrDefault(hit.date), style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (hit.archived) Text(tr(S.chat_archived), style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            } }) { vm.openById(hit.id) }
                     }
                 }
                 // Chats left idle are archived, not lost: one row at the end opens them.

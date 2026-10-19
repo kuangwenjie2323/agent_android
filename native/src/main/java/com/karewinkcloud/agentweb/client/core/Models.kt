@@ -289,6 +289,14 @@ data class ArchiveInfo(val days: Int, val choices: List<Int>, val archived: Int)
     }
 }
 
+/** A chat found by its words (GET /api/chat/search): where they matched and the text around them. */
+data class ChatHit(val id: String, val title: String, val date: String, val match: String, val snippet: String, val archived: Boolean) {
+    companion object {
+        fun from(j: JsonObject) = ChatHit(j.string("conversationId").orEmpty(), j.string("title").orEmpty(), j.string("date").orEmpty(),
+            j.string("match").orEmpty(), j.string("snippet").orEmpty(), j.boolean("archived") ?: false)
+    }
+}
+
 /** One memory the agents keep (a line of MEMORY.md): its title, file, one-line hook and kind. */
 data class MemoryEntry(val title: String, val file: String, val hook: String, val type: String?, val modified: Long?)
 /** The last nightly (or requested) tidy of the shared memory: when, what it changed, its own summary. */

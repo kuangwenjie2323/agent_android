@@ -89,6 +89,12 @@ class RepositoryTest {
         val plain = patch.invoke(local, okhttp3.Request.Builder().url("http://127.0.0.1:18791/api/x").build()) as okhttp3.Request
         assertEquals("close", plain.header("Connection"))  // plain HTTP (the server closes every connection)
     }
+    @Test fun aSearchSendsTheWordsEncodedAndReadsTheHits() = runBlocking {
+        server.enqueue(json("""{"results":[{"conversationId":"trade","title":"Polymarket","date":"2026-10-18","match":"user","snippet":"止损 0.45","archived":true},{"title":"no id"}]}"""))
+        val hits = repo.searchChats("止损 0.45")
+        assertEquals("/api/chat/search?q=%E6%AD%A2%E6%8D%9F%200.45&limit=20", next().path)
+        assertEquals(listOf(ChatHit("trade", "Polymarket", "2026-10-18", "user", "止损 0.45", true)), hits)
+    }
     @Test fun onlyFailuresBeforeAnyByteWasSentCountAsNeverSent() {
         assertTrue(neverSent(javax.net.ssl.SSLHandshakeException("connection closed")))
         assertTrue(neverSent(java.net.ConnectException("Failed to connect")))

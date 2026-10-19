@@ -492,6 +492,20 @@ class AgentViewModelTest {
         assertEquals(setOf("one", "two"), vm.state.value.conversations.map { it.id }.toSet())
         assertEquals(0, vm.state.value.archivedCount)
     }
+    @Test fun searchAsksTheServerForChatsByTheirWordsOnceTypingPauses() = modelTest {
+        runCurrent()
+        repo.hits = listOf(ChatHit("old", "Kaggle GPU", "2026-10-01", "assistant", "两个 GPU 名额被占了", archived = true))
+        vm.search("G"); advanceTimeBy(1000); runCurrent()
+        assertTrue(repo.searches.isEmpty())  // one character: titles only
+        vm.search("GP"); vm.search("GPU"); advanceTimeBy(200); runCurrent()
+        assertTrue(repo.searches.isEmpty())  // still typing
+        advanceTimeBy(400); runCurrent()
+        assertEquals(listOf("GPU"), repo.searches)
+        assertEquals(listOf("old"), vm.state.value.contentHits.map { it.id })
+        assertTrue(vm.state.value.contentHits.single().archived)
+        vm.search(""); runCurrent()
+        assertTrue(vm.state.value.contentHits.isEmpty())
+    }
     @Test fun aChatDeletedFromTheArchiveLeavesItAndItsCount() = modelTest {
         runCurrent()  // the first list read, from start-up
         repo.list = listOf(conversation("one"))
@@ -932,6 +946,9 @@ class AgentViewModelTest {
         val changes = mutableListOf<Triple<String, Boolean?, Boolean?>>()
         override suspend fun archiveInfo() = ArchiveInfo(14, listOf(0, 7, 14, 30), archivedRows.size)
         override suspend fun archivedConversations() = archivedRows
+        val searches = mutableListOf<String>()
+        var hits = listOf<ChatHit>()
+        override suspend fun searchChats(query: String): List<ChatHit> { searches += query; return hits }
         var refuseChanges = false
         /** Holds the next change in flight (a slow connection) until completed. */
         var slowChange: CompletableDeferred<Unit>? = null
