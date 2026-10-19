@@ -193,7 +193,7 @@ class AgentViewModel(
                 val catalog = async { runCatching { source.agents() } }
                 val projects = async { runCatching { source.projects() } }
                 val archive = async { runCatching { source.archiveInfo() } }
-                val conversations = runCatching { source.conversations() }
+                val conversations = runCatching { readTwice { source.conversations() } }
                 val agents = catalog.await()
                 val projectResult = projects.await()
                 if (owner != epoch) return@supervisorScope
@@ -1276,6 +1276,13 @@ class AgentViewModel(
         }
     }
 }
+
+/**
+ * A read whose connection failed is tried once more before the user hears of it: a cold start on mobile data
+ * through a VPN can lose its first TLS handshake (release check 420317, N1), and showing "connection lost"
+ * for a read that works a second later only alarms.
+ */
+internal suspend fun <T> readTwice(read: suspend () -> T): T = try { read() } catch (e: IOException) { delay(1000); read() }
 
 fun problem(e: Throwable): ClientError = when (e) {
     is ApiException -> e.problem

@@ -12,7 +12,7 @@ JSON line; run it without arguments for the list).
   the network the phone is on and record it (`phone.py info`). For the mobile-data pass the user switches Wi-Fi
   off; ask in the report if a pass is missing.
 - Work only in a chat you create yourself. Its first message starts with `[release-check]`. Never type into,
-  retry, edit, stop, fork or delete any other chat. Delete your own chat at the end (case F5).
+  retry, edit, stop, fork or delete any other chat. Delete your own chat at the end (case F8).
 - In Settings only read the version: never sign out, upload logs, check for updates or change options.
 - Never press the system Back key on the app's chat list (it leaves the app); use the app's `返回` button.
 - Use the model `deepseek-flash` for test chats and keep messages short.
@@ -28,7 +28,7 @@ JSON line; run it without arguments for the list).
 | ID | How | Pass |
 |---|---|---|
 | U1 | `JAVA_HOME=$HOME/.local/opt/jdk-21 ANDROID_HOME=$HOME/.local/opt/android-sdk ./gradlew -q :native:testDebugUnitTest` in the Android repo; count results in `native/build/test-results/testDebugUnitTest/*.xml` | 0 failures. `ComfyViewModelTest` and `ClaudeSessionsViewModelTest` are known to fail now and then on "UncaughtExceptionsBeforeTest" / "Dispatchers.Main is used concurrently": rerun only those classes once; pass if the rerun passes |
-| U2 | Only when the release includes server changes: `python3 -m unittest discover -s . -p 'test_*.py'` in `agentweb/tests` of the server worktree | `OK` |
+| U2 | Only when the release includes server changes: `python3 -m unittest discover -s . -p 'test_*.py'` in `agentweb/tests` of the server worktree | `OK`. The runner's shell has `NO_PROXY=*`: a test that fails only because of it is a test bug to report, not a release failure |
 
 ## S: smoke (about 5 minutes)
 
@@ -39,7 +39,7 @@ JSON line; run it without arguments for the list).
 | S3 | Tap the first chat title; `wait` for any message text (15 s); `tap 返回` | history shows; back on the list |
 | S4 | `tap 新对话`; check the model chip (`find deepseek-flash`), else open it, `tap deepseek-flash`, `tap 完成`; tap the box; type `[release-check] reply with the single word pong`; `tap 发送`; `wait pong 90` | `pong` arrives; note seconds from send to answer |
 | S5 | In the chat: `tap 更多选项` → `tap 模型与设置` → `wait 思考强度` → `tap 完成` | sheet opens and closes |
-| S6 | `tap 设置` tab; `find` the version text | shows the build being tested |
+| S6 | `tap 设置` tab; `find 0.8` (the version line reads `AgentWeb App <version> · <commit> · <date>`) | version and commit match the build (`git log -1` at build time) |
 
 ## F: system and function (about 15 minutes, in the S4 chat)
 
@@ -49,7 +49,10 @@ JSON line; run it without arguments for the list).
 | F2 Background hand-over | Send the sleep 40 message again. When it runs: note the time, `phone.py home`, wait 60 s, `phone.py launch`. | In the app log after `home` exactly one `GET /api/chat/stream/… stream opened` (`adb shell run-as com.karewinkcloud.agentweb.client cat no_backup/diagnostics/current.jsonl`); after launch the answer `done` shows in full within 20 s |
 | F3 Files | Send `[release-check] create notes.md in the current folder with a heading and three lines, then change its second line`. When done: `tap 更多选项` → `tap 本对话改动的文件` → `tap notes.md`. | The viewer opens; `phone.py see "some lines of code are highlighted in green"` ≥ 0.7; `tap 预览` / `tap 源码` switches views; `tap 返回` closes |
 | F4 Side question | `tap 旁问`, type `what did the agent do?`, `tap 发送` | An answer shows in the sheet; the chat itself gets no new message |
-| F5 Delete | `tap 更多选项` → `tap 删除对话` → in the dialog `tap 删除` | Back on the list; `gone [release-check] 10` (the chat is gone) |
+| F5 Pin | In the chat: `tap 更多选项` → `tap 置顶对话` → `tap 返回` | The list shows the group `已置顶` with this chat first; then open it again and `tap 更多选项` → `tap 取消置顶` |
+| F6 Archive | In the chat: `tap 更多选项` → `tap 归档对话` | Back on the list and the chat is not in it; the row `已归档的对话` at the end of the list (scroll down) opens the archive, which lists it; open it there, `tap 更多选项` → `tap 移回列表`, `tap 返回` twice: it is in the main list again. Never change the archive's day setting (it is the user's) |
+| F7 Memory | On the list: `tap 更多选项` → `tap 记忆` | The sheet shows memories (at least one of `关于你`, `做事方式`, `项目`, `参考`); tapping one shows its text; `tap 完成` twice closes. Never tap `立即整理` (it rewrites the memory) |
+| F8 Delete | Open the test chat, `tap 更多选项` → `tap 删除对话` → in the dialog `tap 删除` | Back on the list; `gone [release-check] 10` (the chat is gone) |
 
 Not testable here without changing settings or files on the phone, so skipped (say so in the report): offline
 send, sending a picture, rotation, process death.
@@ -83,7 +86,7 @@ Baselines (build 420317, 10-19, phone CPH2723): cold start 469 ms median; chat l
 
 | ID | How | Pass |
 |---|---|---|
-| N1 | `phone.py net <start>` at the end | `failureCount` 0 apart from `canceled` lines; `errorsShown` empty; record `avgMs` and `p95Ms` (baseline mobile + VPN: avg 1.7 s, p95 5.6 s) |
+| N1 | `phone.py net <start>` at the end | `failureCount` 0 apart from `canceled` lines; `errorsShown` empty; record `avgMs` and `p95Ms` (baseline mobile + VPN: avg 1.7 s, p95 5.6 s; 420317: avg 0.9 s, p95 2.6 s). A failed request the app retried quietly is not a failure when no error was shown |
 | N2 | Same output | `streamReconnects` ≤ 3 over the whole run |
 
 ## Report

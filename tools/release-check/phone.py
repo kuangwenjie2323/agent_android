@@ -71,7 +71,9 @@ def elements():
 
 
 def matching(text):
-    return [e for e in elements() if text in e["text"]]
+    # An element whose whole text is the label comes first (a dialog's 删除 button before its 删除这个对话？ title);
+    # otherwise screen order.
+    return sorted((e for e in elements() if text in e["text"]), key=lambda e: e["text"] != text)
 
 
 def info():

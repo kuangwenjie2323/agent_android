@@ -458,6 +458,15 @@ class AgentViewModelTest {
         vm.setPinned("two", true); runCurrent()
         assertEquals(Triple("two", true, null), repo.changes.last())
     }
+    @Test fun aListReadThatLosesItsConnectionOnceIsRetriedQuietly() = runTest {
+        var calls = 0
+        val rows = readTwice { calls++; if (calls == 1) throw java.io.IOException("connection closed") else listOf("one") }
+        assertEquals(listOf("one") to 2, rows to calls)
+        var failures = 0
+        try { readTwice<Unit> { failures++; throw java.io.IOException("still down") }; fail("Expected the second failure") }
+        catch (_: java.io.IOException) { }
+        assertEquals(2, failures)
+    }
     @Test fun aDeletedChatLeavesTheScreenAndTheList() = modelTest {
         repo.list = listOf(conversation("one"), conversation("two"))
         vm.refresh(); runCurrent()
