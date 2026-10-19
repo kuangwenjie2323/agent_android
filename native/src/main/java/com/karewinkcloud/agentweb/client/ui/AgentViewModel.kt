@@ -198,9 +198,9 @@ class AgentViewModel(
                 }
             }
             supervisorScope {
-                val catalog = async { runCatching { source.agents() } }
-                val projects = async { runCatching { source.projects() } }
-                val archive = async { runCatching { source.archiveInfo() } }
+                val catalog = async { runCatching { readTwice { source.agents() } } }
+                val projects = async { runCatching { readTwice { source.projects() } } }
+                val archive = async { runCatching { readTwice { source.archiveInfo() } } }
                 val conversations = runCatching { readTwice { source.conversations() } }
                 val agents = catalog.await()
                 val projectResult = projects.await()
@@ -647,9 +647,12 @@ class AgentViewModel(
     }
     /** The app is on screen; an idle open chat watches the server only then. */
     @Volatile private var inForeground = true
-    fun onBackground() { inForeground = false }
+    private var backgroundSince = 0L
+    fun onBackground() { inForeground = false; backgroundSince = System.currentTimeMillis() }
     fun onForeground() {
         inForeground = true
+        if (backgroundSince > 0 && System.currentTimeMillis() - backgroundSince > 15_000) repository.freshConnections()
+        backgroundSince = 0
         if (state.value.signInRequired) return
         if (state.value.claudeVisible && state.value.chat == null) {
             if (sessionJob?.isActive != true && state.value.claudePreview != null) refreshClaudePreview()
@@ -1331,7 +1334,10 @@ class AgentViewModel(
  * through a VPN can lose its first TLS handshake (release check 420317, N1), and showing "connection lost"
  * for a read that works a second later only alarms.
  */
-internal suspend fun <T> readTwice(read: suspend () -> T): T = try { read() } catch (e: IOException) { delay(1000); read() }
+internal suspend fun <T> readTwice(read: suspend () -> T): T = try { read() } catch (e: IOException) {
+    Diagnostics.warn("http", "list read retried", "error" to Diagnostics.describe(e))
+    delay(1000); read()
+}
 
 fun problem(e: Throwable): ClientError = when (e) {
     is ApiException -> e.problem

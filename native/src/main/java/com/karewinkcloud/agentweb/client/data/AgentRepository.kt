@@ -82,6 +82,8 @@ interface AgentRepository {
     suspend fun consolidateMemory() {}
     /** Deletes a chat on the server for good, stopping its running turn first. */
     suspend fun deleteConversation(id: String): Unit = error("Deleting chats is unavailable")
+    /** Drops idle connections, so the next request dials afresh (the app was away; they may be dead). */
+    fun freshConnections() {}
     /** A file the chat names, read from the computer for viewing: text cut at 1 MB, pictures and PDFs whole. */
     suspend fun readFile(conversationId: String, path: String): FileContent =
         throw ApiException(404, ClientError("Files cannot be opened on this server.", "not_found", false))
@@ -153,19 +155,35 @@ class HttpAgentRepository(
     }
     private val writeClient: OkHttpClient by lazy { client.newBuilder().connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS)).build() }
 
-    private fun clientFor(request: Request) = if (request.method == "GET") readClient else writeClient
+    /** A write that may be sent twice without harm (set pinned, archive, delete): it may ride the shared connection. */
+    private object Idempotent
+
+    private fun clientFor(request: Request) =
+        if (request.method == "GET" || request.tag(Idempotent::class.java) != null) readClient else writeClient
+
+    // After the app was away the shared connection can be dead without knowing it (the VPN or the radio dropped it):
+    // a request on it waited for the 20 s ping to notice (10-20 s on a foreground in release check 420416).
+    override fun freshConnections() { readClient.connectionPool.evictAll() }
+
+    private fun idempotent(request: Request): Request = request.newBuilder().tag(Idempotent::class.java, Idempotent)
+        .apply { if (!reusesConnection(origin, true)) header("Connection", "close") }.build()
 
     // A connection that fails before it is up (refused, unreachable, TLS handshake cut off by a mobile network or VPN)
     // carried no request, so even a message send is tried once more; a request that may have reached the server
     // never is.
     private suspend fun <T> execute(request: Request, timeoutSeconds: Long? = null, readTimeoutSeconds: Long? = null,
-        read: (Response) -> T): T = try { executeOnce(request, timeoutSeconds, readTimeoutSeconds, read) }
-        catch (e: IOException) {
-            if (!neverSent(e)) throw e
-            Diagnostics.warn("http", "${request.method} ${Diagnostics.target(request.url)} retried", "error" to Diagnostics.describe(e))
-            delay(reconnectDelayMs)
-            executeOnce(request, timeoutSeconds, readTimeoutSeconds, read)
+        read: (Response) -> T): T {
+        var retries = 0
+        while (true) {
+            try { return executeOnce(request, timeoutSeconds, readTimeoutSeconds, read) }
+            catch (e: IOException) {
+                if (!neverSent(e) || retries == MAX_UNSENT_RETRIES) throw e
+                retries++
+                Diagnostics.warn("http", "${request.method} ${Diagnostics.target(request.url)} retried", "error" to Diagnostics.describe(e))
+                delay(reconnectDelayMs * retries * retries)
+            }
         }
+    }
 
     private suspend fun <T> executeOnce(request: Request, timeoutSeconds: Long? = null, readTimeoutSeconds: Long? = null,
         read: (Response) -> T): T = suspendCancellableCoroutine { continuation ->
@@ -194,7 +212,7 @@ class HttpAgentRepository(
         }
     }
     internal suspend fun delete(path: String, timeoutSeconds: Long? = null): JsonObject = withContext(Dispatchers.IO) {
-        execute(request(path).newBuilder().header("Connection", "close").delete().build(), timeoutSeconds) { response ->
+        execute(idempotent(request(path).newBuilder().delete().build()), timeoutSeconds) { response ->
             validate(response)
             runCatching { wireJson.parseToJsonElement(response.body?.string().orEmpty()) as JsonObject }
                 .getOrElse { throw ApiException(response.code, ClientError("The server returned an unreadable response.")) }
@@ -403,8 +421,8 @@ class HttpAgentRepository(
     override suspend fun archivedConversations() = json("/api/chat/conversations?archived=1").objects("conversations").map(Conversation::from)
     override suspend fun updateConversation(id: String, pinned: Boolean?, archived: Boolean?) = withContext(Dispatchers.IO) {
         val body = buildJsonObject { pinned?.let { put("pinned", it) }; archived?.let { put("archived", it) } }
-        execute(request("/api/chat/conversations/${segment(id)}").newBuilder().header("Connection", "close")
-            .patch(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType())).build(), 30) { response ->
+        execute(idempotent(request("/api/chat/conversations/${segment(id)}").newBuilder()
+            .patch(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType())).build()), 30) { response ->
             validate(response)
         }
     }
@@ -539,6 +557,9 @@ class HttpAgentRepository(
         }
     }.flowOn(Dispatchers.IO)
 }
+
+/** Tries after the first for a call that failed before it was sent (0.5 s, then 2 s apart). */
+private const val MAX_UNSENT_RETRIES = 2
 
 /** True when [e] ended a call before any request byte could reach the server. */
 internal fun neverSent(e: IOException): Boolean = e is javax.net.ssl.SSLHandshakeException || e is java.net.ConnectException ||

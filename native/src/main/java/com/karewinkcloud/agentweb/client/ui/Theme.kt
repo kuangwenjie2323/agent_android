@@ -41,9 +41,10 @@ private val LightColors = lightColorScheme(
     secondaryContainer = Color(0xffffe4e8), onSecondaryContainer = Color(0xffb3102b),
     tertiary = Color(0xff007aff), onTertiary = Color(0xffffffff),
     tertiaryContainer = Color(0xffe3efff), onTertiaryContainer = Color(0xff0056b3),
-    surfaceTint = Color(0x00000000), inversePrimary = Color(0xffff6b7f), scrim = Color(0xff000000),
-    // Undo bars and tooltips: a dark grey card in both modes, never Material's default lavender.
-    inverseSurface = Color(0xff2c2c2e), inverseOnSurface = Color(0xffffffff),
+    surfaceTint = Color(0x00000000), inversePrimary = Color(0xfffa2d48), scrim = Color(0xff000000),
+    // Undo bars and tooltips are cards like the rest: light grey here, dark grey in dark mode (never Material's
+    // default lavender).
+    inverseSurface = Color(0xfff2f2f7), inverseOnSurface = Color(0xff000000),
 )
 private val DarkColors = darkColorScheme(
     primary = Color(0xfffc3c44), onPrimary = Color(0xffffffff),

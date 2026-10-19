@@ -230,20 +230,38 @@ def palette(path, min_pixels=600):
     out(ok=not hits, defaults=sorted(hits, key=lambda h: -h["pixels"]))
 
 
-def targets(min_dp=44):
-    density = int((re.search(r"(\d+)\s*$", adb("shell", "wm", "density").strip()) or [0, 160])[1])
+def _small_targets(density, min_dp):
     xml = adb("exec-out", "uiautomator", "dump", "/dev/tty")
     xml = xml[xml.find("<?xml"):xml.rfind(">") + 1] if "<?xml" in xml else xml
-    small = []
-    for node in ET.fromstring(xml).iter("node"):
-        if node.get("clickable") != "true" or node.get("package") != PACKAGE:
-            continue
-        x1, y1, x2, y2 = map(int, re.findall(r"\d+", node.get("bounds", "0000"))[:4])
-        w, h = (x2 - x1) * 160 / density, (y2 - y1) * 160 / density
-        if min(w, h) < min_dp:
-            label = node.get("text") or node.get("content-desc") or "".join(
-                (child.get("text") or child.get("content-desc") or "") for child in node.iter("node"))[:40]
-            small.append({"label": label or "(no label)", "dp": [round(w), round(h)], "x": (x1 + x2) // 2, "y": (y1 + y2) // 2})
+    def box(node):
+        return tuple(map(int, re.findall(r"\d+", node.get("bounds", "0000"))[:4]))
+    small = {}
+    def walk(node, scroller):
+        if node.get("scrollable") == "true":
+            scroller = box(node)
+        if node.get("clickable") == "true" and node.get("package") == PACKAGE:
+            x1, y1, x2, y2 = box(node)
+            # A row cut by the edge of the list it scrolls in is only partly on screen, not small.
+            cut = scroller is not None and (y1 <= scroller[1] or y2 >= scroller[3] or x1 <= scroller[0] or x2 >= scroller[2])
+            w, h = (x2 - x1) * 160 / density, (y2 - y1) * 160 / density
+            if min(w, h) < min_dp and not cut:
+                label = node.get("text") or node.get("content-desc") or "".join(
+                    (child.get("text") or child.get("content-desc") or "") for child in node.iter("node"))[:40]
+                small[(label, round(w), round(h))] = {"label": label or "(no label)", "dp": [round(w), round(h)],
+                                                      "x": (x1 + x2) // 2, "y": (y1 + y2) // 2}
+        for child in node.findall("node"):
+            walk(child, scroller)
+    for top in ET.fromstring(xml).findall("node"):
+        walk(top, None)
+    return small
+
+
+def targets(min_dp=44):
+    density = int((re.search(r"(\d+)\s*$", adb("shell", "wm", "density").strip()) or [0, 160])[1])
+    first = _small_targets(density, min_dp)
+    time.sleep(1)
+    # Only what is small in two looks a second apart: a control caught mid-animation is not.
+    small = [item for key, item in _small_targets(density, min_dp).items() if key in first]
     out(ok=not small, density=density, small=small[:20])
 
 
@@ -256,8 +274,8 @@ def swipe_row(text, direction, shot=None):
     if shot is None:
         adb("shell", "input", "swipe", str(start), str(y), str(end), str(y), "350")
         return out(ok=True, row=rows[0]["text"], direction=direction)
-    # A quarter of the row: short of the 35 % that takes the swipe, so the row springs back.
-    middle = start + (240 if direction == "right" else -240)
+    # Under a third of the row: short of the 35 % that takes the swipe, so the row springs back.
+    middle = start + (320 if direction == "right" else -320)
     gesture = subprocess.Popen(["adb", "shell", "input", "swipe", str(start), str(y), str(middle), str(y), "900"])
     time.sleep(0.7)
     with open(shot, "wb") as handle:

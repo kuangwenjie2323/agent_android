@@ -69,6 +69,26 @@ class RepositoryTest {
         assertEquals("PATCH", next().method)
         assertEquals(1, server.requestCount)
     }
+    @Test fun aWriteThatCannotConnectGivesUpAfterTwoMoreTries() = runBlocking {
+        var attempts = 0
+        val down = HttpAgentRepository.defaultClient().newBuilder().addInterceptor { _ ->
+            attempts++; throw javax.net.ssl.SSLHandshakeException("connection closed")
+        }.build()
+        val repo = HttpAgentRepository(server.url("/").toString().trimEnd('/'), TokenProvider { "test-token" }, down, reconnectDelayMs = 0)
+        try { repo.updateConversation("chat", archived = false); fail("Expected the handshake failure") }
+        catch (_: javax.net.ssl.SSLHandshakeException) { }
+        assertEquals(3, attempts)
+        assertEquals(0, server.requestCount)
+    }
+    @Test fun pinAndArchiveRideTheSharedConnectionOtherWritesDoNot() = runBlocking {
+        val https = HttpAgentRepository("https://agent.example", TokenProvider { "t" })
+        val patch = https.javaClass.getDeclaredMethod("idempotent", okhttp3.Request::class.java).apply { isAccessible = true }
+        val built = patch.invoke(https, okhttp3.Request.Builder().url("https://agent.example/api/x").build()) as okhttp3.Request
+        assertNull(built.header("Connection"))  // HTTPS: may share the connection
+        val local = HttpAgentRepository("http://127.0.0.1:18791", TokenProvider { "t" })
+        val plain = patch.invoke(local, okhttp3.Request.Builder().url("http://127.0.0.1:18791/api/x").build()) as okhttp3.Request
+        assertEquals("close", plain.header("Connection"))  // plain HTTP (the server closes every connection)
+    }
     @Test fun onlyFailuresBeforeAnyByteWasSentCountAsNeverSent() {
         assertTrue(neverSent(javax.net.ssl.SSLHandshakeException("connection closed")))
         assertTrue(neverSent(java.net.ConnectException("Failed to connect")))
