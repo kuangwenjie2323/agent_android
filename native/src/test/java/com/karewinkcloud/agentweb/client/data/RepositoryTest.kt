@@ -56,6 +56,28 @@ class RepositoryTest {
         assertEquals(1, server.requestCount)
     }
 
+    @Test fun aWriteWhoseHandshakeIsCutOffIsSentOnceMore() = runBlocking {
+        var attempts = 0
+        val flaky = HttpAgentRepository.defaultClient().newBuilder().addInterceptor { chain ->
+            if (++attempts == 1) throw javax.net.ssl.SSLHandshakeException("connection closed")
+            chain.proceed(chain.request())
+        }.build()
+        val repo = HttpAgentRepository(server.url("/").toString().trimEnd('/'), TokenProvider { "test-token" }, flaky, reconnectDelayMs = 0)
+        server.enqueue(json("""{"ok":true}"""))
+        repo.updateConversation("chat", pinned = true)
+        assertEquals(2, attempts)
+        assertEquals("PATCH", next().method)
+        assertEquals(1, server.requestCount)
+    }
+    @Test fun onlyFailuresBeforeAnyByteWasSentCountAsNeverSent() {
+        assertTrue(neverSent(javax.net.ssl.SSLHandshakeException("connection closed")))
+        assertTrue(neverSent(java.net.ConnectException("Failed to connect")))
+        assertTrue(neverSent(java.net.SocketTimeoutException("failed to connect to /1.2.3.4 (port 443) after 15000ms")))
+        assertFalse(neverSent(java.net.SocketTimeoutException("timeout")))
+        assertFalse(neverSent(java.io.IOException("unexpected end of stream")))
+        assertFalse(neverSent(java.io.InterruptedIOException("canceled")))
+    }
+
     @Test fun aFileIsReadWithWhatTheServerSaysAboutIt() = runBlocking {
         server.enqueue(MockResponse().addHeader("Content-Type", "text/plain; charset=utf-8").addHeader("X-AgentWeb-Protocol-Version", "1.0")
             .addHeader("AgentWeb-File-Kind", "text").addHeader("AgentWeb-File-Path", "/w/%E6%8A%A5%E5%91%8A%20v2.md")

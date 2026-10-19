@@ -165,7 +165,7 @@ def crashes(since):
 
 def net(since):
     rows = app_log(since)
-    times, failures, reconnects, errors = [], [], 0, []
+    times, failures, reconnects, errors, retried = [], [], 0, [], 0
     for r in rows:
         m = r.get("m", "")
         if r.get("tag") == "net" and isinstance(r.get("ms"), (int, float)) and " 200" in m:
@@ -175,6 +175,8 @@ def net(since):
             times.extend([r["avgMs"]] * (int(count.group(1)) if count else 1))
         if r.get("tag") == "net" and r.get("l") == "W":
             failures.append(m[:90])
+        if r.get("tag") == "http" and m.endswith(" retried"):  # failed before it was sent, tried once more
+            retried += 1
         if r.get("tag") == "stream" and m == "reconnecting":
             reconnects += 1
         if r.get("tag") == "ui" and m == "error shown":
@@ -182,7 +184,7 @@ def net(since):
     times.sort()
     out(ok=True, requests=len(times), avgMs=round(statistics.mean(times)) if times else None,
         p95Ms=times[int(len(times) * .95) - 1] if len(times) >= 20 else (times[-1] if times else None),
-        failures=failures[:10], failureCount=len(failures), streamReconnects=reconnects, errorsShown=errors)
+        failures=failures[:10], failureCount=len(failures), retried=retried, streamReconnects=reconnects, errorsShown=errors)
 
 
 def jev_screen():

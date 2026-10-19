@@ -86,7 +86,7 @@ Baselines (build 420317, 10-19, phone CPH2723): cold start 469 ms median; chat l
 
 | ID | How | Pass |
 |---|---|---|
-| N1 | `phone.py net <start>` at the end | `failureCount` 0 apart from `canceled` lines; `errorsShown` empty; record `avgMs` and `p95Ms` (baseline mobile + VPN: avg 1.7 s, p95 5.6 s; 420317: avg 0.9 s, p95 2.6 s). A failed request the app retried quietly is not a failure when no error was shown |
+| N1 | `phone.py net <start>` at the end | `failureCount` minus `retried` is 0 (a request that failed before it was sent and was tried once more counts in both); `errorsShown` empty; record `avgMs` and `p95Ms` (baseline mobile + VPN: avg 1.7 s, p95 5.6 s; 420317: avg 0.9 s, p95 2.6 s). A failed request the app retried quietly is not a failure when no error was shown |
 | N2 | Same output | `streamReconnects` ≤ 3 over the whole run |
 
 ## Report

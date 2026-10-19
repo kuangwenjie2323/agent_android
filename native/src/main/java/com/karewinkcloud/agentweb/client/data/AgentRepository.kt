@@ -155,7 +155,19 @@ class HttpAgentRepository(
 
     private fun clientFor(request: Request) = if (request.method == "GET") readClient else writeClient
 
+    // A connection that fails before it is up (refused, unreachable, TLS handshake cut off by a mobile network or VPN)
+    // carried no request, so even a message send is tried once more; a request that may have reached the server
+    // never is.
     private suspend fun <T> execute(request: Request, timeoutSeconds: Long? = null, readTimeoutSeconds: Long? = null,
+        read: (Response) -> T): T = try { executeOnce(request, timeoutSeconds, readTimeoutSeconds, read) }
+        catch (e: IOException) {
+            if (!neverSent(e)) throw e
+            Diagnostics.warn("http", "${request.method} ${Diagnostics.target(request.url)} retried", "error" to Diagnostics.describe(e))
+            delay(reconnectDelayMs)
+            executeOnce(request, timeoutSeconds, readTimeoutSeconds, read)
+        }
+
+    private suspend fun <T> executeOnce(request: Request, timeoutSeconds: Long? = null, readTimeoutSeconds: Long? = null,
         read: (Response) -> T): T = suspendCancellableCoroutine { continuation ->
         val transport = clientFor(request).let { if (timeoutSeconds == null) it else it.newBuilder()
             .readTimeout(readTimeoutSeconds ?: timeoutSeconds, TimeUnit.SECONDS).callTimeout(timeoutSeconds, TimeUnit.SECONDS).build() }
@@ -527,3 +539,8 @@ class HttpAgentRepository(
         }
     }.flowOn(Dispatchers.IO)
 }
+
+/** True when [e] ended a call before any request byte could reach the server. */
+internal fun neverSent(e: IOException): Boolean = e is javax.net.ssl.SSLHandshakeException || e is java.net.ConnectException ||
+    e is java.net.UnknownHostException || e is java.net.NoRouteToHostException ||
+    (e is java.net.SocketTimeoutException && e.message.orEmpty().contains("connect", ignoreCase = true))
