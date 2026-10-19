@@ -322,7 +322,9 @@ private fun DeleteChatDialog(onDelete: () -> Unit, onDismiss: () -> Unit) {
         title = { Text(tr(S.delete_chat_title)) }, text = { Text(tr(S.delete_chat_body)) },
         confirmButton = { TextButton(onDelete, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
             Text(tr(S.delete)) } },
-        dismissButton = { TextButton(onDismiss) { Text(tr(S.cancel)) } })
+        // Next to a red destructive button, cancel stays neutral so the two never look alike.
+        dismissButton = { TextButton(onDismiss, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)) {
+            Text(tr(S.cancel)) } })
 }
 
 /**
@@ -332,7 +334,10 @@ private fun DeleteChatDialog(onDelete: () -> Unit, onDismiss: () -> Unit) {
  */
 @Composable
 private fun SwipeRow(archived: Boolean, canArchive: Boolean, onArchive: () -> Unit, onDelete: () -> Unit, row: @Composable () -> Unit) {
-    val swipe = rememberSwipeToDismissBoxState(positionalThreshold = { it * .35f })
+    // Not saved with the row: a chat that comes back (an undo) must not come back already swiped, which would
+    // archive it again.
+    val density = LocalDensity.current
+    val swipe = remember { SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, density, positionalThreshold = { it * .35f }) }
     LaunchedEffect(swipe.currentValue) {
         when (swipe.currentValue) {
             SwipeToDismissBoxValue.StartToEnd -> { onArchive(); swipe.reset() }

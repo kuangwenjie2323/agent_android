@@ -256,7 +256,8 @@ def swipe_row(text, direction, shot=None):
     if shot is None:
         adb("shell", "input", "swipe", str(start), str(y), str(end), str(y), "350")
         return out(ok=True, row=rows[0]["text"], direction=direction)
-    middle = (start + end) // 2
+    # A quarter of the row: short of the 35 % that takes the swipe, so the row springs back.
+    middle = start + (240 if direction == "right" else -240)
     gesture = subprocess.Popen(["adb", "shell", "input", "swipe", str(start), str(y), str(middle), str(y), "900"])
     time.sleep(0.7)
     with open(shot, "wb") as handle:

@@ -464,7 +464,8 @@ private fun CreationDetail(state: ComfyState, vm: ComfyViewModel, onEdit: () -> 
                 finally { deleting = false }
             }
         }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text(tr(S.delete)) } },
-        dismissButton = { TextButton({ confirmDelete = false }) { Text(tr(S.cancel)) } })
+        dismissButton = { TextButton({ confirmDelete = false }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)) {
+            Text(tr(S.cancel)) } })
 }
 
 @Composable
