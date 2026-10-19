@@ -42,6 +42,8 @@ private val LightColors = lightColorScheme(
     tertiary = Color(0xff007aff), onTertiary = Color(0xffffffff),
     tertiaryContainer = Color(0xffe3efff), onTertiaryContainer = Color(0xff0056b3),
     surfaceTint = Color(0x00000000), inversePrimary = Color(0xffff6b7f), scrim = Color(0xff000000),
+    // Undo bars and tooltips: a dark grey card in both modes, never Material's default lavender.
+    inverseSurface = Color(0xff2c2c2e), inverseOnSurface = Color(0xffffffff),
 )
 private val DarkColors = darkColorScheme(
     primary = Color(0xfffc3c44), onPrimary = Color(0xffffffff),
@@ -58,7 +60,8 @@ private val DarkColors = darkColorScheme(
     secondaryContainer = Color(0xff4a1218), onSecondaryContainer = Color(0xffffb3ba),
     tertiary = Color(0xff0a84ff), onTertiary = Color(0xffffffff),
     tertiaryContainer = Color(0xff0b2a4a), onTertiaryContainer = Color(0xffa8cfff),
-    surfaceTint = Color(0x00000000), inversePrimary = Color(0xfffa2d48), scrim = Color(0xff000000),
+    surfaceTint = Color(0x00000000), inversePrimary = Color(0xfffc3c44), scrim = Color(0xff000000),
+    inverseSurface = Color(0xff2c2c2e), inverseOnSurface = Color(0xffffffff),
 )
 private val NativeTypography = Typography(
     bodyLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 16.sp, lineHeight = 25.sp, lineBreak = LineBreak.Paragraph),

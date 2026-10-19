@@ -4,7 +4,7 @@
 DeepSeek flash runs as AgentWeb runs it: Claude Code's CLI on DeepSeek's API. The keys are taken from the running
 AgentWeb server's environment, passed to the child only, and never printed or written down.
 
-    tools/release-check/run_with_deepseek.py <apk> [suites]     suites: e.g. "U S F ST P M N" (default: all)
+    tools/release-check/run_with_deepseek.py <apk> [suites]     suites: e.g. "U S F UI ST P M N" (default: all)
 """
 import json
 import os
@@ -43,7 +43,7 @@ def main(argv):
     if not argv:
         raise SystemExit(__doc__)
     apk = os.path.abspath(argv[0])
-    suites = argv[1] if len(argv) > 1 else "U S F ST P M N"
+    suites = argv[1] if len(argv) > 1 else "U S F UI ST P M N"
     code = version_code(apk)
     live = server_env()
     sys.path.insert(0, AGENTWEB_DIR)

@@ -20,6 +20,10 @@ screenshots. Elements are found by their visible text or accessibility label, ne
     phone.py frames reset|report        frame statistics (dumpsys gfxinfo): janky %, p90/p99 ms
     phone.py crashes <since-epoch-s>    crashes and ANRs of the app since then (logcat crash buffer, app log)
     phone.py net <since-epoch-s>        request timings, stream reconnects and errors from the app's own log
+    phone.py swipe <text> left|right    swipe the row containing <text> all the way
+    phone.py peek <text> left|right <png>  half a slow swipe on that row, screenshot taken mid-gesture
+    phone.py palette <png>              flat areas in Material's default colours (a component the app did not style)
+    phone.py targets                    tappable elements smaller than 44 dp on a side
     phone.py see <statement>            Jev vision: how likely the screen shows <statement> (looks, colours, layout)
     phone.py locate <target> [--tap]    Jev vision: where <target> is (for things with no text or label)
 
@@ -187,6 +191,81 @@ def net(since):
         failures=failures[:10], failureCount=len(failures), retried=retried, streamReconnects=reconnects, errorsShown=errors)
 
 
+# Material 3's baseline (default) scheme, light and dark, without white and black: a flat area in one of these is a
+# component drawn with a colour role the app's theme never set. The app's own greys differ by 2 or more per channel.
+MATERIAL_DEFAULTS = {
+    "primary": "6750A4", "primaryContainer": "EADDFF", "onPrimaryContainer": "21005D", "secondary": "625B71",
+    "secondaryContainer": "E8DEF8", "tertiary": "7D5260", "tertiaryContainer": "FFD8E4", "surface": "FEF7FF",
+    "surfaceVariant": "E7E0EC", "outline": "79747E", "inverseSurface": "322F35", "inverseOnSurface": "F5EFF7",
+    "inversePrimary": "D0BCFF", "surfaceContainer": "F3EDF7", "surfaceContainerHigh": "ECE6F0",
+    "surfaceContainerHighest": "E6E0E9", "surfaceContainerLow": "F7F2FA",
+    "dark primary": "D0BCFF", "dark onPrimary": "381E72", "dark primaryContainer": "4F378B", "dark secondary": "CCC2DC",
+    "dark secondaryContainer": "4A4458", "dark tertiary": "EFB8C8", "dark tertiaryContainer": "633B48",
+    "dark surface": "141218", "dark surfaceVariant": "49454F", "dark outline": "938F99", "dark inverseSurface": "E6E0E9",
+    "dark surfaceContainer": "211F26", "dark surfaceContainerHigh": "2B2930", "dark surfaceContainerHighest": "36343B",
+    "dark surfaceContainerLow": "1D1B20", "dark outlineVariant": "49454F",
+}
+
+
+def palette(path, min_pixels=600):
+    from PIL import Image
+    wanted = {tuple(int(hex_[i:i + 2], 16) for i in (0, 2, 4)): name for name, hex_ in MATERIAL_DEFAULTS.items()}
+    with Image.open(path) as image:
+        rgb = image.convert("RGB")
+        width, height = rgb.size
+        pixels = rgb.load()
+        found = {}
+        for y in range(0, height, 2):
+            for x in range(0, width, 2):
+                r, g, b = pixels[x, y]
+                for colour, name in wanted.items():
+                    if abs(r - colour[0]) <= 1 and abs(g - colour[1]) <= 1 and abs(b - colour[2]) <= 1:
+                        hit = found.setdefault(name, [0, x, y, x, y])
+                        hit[0] += 4
+                        hit[1], hit[2] = min(hit[1], x), min(hit[2], y)
+                        hit[3], hit[4] = max(hit[3], x), max(hit[4], y)
+                        break
+    hits = [{"role": name, "colour": "#" + MATERIAL_DEFAULTS[name], "pixels": n, "box": [x1, y1, x2, y2]}
+            for name, (n, x1, y1, x2, y2) in found.items() if n >= min_pixels]
+    out(ok=not hits, defaults=sorted(hits, key=lambda h: -h["pixels"]))
+
+
+def targets(min_dp=44):
+    density = int((re.search(r"(\d+)\s*$", adb("shell", "wm", "density").strip()) or [0, 160])[1])
+    xml = adb("exec-out", "uiautomator", "dump", "/dev/tty")
+    xml = xml[xml.find("<?xml"):xml.rfind(">") + 1] if "<?xml" in xml else xml
+    small = []
+    for node in ET.fromstring(xml).iter("node"):
+        if node.get("clickable") != "true" or node.get("package") != PACKAGE:
+            continue
+        x1, y1, x2, y2 = map(int, re.findall(r"\d+", node.get("bounds", "0000"))[:4])
+        w, h = (x2 - x1) * 160 / density, (y2 - y1) * 160 / density
+        if min(w, h) < min_dp:
+            label = node.get("text") or node.get("content-desc") or "".join(
+                (child.get("text") or child.get("content-desc") or "") for child in node.iter("node"))[:40]
+            small.append({"label": label or "(no label)", "dp": [round(w), round(h)], "x": (x1 + x2) // 2, "y": (y1 + y2) // 2})
+    out(ok=not small, density=density, small=small[:20])
+
+
+def swipe_row(text, direction, shot=None):
+    rows = matching(text)
+    if not rows:
+        return out(ok=False, error=f"no element contains {text!r}")
+    y = rows[0]["y"]
+    start, end = (150, 1050) if direction == "right" else (1050, 150)
+    if shot is None:
+        adb("shell", "input", "swipe", str(start), str(y), str(end), str(y), "350")
+        return out(ok=True, row=rows[0]["text"], direction=direction)
+    middle = (start + end) // 2
+    gesture = subprocess.Popen(["adb", "shell", "input", "swipe", str(start), str(y), str(middle), str(y), "900"])
+    time.sleep(0.7)
+    with open(shot, "wb") as handle:
+        handle.write(subprocess.run(["adb", "exec-out", "screencap", "-p"], capture_output=True).stdout)
+    gesture.wait()
+    out(ok=True, row=rows[0]["text"], direction=direction, path=shot,
+        note="half a swipe springs back; nothing was archived or deleted")
+
+
 def jev_screen():
     """A screenshot scaled to what Jev takes (at most 1568 px a side) as a request's image, and the full size."""
     sys.path.insert(0, os.environ.get("AGENTWEB_DIR", "/home/karewink/claude/workagent/agentweb"))
@@ -265,6 +344,10 @@ def main(argv):
     if command == "frames": return frames(rest[0])
     if command == "crashes": return crashes(float(rest[0]))
     if command == "net": return net(float(rest[0]))
+    if command == "swipe": return swipe_row(rest[0], rest[1])
+    if command == "peek": return swipe_row(rest[0], rest[1], rest[2])
+    if command == "palette": return palette(rest[0])
+    if command == "targets": return targets()
     if command == "see": return see(rest[0])
     if command == "locate": return locate(rest[0], "--tap" in rest)
     out(ok=False, error=f"unknown command {command!r}")
