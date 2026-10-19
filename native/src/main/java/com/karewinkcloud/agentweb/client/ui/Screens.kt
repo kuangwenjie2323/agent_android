@@ -466,10 +466,13 @@ private fun Composer(chat: ChatState, state: ClientState, vm: AgentViewModel, ma
                 // its next step); an empty box keeps the button as Stop.
                 val steering = chat.running && chat.hasDraft && !chat.conversation.nativeControl
                 FilledIconButton(onClick = if (steering) vm::steer else if (chat.running) vm::stop else vm::send,
-                    enabled = if (steering) !chat.controlBusy && chat.controlId != null && !chat.attachmentLoading
+                    // Steering without a known run queues instead of greying out (vm.steer falls back).
+                    enabled = if (steering) !chat.controlBusy && !chat.attachmentLoading
                         else if (chat.running) !chat.controlBusy && !chat.stopRequested && chat.controlId != null
                         else chat.canSend && chat.hasDraft && agent?.available == true && !state.creating, modifier = Modifier.size(48.dp)) {
-                    AppIcon(if (chat.running && !steering) R.drawable.aw_stop else R.drawable.aw_send,
+                    if (chat.controlBusy && (steering || chat.running)) CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    else AppIcon(if (chat.running && !steering) R.drawable.aw_stop else R.drawable.aw_send,
                         tr(if (steering) S.steer_send else if (chat.running) S.stop else S.send))
                 }
             }

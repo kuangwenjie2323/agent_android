@@ -1,5 +1,7 @@
 package com.karewinkcloud.agentweb.client.ui
 
+import android.content.ClipboardManager
+import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -46,6 +48,7 @@ internal fun AttachmentChips(chat: ChatState, vm: AgentViewModel) {
 @Composable
 internal fun AttachmentPicker(chat: ChatState, supportsImages: Boolean, vm: AgentViewModel) {
     val context = LocalContext.current
+    val noClipboardImage = tr(S.clipboard_no_image)
     var expanded by remember { mutableStateOf(false) }
     var pickerOwner by rememberSaveable { mutableStateOf("") }
     var cameraPath by rememberSaveable { mutableStateOf<String?>(null) }
@@ -100,6 +103,21 @@ internal fun AttachmentPicker(chat: ChatState, supportsImages: Boolean, vm: Agen
                 leadingIcon = { AppIcon(R.drawable.aw_file) }, onClick = {
                 expanded = false; pickerOwner = vm.attachmentOwner()
                 try { files.launch(arrayOf("*/*")) } catch (_: Exception) { vm.attachmentFailure(pickerOwner, "无法打开文件选择器") }
+            })
+            // Pictures copied from another app usually sit on the clipboard as a content URI.
+            DropdownMenuItem(text = { Text(tr(S.paste_image), style = MaterialTheme.typography.bodyMedium) },
+                leadingIcon = { AppIcon(R.drawable.aw_copy) }, onClick = {
+                expanded = false; pickerOwner = vm.attachmentOwner()
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                val clip = clipboard?.primaryClip
+                val uri = clip?.takeIf { it.itemCount > 0 }?.let { data ->
+                    val description = data.description
+                    val image = description.hasMimeType("image/*") ||
+                        (0 until data.itemCount).any { description.getMimeType(it)?.startsWith("image/") == true }
+                    if (image) data.getItemAt(0).uri else null
+                }
+                if (uri != null) consume(listOf(uri), true)
+                else vm.attachmentFailure(pickerOwner, noClipboardImage)
             })
         }
     }

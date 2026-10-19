@@ -1088,10 +1088,11 @@ class AgentViewModel(
     /** Like Claude Code: a message sent while the agent works reaches it at its next step. */
     fun steer() {
         val chat = state.value.chat ?: return
-        val control = chat.controlId ?: return
         if (!chat.running || !chat.hasDraft || chat.controlBusy || chat.conversation.nativeControl || !validAttachments(chat)) {
             queue(); return
         }
+        // No known run to steer: queue it for the next turn instead of leaving the button dead.
+        val control = chat.controlId ?: run { queue(); return }
         if (!online()) { editChat(generation) { it.copy(error = ClientError(OFFLINE_MESSAGE, "offline", true)) }; return }
         val owner = generation
         val source = repository

@@ -419,6 +419,15 @@ class AgentViewModelTest {
         vm.resumeQueue(); runCurrent()
         assertNull(vm.state.value.chat!!.error)
     }
+    @Test fun aMessageForARunningTurnWithoutAKnownRunIsQueuedNotDropped() = modelTest {
+        // Seen 10-19: the send button stayed grey while the turn ran and no run id was known yet.
+        repo.getDetail = { id, _ -> detail(id, running = true).let { d -> d.copy(conversation = d.conversation.copy(controlId = null)) } }
+        vm.open(conversation("one", true).copy(controlId = null)); runCurrent()
+        assertNull(vm.state.value.chat!!.controlId)
+        vm.draft("later"); vm.steer(); runCurrent()
+        assertTrue(repo.steerCalls.isEmpty())
+        assertEquals(listOf("later"), repo.queueCalls.map { it.text })
+    }
     @Test fun stopUsesObservedOwnerAndNeverStopsOnNavigation() = modelTest {
         repo.getDetail = { id, _ -> detail(id, running = true) }
         vm.open(conversation("one", true)); runCurrent()
