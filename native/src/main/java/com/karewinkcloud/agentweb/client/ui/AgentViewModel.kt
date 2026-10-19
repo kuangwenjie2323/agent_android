@@ -55,6 +55,10 @@ data class ClientState(
     val tab: AppTab = AppTab.CONVERSATIONS,
     val projects: ProjectSelection = ProjectSelection(), val projectLoading: Boolean = false,
     val projectError: ClientError? = null,
+    /** Archived chats, like Claude desktop's archived sessions: how many, after how many idle days (0 = never),
+     *  and the archive's rows while it is open (null when closed). */
+    val archivedCount: Int = 0, val archiveDays: Int = 14, val archiveChoices: List<Int> = listOf(0, 7, 14, 30),
+    val archivedList: List<Conversation>? = null, val archivedLoading: Boolean = false,
 ) {
     val sections get() = conversationSections(conversations, search, showEmpty)
 }
@@ -188,10 +192,14 @@ class AgentViewModel(
             supervisorScope {
                 val catalog = async { runCatching { source.agents() } }
                 val projects = async { runCatching { source.projects() } }
+                val archive = async { runCatching { source.archiveInfo() } }
                 val conversations = runCatching { source.conversations() }
                 val agents = catalog.await()
                 val projectResult = projects.await()
                 if (owner != epoch) return@supervisorScope
+                archive.await().getOrNull()?.let { info ->
+                    mutable.update { it.copy(archivedCount = info.archived, archiveDays = info.days, archiveChoices = info.choices) }
+                }
                 mutable.update { old ->
                     val choices = agents.getOrNull() ?: old.agents
                     val valid = choices.firstOrNull { it.id == old.choice.agent && it.available }
@@ -442,6 +450,59 @@ class AgentViewModel(
             claudeVisible = current.claudeVisible && (current.chat != null || current.claudePreview != null),
             tab = if (current.claudeVisible && (current.chat != null || current.claudePreview != null)) AppTab.CLAUDE else AppTab.CONVERSATIONS) }
         if (state.value.claudeVisible) refreshClaudeSessions() else refresh()
+        // A message sent in an archived chat brought it back to the list: the open archive shows that.
+        if (state.value.archivedList != null) loadArchive()
+    }
+
+    fun openArchive() {
+        mutable.update { it.copy(archivedList = it.archivedList ?: emptyList(), archivedLoading = true) }
+        loadArchive()
+    }
+    fun closeArchive() { mutable.update { it.copy(archivedList = null) } }
+    private fun loadArchive() {
+        val source = repository
+        viewModelScope.launch {
+            val rows = try { source.archivedConversations() } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { mutable.update { it.copy(archivedLoading = false, error = problem(e)) }; return@launch }
+            mutable.update { it.copy(archivedList = if (it.archivedList != null) rows else null, archivedLoading = false,
+                archivedCount = rows.size) }
+        }
+    }
+
+    fun setPinned(id: String, pinned: Boolean) = changeConversation(id, pinned = pinned)
+    fun setArchived(id: String, archived: Boolean) = changeConversation(id, archived = archived)
+    /** Pins or archives a chat; an archived open chat is left for the list, a restored one shows there again. */
+    private fun changeConversation(id: String, pinned: Boolean? = null, archived: Boolean? = null) {
+        val source = repository
+        viewModelScope.launch {
+            try {
+                source.updateConversation(id, pinned, archived)
+                fun Conversation.changed() = copy(pinned = pinned ?: this.pinned, archived = archived ?: this.archived)
+                mutable.update { s -> s.copy(
+                    chat = s.chat?.let { chat -> if (chat.conversation.id == id) chat.copy(conversation = chat.conversation.changed()) else chat },
+                    conversations = if (archived == true) s.conversations.filterNot { it.id == id } else s.conversations.map { if (it.id == id) it.changed() else it },
+                    archivedList = s.archivedList?.let { rows -> if (archived == false) rows.filterNot { it.id == id } else rows.map { if (it.id == id) it.changed() else it } },
+                    archivedCount = (s.archivedCount + when (archived) { true -> 1; false -> -1; null -> 0 }).coerceAtLeast(0)) }
+                if (archived == true && state.value.chat?.conversation?.id == id) back()
+                else if (archived == false || pinned != null) refresh()
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                mutable.update { s -> s.chat?.takeIf { it.conversation.id == id }?.let { chat -> s.copy(chat = chat.copy(error = problem(e))) }
+                    ?: s.copy(error = problem(e)) }
+            }
+        }
+    }
+
+    fun setArchiveDays(days: Int) {
+        val source = repository
+        mutable.update { it.copy(archiveDays = days) }
+        viewModelScope.launch {
+            try {
+                source.setArchiveDays(days)?.let { info -> mutable.update { it.copy(archiveDays = info.days) } }
+                refresh()
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { mutable.update { it.copy(error = problem(e)) } }
+        }
     }
     private fun saveDraft() { state.value.chat?.let { drafts[it.conversation.id] = it.draft; attachmentDrafts[it.conversation.id] = it.attachments } }
 
@@ -1093,6 +1154,11 @@ class AgentViewModel(
         val chat = state.value.chat ?: return null
         return repository.taskOutput(chat.conversation.id, taskId)
     }
+
+    /** The agents' shared memory, as the memory page shows it. */
+    suspend fun memory(): MemoryOverview = repository.memory()
+    suspend fun memoryFile(file: String): String = repository.memoryFile(file)
+    suspend fun consolidateMemory() = repository.consolidateMemory()
 
     /** A file the open conversation names, read from the computer for the file viewer. */
     suspend fun readFile(path: String): FileContent {

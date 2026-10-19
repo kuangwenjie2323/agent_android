@@ -4,7 +4,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
-enum class ConversationGroup { TODAY, YESTERDAY, OLDER }
+enum class ConversationGroup { PINNED, TODAY, YESTERDAY, OLDER }
 data class ConversationSection(val group: ConversationGroup, val conversations: List<Conversation>)
 
 /** Default titles of a chat nobody has written in yet (server and clients, both languages). */
@@ -19,9 +19,11 @@ fun conversationSections(conversations: List<Conversation>, query: String, showE
             (needle.isEmpty() || listOf(conversation.title, conversation.preview, conversation.project.orEmpty(),
                 conversation.choice.agent, conversation.choice.model).any { it.contains(needle, ignoreCase = true) })
     }.sortedByDescending { it.updatedAt }
+    // Pinned chats stay on top whatever their age, as in Claude's sidebar.
     val groups = filtered.groupBy {
         val date = Instant.ofEpochSecond(it.updatedAt).atZone(zone).toLocalDate()
         when {
+            it.pinned -> ConversationGroup.PINNED
             date >= today -> ConversationGroup.TODAY
             date == today.minusDays(1) -> ConversationGroup.YESTERDAY
             else -> ConversationGroup.OLDER

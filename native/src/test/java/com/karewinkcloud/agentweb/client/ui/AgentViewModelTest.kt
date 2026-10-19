@@ -440,6 +440,24 @@ class AgentViewModelTest {
         assertEquals(2, repo.followCalls.size)
         assertEquals(CONTROL, repo.previousTurns.last()?.runId)  // picks up where it stopped
     }
+    @Test fun anArchivedChatLeavesTheListAndComesBackFromTheArchive() = modelTest {
+        repo.list = listOf(conversation("one"), conversation("two"))
+        vm.refresh(); runCurrent()
+        vm.open(conversation("one")); runCurrent()
+        vm.setArchived("one", true); runCurrent()
+        assertNull(vm.state.value.chat)  // the archived chat was open: back on the list
+        assertEquals(listOf("two"), vm.state.value.conversations.map { it.id })
+        assertEquals(1, vm.state.value.archivedCount)
+        vm.openArchive(); runCurrent()
+        assertEquals(listOf("one"), vm.state.value.archivedList!!.map { it.id })
+        vm.setArchived("one", false); runCurrent()
+        assertEquals(emptyList<String>(), vm.state.value.archivedList!!.map { it.id })
+        assertTrue(vm.state.value.conversations.any { it.id == "one" })
+        vm.closeArchive()
+        assertNull(vm.state.value.archivedList)
+        vm.setPinned("two", true); runCurrent()
+        assertEquals(Triple("two", true, null), repo.changes.last())
+    }
     @Test fun aDeletedChatLeavesTheScreenAndTheList() = modelTest {
         repo.list = listOf(conversation("one"), conversation("two"))
         vm.refresh(); runCurrent()
@@ -547,8 +565,10 @@ class AgentViewModelTest {
             conversation("week").copy(updatedAt = date(4), messageCount = 1), conversation("today").copy(updatedAt = date(0), messageCount = 1),
             conversation("pin").copy(pinned = true, updatedAt = date(30), messageCount = 1), conversation("yesterday").copy(updatedAt = date(1), messageCount = 1))
         vm.refresh(); runCurrent()
-        assertEquals(listOf(ConversationGroup.TODAY, ConversationGroup.YESTERDAY, ConversationGroup.OLDER), vm.state.value.sections.map { it.group })
-        assertEquals(listOf("today", "yesterday", "week", "old", "pin"), vm.state.value.sections.flatMap { it.conversations }.map { it.id })
+        // The three date groups stay; a pinned chat sits above them, as in Claude's sidebar.
+        assertEquals(listOf(ConversationGroup.PINNED, ConversationGroup.TODAY, ConversationGroup.YESTERDAY, ConversationGroup.OLDER),
+            vm.state.value.sections.map { it.group })
+        assertEquals(listOf("pin", "today", "yesterday", "week", "old"), vm.state.value.sections.flatMap { it.conversations }.map { it.id })
     }
     @Test fun previewDerivesBlankTitleAndRetainsUnknownOnFailedRead() = modelTest {
         runCurrent()
@@ -854,6 +874,15 @@ class AgentViewModelTest {
         val steerControls = mutableListOf<String>()
         override suspend fun steer(conversationId: String, controlId: String, message: String, attachments: List<Attachment>): Boolean { steerCalls += message; steerControls += controlId; steerAttachments += attachments; return steerAccepts }
         val steerAttachments = mutableListOf<Attachment>()
+        var archivedRows = listOf<Conversation>()
+        val changes = mutableListOf<Triple<String, Boolean?, Boolean?>>()
+        override suspend fun archiveInfo() = ArchiveInfo(14, listOf(0, 7, 14, 30), archivedRows.size)
+        override suspend fun archivedConversations() = archivedRows
+        override suspend fun updateConversation(id: String, pinned: Boolean?, archived: Boolean?) {
+            changes += Triple(id, pinned, archived)
+            if (archived == true) { archivedRows = archivedRows + list.filter { it.id == id }; list = list.filterNot { it.id == id } }
+            if (archived == false) { list = list + archivedRows.filter { it.id == id }; archivedRows = archivedRows.filterNot { it.id == id } }
+        }
         val deleted = mutableListOf<String>()
         var deleteCall: suspend (String) -> Unit = { id -> deleted += id; list = list.filterNot { it.id == id } }
         override suspend fun deleteConversation(id: String) = deleteCall(id)

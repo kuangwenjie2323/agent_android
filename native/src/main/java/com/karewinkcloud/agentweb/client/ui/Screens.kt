@@ -61,8 +61,13 @@ fun AgentWebApp(vm: AgentViewModel, settings: SettingsViewModel, studio: ComfyVi
     }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.onForeground() }
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.onBackground() }
-    BackHandler(!modelsOpen && (state.chat != null || state.claudePreview != null || state.tab != AppTab.CONVERSATIONS)) {
-        if (state.chat != null || state.claudePreview != null) vm.back() else vm.selectTab(AppTab.CONVERSATIONS)
+    BackHandler(!modelsOpen && (state.chat != null || state.claudePreview != null || state.tab != AppTab.CONVERSATIONS ||
+        state.archivedList != null)) {
+        when {
+            state.chat != null || state.claudePreview != null -> vm.back()
+            state.tab != AppTab.CONVERSATIONS -> vm.selectTab(AppTab.CONVERSATIONS)
+            else -> vm.closeArchive()
+        }
     }
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
         BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).imePadding()) {
@@ -92,6 +97,7 @@ fun AgentWebApp(vm: AgentViewModel, settings: SettingsViewModel, studio: ComfyVi
                         state.tab == AppTab.CLAUDE -> ClaudeSessionsScreen(state.claude, vm)
                         // Reserve input space as well as the fixed 48dp action row when the IME is open.
                         state.tab == AppTab.CREATE -> ComfyScreen(studio, (availableHeight * .45f).coerceIn(150.dp, 320.dp))
+                        state.archivedList != null -> ArchiveList(state, vm)
                         else -> ConversationList(state, vm)
                     }
                 }
@@ -167,6 +173,8 @@ internal fun Toolbar(title: String, subtitle: String? = null, onBack: (() -> Uni
 
 @Composable
 private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel) {
+    var memoryOpen by remember { mutableStateOf(false) }
+    if (memoryOpen) MemorySheet(vm) { memoryOpen = false }
     val focusManager = LocalFocusManager.current
     val list = rememberLazyListState()
     var menu by remember { mutableStateOf(false) }
@@ -197,6 +205,7 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
                 DropdownMenuItem(text = { Text(tr(S.overflow_empty)) }, trailingIcon = { if (state.showEmpty) AppIcon(R.drawable.aw_check) },
                     onClick = { vm.showEmpty(!state.showEmpty); menu = false })
                 DropdownMenuItem(text = { Text(tr(S.refresh)) }, enabled = !state.refreshing, onClick = { vm.refresh(); menu = false })
+                DropdownMenuItem(text = { Text(tr(S.memory_title)) }, onClick = { menu = false; memoryOpen = true })
             }
         }
     }
@@ -227,14 +236,58 @@ private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel)
                 }
                 state.sections.forEach { section ->
                     item("group-${section.group}") { GroupLabel(tr(when(section.group) {
-                        ConversationGroup.TODAY -> S.today; ConversationGroup.YESTERDAY -> S.yesterday; else -> S.older
+                        ConversationGroup.PINNED -> S.pinned_group; ConversationGroup.TODAY -> S.today
+                        ConversationGroup.YESTERDAY -> S.yesterday; else -> S.older
                     })) }
                     itemsIndexed(section.conversations, key = { _, it -> it.id }) { index, conversation ->
                         ConversationRow(conversation, state.agents, rowPosition(index, section.conversations.size),
                             unread = conversation.unread(seen[conversation.id])) { vm.open(conversation) }
                     }
                 }
+                // Chats left idle are archived, not lost: one row at the end opens them.
+                if (state.archivedCount > 0 && state.search.isEmpty()) item("archive") {
+                    Spacer(Modifier.height(16.dp))
+                    ListRow(tr(S.archived_chats), null, RowPosition.ONLY, leading = { AppIcon(R.drawable.aw_queue) },
+                        trailing = { Text("${state.archivedCount}", style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant) }, onClick = vm::openArchive)
+                }
             }
+        }
+    }
+}
+
+/**
+ * The archive, like Claude desktop's archived sessions: chats that sat idle (or were archived by hand), whole and
+ * openable; a message in one brings it back to the list. How long a chat may idle is chosen here.
+ */
+@Composable
+private fun ColumnScope.ArchiveList(state: ClientState, vm: AgentViewModel) {
+    val rows = state.archivedList.orEmpty()
+    Toolbar(tr(S.archive_title), onBack = vm::closeArchive)
+    LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(start = PageGutter, end = PageGutter, bottom = 24.dp)) {
+        item("days") {
+            Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(tr(S.archive_auto), style = MaterialTheme.typography.titleSmall)
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    state.archiveChoices.forEachIndexed { index, days ->
+                        SegmentedButton(state.archiveDays == days, { vm.setArchiveDays(days) },
+                            SegmentedButtonDefaults.itemShape(index, state.archiveChoices.size)) {
+                            Text(if (days == 0) tr(S.archive_never) else tr(S.archive_days, days), maxLines = 1)
+                        }
+                    }
+                }
+                Text(if (state.archiveDays == 0) tr(S.archive_hint_never) else tr(S.archive_hint, state.archiveDays),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (state.error != null) item("error") { ErrorBlock(state.error, vm::openArchive, tr(S.refresh)) }
+        if (rows.isEmpty()) item("empty") {
+            if (state.archivedLoading) LoadingState(tr(S.loading))
+            else Text(tr(S.archive_empty), Modifier.padding(vertical = 24.dp), style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        itemsIndexed(rows, key = { _, it -> it.id }) { index, conversation ->
+            ConversationRow(conversation, state.agents, rowPosition(index, rows.size)) { vm.open(conversation) }
         }
     }
 }
@@ -319,6 +372,10 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
                     DropdownMenuItem(text = { Text(tr(S.model_settings)) }, onClick = { overflow = false; onModels() })
                     if (changedAny || chat.live != null) DropdownMenuItem(text = { Text(tr(S.files_title)) }, onClick = { overflow = false; filesSheet = true })
                     DropdownMenuItem(text = { Text(tr(S.reconnect)) }, onClick = { overflow = false; vm.reload() })
+                    DropdownMenuItem(text = { Text(tr(if (chat.conversation.pinned) S.unpin_chat else S.pin_chat)) },
+                        onClick = { overflow = false; vm.setPinned(chat.conversation.id, !chat.conversation.pinned) })
+                    if (!chat.running) DropdownMenuItem(text = { Text(tr(if (chat.conversation.archived) S.unarchive_chat else S.archive_chat)) },
+                        onClick = { overflow = false; vm.setArchived(chat.conversation.id, !chat.conversation.archived) })
                     if (!chat.conversation.nativeControl) DropdownMenuItem(
                         text = { Text(tr(S.delete_chat), color = MaterialTheme.colorScheme.error) },
                         onClick = { overflow = false; confirmDelete = true })

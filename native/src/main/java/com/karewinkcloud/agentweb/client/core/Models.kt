@@ -88,6 +88,8 @@ data class Conversation(
     val lineage: ConversationLineage? = null,
     /** Its running turn waits on the user's pick (an ask_user question). */
     val waitingInput: Boolean = false,
+    /** Moved out of the list after a while without activity, or by hand; new activity brings it back. */
+    val archived: Boolean = false,
 ) {
     val running get() = active || starting
     /** The list-API shape of this row (without live run state), for the on-device list cache. */
@@ -116,6 +118,7 @@ data class Conversation(
             j.long("message_count")?.toInt(), j.string("last_message_preview").orEmpty(),
             j.obj("project")?.string("id"), ConversationLineage.from(j.obj("lineage")),
             waitingInput = j.boolean("waiting_input") == true,
+            archived = j.long("archived_at") != null,
         )
     }
 }
@@ -275,4 +278,32 @@ data class QueueRequest(val conversationId: String, val text: String, val choice
     val attachments: List<Attachment> = emptyList()) {
     fun json() = JsonObject(choice.fields() + mapOf("conversationId" to JsonPrimitive(conversationId),
         "message" to JsonPrimitive(attachmentMessage(text, attachments)), "queueId" to JsonPrimitive(queueId)) + attachmentFields(attachments))
+}
+
+/** How long a chat may sit idle before the server archives it (0 = never), and how many it has archived. */
+data class ArchiveInfo(val days: Int, val choices: List<Int>, val archived: Int) {
+    companion object {
+        fun from(j: JsonObject) = ArchiveInfo((j.long("days") ?: 14).toInt(),
+            j.array("choices").mapNotNull { (it as? JsonPrimitive)?.longOrNull?.toInt() }.ifEmpty { listOf(0, 7, 14, 30) },
+            (j.long("archived") ?: 0).toInt())
+    }
+}
+
+/** One memory the agents keep (a line of MEMORY.md): its title, file, one-line hook and kind. */
+data class MemoryEntry(val title: String, val file: String, val hook: String, val type: String?, val modified: Long?)
+/** The last nightly (or requested) tidy of the shared memory: when, what it changed, its own summary. */
+data class MemoryPass(val status: String, val at: Long, val summary: String, val changed: List<String>, val removed: List<String>,
+    val files: Int)
+data class MemoryOverview(val entries: List<MemoryEntry>, val lastPass: MemoryPass?, val running: Boolean) {
+    companion object {
+        fun from(j: JsonObject): MemoryOverview {
+            fun names(o: JsonObject, key: String) = o.array(key).mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            return MemoryOverview(j.objects("entries").map {
+                MemoryEntry(it.string("title").orEmpty(), it.string("file").orEmpty(), it.string("hook").orEmpty(), it.string("type"), it.long("modified"))
+            }, j.obj("lastPass")?.let { p ->
+                MemoryPass(p.string("status").orEmpty(), p.long("at") ?: 0, p.string("summary").orEmpty(), names(p, "changed"),
+                    names(p, "removed"), (p.long("files") ?: 0).toInt())
+            }, j.boolean("running") == true)
+        }
+    }
 }

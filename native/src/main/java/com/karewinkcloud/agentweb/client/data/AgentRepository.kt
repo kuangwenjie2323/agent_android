@@ -69,6 +69,17 @@ interface AgentRepository {
     /** A side question about the chat: answered from its transcript, never added to it or sent to its agent. */
     suspend fun sideQuestion(conversationId: String, question: String, history: List<SideQuestion> = emptyList()): String =
         throw ApiException(404, ClientError("Side questions are not available on this server.", "side_unavailable", false))
+    /** Archive settings and how many chats are archived; [setArchiveDays] changes how long a chat may idle. */
+    suspend fun archiveInfo(): ArchiveInfo? = null
+    suspend fun setArchiveDays(days: Int): ArchiveInfo? = null
+    /** The chats the server archived (by hand or for idling), newest first. */
+    suspend fun archivedConversations(): List<Conversation> = emptyList()
+    /** Pins or archives a chat (null leaves that side unchanged). */
+    suspend fun updateConversation(id: String, pinned: Boolean? = null, archived: Boolean? = null) {}
+    /** The agents' shared memory and its last tidy; one memory's text; a tidy started now. */
+    suspend fun memory(): MemoryOverview = throw ApiException(404, ClientError("Memory is not available on this server.", "not_found", false))
+    suspend fun memoryFile(file: String): String = throw ApiException(404, ClientError("Memory is not available on this server.", "not_found", false))
+    suspend fun consolidateMemory() {}
     /** Deletes a chat on the server for good, stopping its running turn first. */
     suspend fun deleteConversation(id: String): Unit = error("Deleting chats is unavailable")
     /** A file the chat names, read from the computer for viewing: text cut at 1 MB, pictures and PDFs whole. */
@@ -372,6 +383,19 @@ class HttpAgentRepository(
                 put("question", item.question); put("answer", item.answer.orEmpty()) } } }
         }, timeoutSeconds = 120).string("answer").orEmpty()
     override suspend fun deleteConversation(id: String) { delete("/api/chat/conversations/${segment(id)}", 30) }
+    override suspend fun archiveInfo() = ArchiveInfo.from(json("/api/chat/archive"))
+    override suspend fun memory() = MemoryOverview.from(json("/api/memory"))
+    override suspend fun memoryFile(file: String) = json("/api/memory/${segment(file)}").string("text").orEmpty()
+    override suspend fun consolidateMemory() { json("/api/memory/consolidate", buildJsonObject { }) }
+    override suspend fun setArchiveDays(days: Int) = ArchiveInfo.from(json("/api/chat/archive", buildJsonObject { put("days", days) }))
+    override suspend fun archivedConversations() = json("/api/chat/conversations?archived=1").objects("conversations").map(Conversation::from)
+    override suspend fun updateConversation(id: String, pinned: Boolean?, archived: Boolean?) = withContext(Dispatchers.IO) {
+        val body = buildJsonObject { pinned?.let { put("pinned", it) }; archived?.let { put("archived", it) } }
+        execute(request("/api/chat/conversations/${segment(id)}").newBuilder().header("Connection", "close")
+            .patch(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType())).build(), 30) { response ->
+            validate(response)
+        }
+    }
     override suspend fun readFile(conversationId: String, path: String): FileContent = withContext(Dispatchers.IO) {
         val owner = currentCoroutineContext()
         val request = request("/api/chat/conversations/${segment(conversationId)}/file?path=${java.net.URLEncoder.encode(path, "UTF-8")}")
