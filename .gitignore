@@ -14,3 +14,8 @@ keystore.properties
 *.iml
 __pycache__/
 .test-tmp/
+release-reports/*-run.log
+release-reports/**/*.png
+release-reports/*.png
+release-reports/apk/
+TASKS.md
