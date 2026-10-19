@@ -428,6 +428,18 @@ class AgentViewModelTest {
         assertTrue(repo.steerCalls.isEmpty())
         assertEquals(listOf("later"), repo.queueCalls.map { it.text })
     }
+    @Test fun awayFromTheAppTheScreenLeavesTheTurnToTheFollowerAndResumesOnReturn() = modelTest {
+        var cancelled = 0
+        repo.followFlow = { _, _, _, _ -> flow { try { awaitCancellation() } finally { cancelled++ } } }
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        vm.open(conversation("one", true)); runCurrent()
+        assertEquals(1, repo.followCalls.size)
+        vm.onBackground(); vm.yieldStream(); runCurrent()
+        assertEquals(1, cancelled)
+        vm.onForeground(); runCurrent()
+        assertEquals(2, repo.followCalls.size)
+        assertEquals(CONTROL, repo.previousTurns.last()?.runId)  // picks up where it stopped
+    }
     @Test fun stopUsesObservedOwnerAndNeverStopsOnNavigation() = modelTest {
         repo.getDetail = { id, _ -> detail(id, running = true) }
         vm.open(conversation("one", true)); runCurrent()

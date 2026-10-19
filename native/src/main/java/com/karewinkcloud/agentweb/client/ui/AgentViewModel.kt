@@ -504,6 +504,16 @@ class AgentViewModel(
         editChat(owner) { it.copy(error = null) }
         sessionJob = viewModelScope.launch { loadAndFollow(owner) }
     }
+    /**
+     * Leaving the app hands a running turn to the notification follower, so the screen's own stream stops: a
+     * slow link then carries the turn once, not twice (10-19: two streams through a proxy, each reconnecting).
+     * Coming back reloads and resumes from the last event seen. A message still on its way is never cut off.
+     */
+    fun yieldStream() {
+        val chat = state.value.chat ?: return
+        val admitted = chat.live?.let { !it.done && it.runId.isNotBlank() } == true
+        if (chat.running && admitted && !chat.controlBusy && chat.controlId != null) sessionJob?.cancel()
+    }
     /** The app is on screen; an idle open chat watches the server only then. */
     @Volatile private var inForeground = true
     fun onBackground() { inForeground = false }

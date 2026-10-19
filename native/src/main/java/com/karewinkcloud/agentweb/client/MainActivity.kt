@@ -141,6 +141,7 @@ class MainActivity : ComponentActivity() {
         }
         if (turns.isEmpty() && creations.isEmpty()) return
         following = AgentWorkService.start(this, turns, creations).isSuccess
+        if (following) chatModel?.yieldStream()
     }
 
     private fun takeOpenRequest(incoming: Intent) {
