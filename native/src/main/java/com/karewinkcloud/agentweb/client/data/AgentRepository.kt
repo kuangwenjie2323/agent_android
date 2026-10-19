@@ -69,6 +69,8 @@ interface AgentRepository {
     /** A side question about the chat: answered from its transcript, never added to it or sent to its agent. */
     suspend fun sideQuestion(conversationId: String, question: String, history: List<SideQuestion> = emptyList()): String =
         throw ApiException(404, ClientError("Side questions are not available on this server.", "side_unavailable", false))
+    /** Deletes a chat on the server for good, stopping its running turn first. */
+    suspend fun deleteConversation(id: String): Unit = error("Deleting chats is unavailable")
     /** A file the chat names, read from the computer for viewing: text cut at 1 MB, pictures and PDFs whole. */
     suspend fun readFile(conversationId: String, path: String): FileContent =
         throw ApiException(404, ClientError("Files cannot be opened on this server.", "not_found", false))
@@ -369,6 +371,7 @@ class HttpAgentRepository(
             putJsonArray("history") { history.filter { it.answer != null }.forEach { item -> addJsonObject {
                 put("question", item.question); put("answer", item.answer.orEmpty()) } } }
         }, timeoutSeconds = 120).string("answer").orEmpty()
+    override suspend fun deleteConversation(id: String) { delete("/api/chat/conversations/${segment(id)}", 30) }
     override suspend fun readFile(conversationId: String, path: String): FileContent = withContext(Dispatchers.IO) {
         val owner = currentCoroutineContext()
         val request = request("/api/chat/conversations/${segment(conversationId)}/file?path=${java.net.URLEncoder.encode(path, "UTF-8")}")

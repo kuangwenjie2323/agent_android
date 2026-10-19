@@ -630,4 +630,7 @@
         <item quantity="one">%1$d line removed</item>
         <item quantity="other">%1$d lines removed</item>
     </plurals>
+    <string name="delete_chat">Delete chat</string>
+    <string name="delete_chat_title">Delete this chat?</string>
+    <string name="delete_chat_body">Its messages are deleted from the server and cannot be brought back. A reply still running is stopped first.</string>
 </resources>

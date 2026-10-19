@@ -294,6 +294,12 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
     var openedFile by remember(chat.conversation.id) { mutableStateOf<FileRef?>(null) }
     val openFile: (FileRef) -> Unit = remember(chat.conversation.id) { { ref -> openedFile = ref } }
     val changedAny = remember(chat.messages) { changedFiles(chat.messages.map { it.blocks }).isNotEmpty() }
+    var confirmDelete by remember(chat.conversation.id) { mutableStateOf(false) }
+    if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false },
+        title = { Text(tr(S.delete_chat_title)) }, text = { Text(tr(S.delete_chat_body)) },
+        confirmButton = { TextButton({ confirmDelete = false; vm.deleteConversation(chat.conversation.id) },
+            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text(tr(S.delete)) } },
+        dismissButton = { TextButton({ confirmDelete = false }) { Text(tr(S.cancel)) } })
     CompositionLocalProvider(LocalOpenFile provides openFile) {
         if (outline) OutlineSheet(chat.messages, chat.nextCursor != null, vm::loadOlder, { id -> outline = false; jumpTo = id }) { outline = false }
         if (sideChat) SideChatSheet(chat.side, vm::askSide, { failed -> vm.dropSide(failed); vm.askSide(failed.question) }) { sideChat = false }
@@ -313,6 +319,9 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
                     DropdownMenuItem(text = { Text(tr(S.model_settings)) }, onClick = { overflow = false; onModels() })
                     if (changedAny || chat.live != null) DropdownMenuItem(text = { Text(tr(S.files_title)) }, onClick = { overflow = false; filesSheet = true })
                     DropdownMenuItem(text = { Text(tr(S.reconnect)) }, onClick = { overflow = false; vm.reload() })
+                    if (!chat.conversation.nativeControl) DropdownMenuItem(
+                        text = { Text(tr(S.delete_chat), color = MaterialTheme.colorScheme.error) },
+                        onClick = { overflow = false; confirmDelete = true })
                 }
             }
         }

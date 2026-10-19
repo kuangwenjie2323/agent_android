@@ -69,6 +69,12 @@ class RepositoryTest {
         assertEquals(Triple(4096L, 1792244969000L, true), Triple(file.size, file.modifiedAt, file.truncated))
         assertEquals("报告 v2.md", file.name)
     }
+    @Test fun aChatIsDeletedByItsEncodedId() = runBlocking {
+        server.enqueue(json("""{"ok":true}"""))
+        repo.deleteConversation("c/1")
+        val sent = next()
+        assertEquals("DELETE" to "/api/chat/conversations/c%2F1", sent.method to sent.path)
+    }
     @Test fun aRefusedFileKeepsTheServersReason() = runBlocking {
         server.enqueue(json("""{"error":"This file may hold passwords or keys, so it is not shown here.","code":"file_private","retryable":false}""", 403))
         try { repo.readFile("c1", "/home/me/.env"); fail("Expected refusal") }

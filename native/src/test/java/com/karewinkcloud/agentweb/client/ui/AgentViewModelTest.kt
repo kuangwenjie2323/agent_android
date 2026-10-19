@@ -440,6 +440,21 @@ class AgentViewModelTest {
         assertEquals(2, repo.followCalls.size)
         assertEquals(CONTROL, repo.previousTurns.last()?.runId)  // picks up where it stopped
     }
+    @Test fun aDeletedChatLeavesTheScreenAndTheList() = modelTest {
+        repo.list = listOf(conversation("one"), conversation("two"))
+        vm.refresh(); runCurrent()
+        vm.open(conversation("one")); runCurrent()
+        vm.deleteConversation("one"); runCurrent()
+        assertEquals(listOf("one"), repo.deleted)
+        assertNull(vm.state.value.chat)
+        assertFalse(vm.state.value.conversations.any { it.id == "one" })
+        // A refusal (a turn still stopping, variants to delete first) stays on the chat and says why.
+        repo.deleteCall = { throw ApiException(409, ClientError("conversation is still stopping", "conversation_busy", true)) }
+        vm.open(conversation("two")); runCurrent()
+        vm.deleteConversation("two"); runCurrent()
+        assertEquals("conversation_busy", vm.state.value.chat!!.error!!.code)
+        assertFalse(vm.state.value.chat!!.controlBusy)
+    }
     @Test fun stopUsesObservedOwnerAndNeverStopsOnNavigation() = modelTest {
         repo.getDetail = { id, _ -> detail(id, running = true) }
         vm.open(conversation("one", true)); runCurrent()
@@ -839,6 +854,9 @@ class AgentViewModelTest {
         val steerControls = mutableListOf<String>()
         override suspend fun steer(conversationId: String, controlId: String, message: String, attachments: List<Attachment>): Boolean { steerCalls += message; steerControls += controlId; steerAttachments += attachments; return steerAccepts }
         val steerAttachments = mutableListOf<Attachment>()
+        val deleted = mutableListOf<String>()
+        var deleteCall: suspend (String) -> Unit = { id -> deleted += id; list = list.filterNot { it.id == id } }
+        override suspend fun deleteConversation(id: String) = deleteCall(id)
         override suspend fun resume(conversationId: String, headId: String): JsonObject {
             resumeCalls += conversationId to headId
             return resumeCall(conversationId, headId)

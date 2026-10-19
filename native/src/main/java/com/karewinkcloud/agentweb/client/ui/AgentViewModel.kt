@@ -444,6 +444,27 @@ class AgentViewModel(
         if (state.value.claudeVisible) refreshClaudeSessions() else refresh()
     }
     private fun saveDraft() { state.value.chat?.let { drafts[it.conversation.id] = it.draft; attachmentDrafts[it.conversation.id] = it.attachments } }
+
+    /** Deletes a chat for good (the user confirmed it): the screen leaves it and the list lets it go. */
+    fun deleteConversation(id: String) {
+        val owner = generation
+        val source = repository
+        val open = state.value.chat?.conversation?.id == id
+        if (open) editChat(owner) { it.copy(controlBusy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                source.deleteConversation(id)
+                if (state.value.chat?.conversation?.id == id) back()
+                drafts.remove(id); attachmentDrafts.remove(id); chatCache.remove(id); unresolvedSends.remove(id); unresolvedQueues.remove(id)
+                mutable.update { it.copy(conversations = it.conversations.filterNot { c -> c.id == id }) }
+                repository.saveConversations(state.value.conversations)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (open && owned(owner)) editChat(owner) { it.copy(controlBusy = false, error = problem(e)) }
+                else mutable.update { it.copy(error = problem(e)) }
+            }
+        }
+    }
     fun browserUnavailable() {
         mutable.update { it.copy(chat = it.chat?.copy(browserError =
             ClientError("Could not open a browser. Install or enable a browser and try again."))) }

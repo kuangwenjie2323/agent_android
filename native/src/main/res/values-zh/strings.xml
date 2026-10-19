@@ -625,4 +625,7 @@
     <plurals name="file_lines_removed">
         <item quantity="other">删除了 %1$d 行</item>
     </plurals>
+    <string name="delete_chat">删除对话</string>
+    <string name="delete_chat_title">删除这个对话？</string>
+    <string name="delete_chat_body">对话记录会从服务器上删除，删除后无法恢复。正在进行的回复会先停下。</string>
 </resources>
