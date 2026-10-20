@@ -85,6 +85,8 @@ class AgentViewModel(
     private val seenChats: SeenChats = MemorySeenChats(),
     /** Whether the phone has a working network; a send without one fails at once instead of timing out. */
     private val online: () -> Boolean = { true },
+    /** Where the background follower got to, so a return resumes from the furthest event of either stream. */
+    private val handover: TurnHandover = TurnStreams,
     private val saveChoice: (ModelChoice) -> Unit,
 ) : ViewModel() {
     private val mutable = MutableStateFlow(ClientState(choice = initialChoice, signInRequired = initialSignInRequired))
@@ -727,11 +729,16 @@ class AgentViewModel(
      * Leaving the app hands a running turn to the notification follower, so the screen's own stream stops: a
      * slow link then carries the turn once, not twice (10-19: two streams through a proxy, each reconnecting).
      * Coming back reloads and resumes from the last event seen. A message still on its way is never cut off.
+     * Returns false when a control request keeps the screen's stream here (then the turn is not handed over).
      */
-    fun yieldStream() {
-        val chat = state.value.chat ?: return
-        val admitted = chat.live?.let { !it.done && it.runId.isNotBlank() } == true
-        if (chat.running && admitted && !chat.controlBusy && chat.controlId != null) sessionJob?.cancel()
+    fun yieldStream(): Boolean {
+        val chat = state.value.chat ?: return true
+        if (!chat.running) return true
+        if (chat.controlBusy) return false
+        chat.live?.runId?.takeIf(String::isNotBlank)?.let { handover.screenStopped(chat.conversation.id, it) }
+        chat.controlId?.let { handover.screenStopped(chat.conversation.id, it) }
+        sessionJob?.cancel()
+        return true
     }
     /** The app is on screen; an idle open chat watches the server only then. */
     @Volatile private var inForeground = true
@@ -926,6 +933,10 @@ class AgentViewModel(
                     unresolvedSends.remove(id); unresolved = null
                 }
                 val prior = priorChat.live
+                // Coming back resumes after the last event this screen showed: only what happened while it was
+                // away is read again. (Starting where the background follower got to would leave a hole in the
+                // answer on screen until the turn ends.)
+                val resume = prior
                 // Attribute only a completed locally observed turn to its captured send model.
                 // The API does not persist models for all historical messages.
                 val last = detail.messages.lastOrNull()
@@ -952,9 +963,9 @@ class AgentViewModel(
                     // A message given back to the box keeps its note until the user acts on it.
                     error = priorChat.error?.takeIf { it.code == "not_sent" },
                     live = (unresolved?.controlId ?: forkRun ?: detail.conversation.controlId?.takeIf { detail.conversation.running })?.let { run ->
-                        prior?.takeIf { p -> p.runId == run && !p.done } ?: TurnState(id, run,
+                        resume?.takeIf { p -> p.runId == run && !p.done } ?: TurnState(id, run,
                             startedAt = prior?.takeIf { p -> p.runId.isBlank() && !p.done }?.startedAt ?: monotonicMillis())
-                    } ?: prior?.takeIf { detail.conversation.running && !it.done && it.runId.isBlank() },
+                    } ?: resume?.takeIf { detail.conversation.running && !it.done && it.runId.isBlank() },
                     connection = null, stopRequested = false, revealing = false)
                 if (next != priorChat) editChat(owner) { next }
                 if (open != null) {
@@ -988,7 +999,7 @@ class AgentViewModel(
                     // An observed successor proves the old turn is no longer our active owner.
                     if (unresolved != null && run != unresolved.controlId) unresolvedSends.remove(id)
                     try {
-                        follow(owner, id, run, previous = prior?.takeIf { it.runId == run && !it.done })
+                        follow(owner, id, run, previous = resume?.takeIf { it.runId == run && !it.done })
                     } catch (e: ApiException) {
                         if (e.status != 404 || e.problem.code !in setOf("no_active_stream", null)) throw e
                         if (detail.conversation.running && ++missingStreams < 3) { delay(1000); continue }
@@ -1058,6 +1069,10 @@ class AgentViewModel(
         val startedAt = previous?.startedAt ?: state.value.chat?.live?.takeIf { it.runId == run || it.runId.isBlank() }?.startedAt ?: monotonicMillis()
         val initial = previous?.copy(startedAt = startedAt) ?: run?.let { TurnState(id, it, startedAt = startedAt) }
         val visibleInitial = initial ?: TurnState(id, "", startedAt = startedAt)
+        val streamRun = initial?.runId.orEmpty()
+        if (streamRun.isNotBlank() && !handover.screenStarted(id, streamRun))
+            Diagnostics.warn("stream", "the screen took the turn back while the follower still held it", "run" to streamRun)
+        Diagnostics.event("stream", "follow started", "who" to "screen", "from" to (initial?.lastSequence ?: 0), "run" to streamRun)
         if (owned(owner)) livePresentation.value = visibleInitial
         editChat(owner) { it.copy(live = visibleInitial, connection = Connection.CONNECTING, loading = false) }
         var latest: TurnSnapshot? = null
@@ -1092,6 +1107,7 @@ class AgentViewModel(
         }
         try {
             repository.follow(id, run, send, initial).collect { snapshot ->
+                handover.note(id, snapshot.turn.runId, snapshot.turn.lastSequence)
                 latest = snapshot.copy(turn = snapshot.turn.copy(startedAt = startedAt))
                 pacer.offer(snapshot.turn.blocks.sumOf { (it as? ChatBlock.Text)?.content?.length ?: 0 }, frameTime)
                 updates.trySend(Unit)
@@ -1101,7 +1117,10 @@ class AgentViewModel(
         } catch (e: Exception) {
             if (currentCoroutineContext().isActive) { updates.close(); painter.join() }
             throw e
-        } finally { updates.close(); painter.cancel() }
+        } finally {
+            updates.close(); painter.cancel()
+            if (streamRun.isNotBlank()) handover.screenStopped(id, streamRun)
+        }
     }
 
     fun send() {

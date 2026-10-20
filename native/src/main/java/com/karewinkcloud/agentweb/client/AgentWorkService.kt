@@ -20,12 +20,20 @@ import com.karewinkcloud.agentweb.client.core.ComfyJob
 import com.karewinkcloud.agentweb.client.core.ComfyJobPhase
 import com.karewinkcloud.agentweb.client.core.phase
 import com.karewinkcloud.agentweb.client.core.StreamProtocolException
+import com.karewinkcloud.agentweb.client.core.TurnState
+import com.karewinkcloud.agentweb.client.core.TurnHandover
+import com.karewinkcloud.agentweb.client.core.TurnStreams
+import com.karewinkcloud.agentweb.client.core.array
+import com.karewinkcloud.agentweb.client.core.boolean
+import com.karewinkcloud.agentweb.client.core.string
+import com.karewinkcloud.agentweb.client.core.wireJson
 import com.karewinkcloud.agentweb.client.data.Diagnostics
 import com.karewinkcloud.agentweb.client.data.HttpAgentRepository
 import com.karewinkcloud.agentweb.client.data.HttpComfyRepository
 import com.karewinkcloud.agentweb.client.data.SettingsStore
 import com.karewinkcloud.agentweb.client.ui.comfyErrorResource
 import kotlinx.coroutines.*
+import kotlinx.serialization.json.*
 import java.io.File
 
 /**
@@ -43,6 +51,8 @@ class AgentWorkService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onCreate() { super.onCreate(); instance = this }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val turns = intent?.turns().orEmpty()
         val creations = intent?.creations().orEmpty()
@@ -58,6 +68,8 @@ class AgentWorkService : Service() {
             stopSelf(); return START_NOT_STICKY
         }
         work?.cancel()
+        // A new start replaces every follower; release their claim before the replacement starts.
+        TurnStreams.releaseFollowers()
         work = scope.launch {
             val store = SettingsStore(applicationContext)
             val repository = HttpAgentRepository(store.load().origin, store)
@@ -83,13 +95,49 @@ class AgentWorkService : Service() {
     private fun refreshOngoing() { if (turnsLeft + creationsLeft > 0) notify(this, ID_ONGOING, ongoing()) }
 
     private suspend fun followTurn(repository: HttpAgentRepository, turn: Turn) {
-        val asked = mutableSetOf<String>()
+        try {
+            // The screen stops its stream before the hand-over; a claim it still holds wins here, so
+            // one run is never streamed by both at once.
+            // The screen keeps its own stream through the grace after leaving; follow once it has handed over.
+            if (!awaitHandOver()) return
+            if (!TurnStreams.beginFollower(turn.conversationId, turn.controlId)) {
+                Diagnostics.event("stream", "follow skipped", "who" to "background", "run" to turn.controlId)
+                return
+            }
+            followResumed(repository, turn)
+        } finally {
+            TurnStreams.endFollower(turn.conversationId, turn.controlId)
+            turnsLeft--; refreshOngoing()
+        }
+    }
+
+    /** Waits for the screen to hand its turns over; false when that never came (the screen kept them). */
+    private suspend fun awaitHandOver(): Boolean {
+        val until = System.currentTimeMillis() + TurnHandover.GRACE_MILLIS * 4
+        while (!TurnStreams.isHandedOver()) {
+            if (System.currentTimeMillis() > until) return false
+            delay(200)
+        }
+        return true
+    }
+
+    private suspend fun followResumed(repository: HttpAgentRepository, turn: Turn) {
+        // Questions the screen showed are not in the resumed stream any more: announce them now; a
+        // later answer event takes the note away again. The screen read on during the grace: resume after
+        // the furthest event it saw, not where it was when the app was left.
+        val resumed = turn.resumeState(maxOf(turn.from, TurnStreams.furthest(turn.conversationId, turn.controlId)))
+        val asked = if (resumed != null) turn.questions.mapTo(mutableSetOf()) { it.id } else mutableSetOf()
+        if (resumed != null) turn.questions.forEach { notifyQuestion(turn, it) }
         var sawRunning = false
         // The run the app knew can be gone by now (a queued message started the next one): then the chat's
         // current run is followed instead, once, so its question and its end still reach the user.
         var run: String? = turn.controlId
+        var previous = resumed
         while (true) try {
-            repository.follow(turn.conversationId, run).collect { snapshot ->
+            Diagnostics.event("stream", "follow started", "who" to "background",
+                "from" to (previous?.lastSequence ?: 0), "run" to (run ?: ""))
+            repository.follow(turn.conversationId, run, previous = previous).collect { snapshot ->
+                TurnStreams.note(turn.conversationId, snapshot.turn.runId, snapshot.turn.lastSequence)
                 if (!snapshot.turn.done) sawRunning = true
                 val questions = snapshot.turn.blocks.filterIsInstance<ChatBlock.Question>()
                 questions.filter { it.answer == null && asked.add(it.id) }.forEach { notifyQuestion(turn, it) }
@@ -108,12 +156,12 @@ class AgentWorkService : Service() {
                 "error" to Diagnostics.describe(e)); break }
             Diagnostics.event("work", "following the chat's current run", "conversation" to turn.conversationId)
             run = null
+            previous = null
         } catch (e: Exception) {
             if (e !is CancellationException) Diagnostics.warn("work", "turn follow failed", "conversation" to turn.conversationId,
                 "error" to Diagnostics.describe(e))
             break
         }
-        turnsLeft--; refreshOngoing()
     }
 
     private suspend fun followCreations(studio: HttpComfyRepository, creations: List<Creation>) {
@@ -172,9 +220,26 @@ class AgentWorkService : Service() {
         notify(this, question.id.hashCode(), builder.build())
     }
 
-    override fun onDestroy() { Diagnostics.event("work", "background follow stopped"); scope.cancel(); super.onDestroy() }
+    override fun onDestroy() {
+        if (instance === this) instance = null
+        TurnStreams.releaseFollowers()
+        Diagnostics.event("work", "background follow stopped")
+        scope.cancel(); super.onDestroy()
+    }
 
-    data class Turn(val conversationId: String, val controlId: String, val title: String)
+    /** Stops following now, before the screen's own stream resumes on coming back. */
+    internal fun halt() { TurnStreams.releaseFollowers(); work?.cancel(); turnsLeft = 0; creationsLeft = 0 }
+
+    data class Turn(val conversationId: String, val controlId: String, val title: String,
+        /** The last event the screen saw; the follower resumes after it instead of replaying the turn. */
+        val from: Long = 0,
+        /** Questions still open on screen: the resumed stream no longer carries them, so announce them. */
+        val questions: List<ChatBlock.Question> = emptyList()) {
+        /** The state the repository resumes from: the run, its last event, and the questions to keep an eye on. */
+        fun resumeState(after: Long = from) = after.takeIf { it > 0 }?.let {
+            TurnState(conversationId, controlId, lastSequence = it, blocks = questions)
+        }
+    }
     data class Creation(val requestId: String, val title: String)
 
     companion object {
@@ -190,25 +255,59 @@ class AgentWorkService : Service() {
         private const val EXTRA_TURN_IDS = "turn_ids"
         private const val EXTRA_TURN_CONTROLS = "turn_controls"
         private const val EXTRA_TURN_TITLES = "turn_titles"
+        private const val EXTRA_TURN_FROM = "turn_from"
+        private const val EXTRA_TURN_QUESTIONS = "turn_questions"
         private const val EXTRA_JOB_IDS = "job_ids"
         private const val EXTRA_JOB_TITLES = "job_titles"
         private const val ID_ONGOING = 41
+        @Volatile private var instance: AgentWorkService? = null
 
         fun start(context: Context, turns: List<Turn>, creations: List<Creation>) = runCatching {
             context.startForegroundService(Intent(context, AgentWorkService::class.java)
                 .putStringArrayListExtra(EXTRA_TURN_IDS, ArrayList(turns.map { it.conversationId }))
                 .putStringArrayListExtra(EXTRA_TURN_CONTROLS, ArrayList(turns.map { it.controlId }))
                 .putStringArrayListExtra(EXTRA_TURN_TITLES, ArrayList(turns.map { it.title }))
+                .putExtra(EXTRA_TURN_FROM, turns.map { it.from }.toLongArray())
+                .putExtra(EXTRA_TURN_QUESTIONS, questionsJson(turns))
                 .putStringArrayListExtra(EXTRA_JOB_IDS, ArrayList(creations.map { it.requestId }))
                 .putStringArrayListExtra(EXTRA_JOB_TITLES, ArrayList(creations.map { it.title })))
         }.onFailure { Diagnostics.warn("work", "could not start background follow", "error" to Diagnostics.describe(it)) }
 
-        fun stop(context: Context) = runCatching { context.stopService(Intent(context, AgentWorkService::class.java)) }
+        fun stop(context: Context) = runCatching {
+            instance?.halt()
+            context.stopService(Intent(context, AgentWorkService::class.java))
+        }
+
+        private fun questionsJson(turns: List<Turn>): String = buildJsonArray {
+            turns.forEach { turn -> addJsonArray {
+                turn.questions.forEach { question -> addJsonObject {
+                    put("id", question.id); put("question", question.question)
+                    put("multi", question.multi); put("answer", question.answer)
+                    putJsonArray("options") { question.options.forEach { add(it) } }
+                } }
+            } }
+        }.toString()
+
+        private fun parseQuestions(raw: String?): List<List<ChatBlock.Question>> {
+            val rows = raw?.let { runCatching { wireJson.parseToJsonElement(it) as? JsonArray }.getOrNull() } ?: return emptyList()
+            return rows.map { row ->
+                (row as? JsonArray)?.mapNotNull { item ->
+                    val question = item as? JsonObject ?: return@mapNotNull null
+                    ChatBlock.Question(question.string("id").orEmpty(), question.string("question").orEmpty(),
+                        question.array("options").mapNotNull { (it as? JsonPrimitive)?.contentOrNull },
+                        question.boolean("multi") == true, question.string("answer"))
+                }.orEmpty()
+            }
+        }
 
         private fun Intent.turns(): List<Turn> {
             val ids = getStringArrayListExtra(EXTRA_TURN_IDS).orEmpty(); val controls = getStringArrayListExtra(EXTRA_TURN_CONTROLS).orEmpty()
-            val titles = getStringArrayListExtra(EXTRA_TURN_TITLES).orEmpty()
-            return ids.indices.filter { it < controls.size }.map { Turn(ids[it], controls[it], titles.getOrNull(it).orEmpty()) }.take(6)
+            val titles = getStringArrayListExtra(EXTRA_TURN_TITLES).orEmpty(); val from = getLongArrayExtra(EXTRA_TURN_FROM) ?: LongArray(0)
+            val questions = parseQuestions(getStringExtra(EXTRA_TURN_QUESTIONS))
+            return ids.indices.filter { it < controls.size }.map { index ->
+                Turn(ids[index], controls[index], titles.getOrNull(index).orEmpty(), from.getOrNull(index) ?: 0,
+                    questions.getOrNull(index).orEmpty())
+            }.take(6)
         }
 
         private fun Intent.creations(): List<Creation> {

@@ -2,6 +2,8 @@ package com.karewinkcloud.agentweb.client
 
 import android.os.Bundle
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.ComponentActivity
@@ -19,12 +21,15 @@ import android.content.res.Configuration
 import java.util.Locale
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.browser.customtabs.CustomTabsClient
 import androidx.browser.customtabs.CustomTabsIntent
 import com.karewinkcloud.agentweb.client.data.*
 import com.karewinkcloud.agentweb.client.ui.*
+import com.karewinkcloud.agentweb.client.core.TurnHandover
+import com.karewinkcloud.agentweb.client.core.TurnStreams
 import com.karewinkcloud.agentweb.client.core.needsPolling
 
 class MainActivity : ComponentActivity() {
@@ -32,6 +37,9 @@ class MainActivity : ComponentActivity() {
     private var chatModel: AgentViewModel? = null
     private var studioModel: ComfyViewModel? = null
     private var following = false
+    /** The delayed hand-over to the background follower; cancelled when the screen comes back first. */
+    private val handler = Handler(Looper.getMainLooper())
+    private val handOver = Runnable { handOverIfDue() }
     /** A tapped notification's target ("conversation" or "creation" to its id), shown once the view models exist. */
     private val openRequest = mutableStateOf<Pair<String, String>?>(null)
     private val listCacheDir by lazy { java.io.File(noBackupFilesDir, "conversation-list") }
@@ -113,35 +121,64 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Leaving the app (Home, recents, screen off) hands a running turn to the notification follower.
-    override fun onUserLeaveHint() { super.onUserLeaveHint(); followInBackground() }
+    // Leaving the app (Home, recents, screen off) starts the hand-over clock; a quick return cancels it.
+    override fun onUserLeaveHint() { super.onUserLeaveHint(); leftForBackground() }
 
-    override fun onStop() { super.onStop(); if (!isChangingConfigurations) followInBackground() }
+    override fun onStop() { super.onStop(); if (!isChangingConfigurations) leftForBackground() }
 
     override fun onStart() {
+        // Coming back: no hand-over may start now, and a running follower stops before the screen's
+        // stream resumes. Doing this before super.onStart() keeps the two never streaming one run.
+        handler.removeCallbacks(handOver)
+        TurnStreams.returned()
+        following = false
+        AgentWorkService.stop(this)
         super.onStart()
-        if (following) { following = false; AgentWorkService.stop(this) }
         AgentWorkService.clearAll(this)
     }
 
-    /** Every running turn (the open chat and the list) and every open creation goes to the notification follower. */
-    private fun followInBackground() {
-        if (following) return
+    override fun onDestroy() {
+        // A rotation's old Activity must not hand over the turn its replacement keeps streaming.
+        if (isChangingConfigurations) handler.removeCallbacks(handOver)
+        super.onDestroy()
+    }
+
+    private fun leftForBackground() {
+        if (!TurnStreams.left(System.currentTimeMillis())) return
+        // The follower service starts now, while Android still lets an app that was just on screen start one
+        // (a few seconds only, so it cannot wait for the grace). It reads nothing until the hand-over below,
+        // so a quick return costs no second stream.
+        if (!followInBackground()) { TurnStreams.returned(); return }
+        handler.removeCallbacks(handOver)
+        handler.postDelayed(handOver, TurnHandover.GRACE_MILLIS)
+    }
+
+    private fun handOverIfDue() {
+        // onUserLeaveHint can fire while the screen is still started (a dialog on top): never hand over
+        // a turn that is still on screen.
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) { TurnStreams.returned(); return }
+        if (!TurnStreams.due(System.currentTimeMillis())) return
+        // The screen lets go first, then the follower may start: one run is never read twice. A control request
+        // in flight keeps the screen's stream, and the follower skips that run (the screen still holds it).
+        chatModel?.yieldStream()
+        TurnStreams.handOver()
+    }
+
+    /**
+     * Every running turn (the open chat and the list) and every open creation goes to the notification follower;
+     * false when there is nothing to follow or the service could not start.
+     */
+    private fun followInBackground(): Boolean {
+        if (following) return true
         val state = chatModel?.state?.value
-        val turns = buildList {
-            state?.chat?.let { chat -> chat.controlId?.takeIf { chat.running }?.let { add(AgentWorkService.Turn(chat.conversation.id, it, chat.conversation.title)) } }
-            state?.conversations.orEmpty().forEach { conversation ->
-                val control = conversation.controlId?.takeIf { conversation.running } ?: return@forEach
-                if (none { it.conversationId == conversation.id }) add(AgentWorkService.Turn(conversation.id, control, conversation.title))
-            }
-        }
+        val turns = handoverTurns(state)
         val studio = studioModel?.state?.value
         val creations = studio?.jobs.orEmpty().filter { it.needsPolling() }.map { job ->
             AgentWorkService.Creation(job.requestId, studio?.workflows?.find { it.id == job.workflowId }?.title ?: job.workflowId)
         }
-        if (turns.isEmpty() && creations.isEmpty()) return
+        if (turns.isEmpty() && creations.isEmpty()) return false
         following = AgentWorkService.start(this, turns, creations).isSuccess
-        if (following) chatModel?.yieldStream()
+        return following
     }
 
     private fun takeOpenRequest(incoming: Intent) {

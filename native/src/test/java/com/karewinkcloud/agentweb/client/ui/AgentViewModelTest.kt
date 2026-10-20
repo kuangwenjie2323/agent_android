@@ -17,10 +17,12 @@ class AgentViewModelTest {
     private lateinit var store: ViewModelStore
     private lateinit var repo: FakeRepository
     private lateinit var vm: AgentViewModel
+    private lateinit var handover: TurnHandover
     @Before fun setup() {
         Dispatchers.setMain(dispatcher)
         repo = FakeRepository()
-        vm = AgentViewModel(repo, ModelChoice("a", "model")) { }
+        handover = TurnHandover()
+        vm = AgentViewModel(repo, ModelChoice("a", "model"), handover = handover) { }
         store = ViewModelStore().apply { put("vm", vm) }
     }
     @After fun cleanup() { store.clear(); Dispatchers.resetMain() }
@@ -766,6 +768,27 @@ class AgentViewModelTest {
         vm.back(); runCurrent()
         vm.open(conversation("one", true).copy(controlId = "fedcba0987654321fedcba0987654321"))
         assertNull(vm.state.value.chat!!.live!!.text.takeIf { it.isNotEmpty() })
+    }
+    @Test fun comingBackResumesAfterTheScreensOwnLastEventSoTheAnswerHasNoHole() = modelTest {
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        repo.followFlow = { id, run, _, _ -> flow {
+            emit(TurnSnapshot(TurnState(id, run!!, 100, listOf(ChatBlock.Text("on screen")), startedAt = 1), Connection.LIVE))
+            awaitCancellation()
+        } }
+        vm.open(conversation("one", true)); runCurrent(); advanceTimeBy(1000); runCurrent()  // the screen paints it
+        assertEquals(100L, handover.furthest("one", CONTROL))
+        assertEquals(100L, vm.state.value.chat!!.live!!.lastSequence)
+        // The background follower read on after the screen's stream stopped.
+        handover.note("one", CONTROL, 900)
+        vm.onBackground(); vm.yieldStream(); runCurrent()
+        repo.followFlow = { id, run, _, previous -> flow {
+            emit(TurnSnapshot(previous ?: TurnState(id, run!!, 901, startedAt = 1), Connection.LIVE)); awaitCancellation()
+        } }
+        vm.onForeground(); runCurrent()
+        // Only what came after the screen's last event is read again; the follower's position is for the follower.
+        assertEquals(100L, repo.previousTurns.last()?.lastSequence)
+        assertEquals(CONTROL, repo.previousTurns.last()?.runId)
+        assertEquals("on screen", vm.state.value.chat!!.live!!.text)
     }
     @Test fun disposedActivityFrameClockDoesNotCancelTheFollower() = modelTest {
         vm.frameClock = object : androidx.compose.runtime.MonotonicFrameClock {
