@@ -17,16 +17,93 @@ class AgentViewModelTest {
     private lateinit var store: ViewModelStore
     private lateinit var repo: FakeRepository
     private lateinit var vm: AgentViewModel
+    private lateinit var handover: TurnHandover
     @Before fun setup() {
         Dispatchers.setMain(dispatcher)
         repo = FakeRepository()
-        vm = AgentViewModel(repo, ModelChoice("a", "model")) { }
+        handover = TurnHandover()
+        vm = AgentViewModel(repo, ModelChoice("a", "model"), handover = handover) { }
         store = ViewModelStore().apply { put("vm", vm) }
     }
     @After fun cleanup() { store.clear(); Dispatchers.resetMain() }
 
     private fun modelTest(block: suspend TestScope.() -> Unit) = runTest(dispatcher) {
         try { block() } finally { store.clear() }
+    }
+
+    @Test fun aSideQuestionIsAnsweredBesideTheChatNotInIt() = modelTest {
+        runCurrent()
+        vm.open(conversation("one")); runCurrent()
+        vm.askSide("它在干嘛？")
+        assertEquals(listOf(SideQuestion("它在干嘛？")), vm.state.value.chat!!.side)
+        runCurrent()
+        assertEquals(listOf(SideQuestion("它在干嘛？", "answer: 它在干嘛？")), vm.state.value.chat!!.side)
+        assertEquals(0, repo.sendCalls)  // nothing went into the chat or to its agent
+        repo.side = { _, _, history -> "seen ${history.size} earlier" }
+        vm.askSide("还有呢")
+        runCurrent()
+        assertEquals("seen 1 earlier", vm.state.value.chat!!.side.last().answer)
+        vm.back(); runCurrent(); vm.open(conversation("one")); runCurrent()
+        assertEquals(2, vm.state.value.chat!!.side.size)  // kept while the app runs
+        repo.side = { _, _, _ -> throw java.io.IOException("down") }
+        vm.askSide("第三个"); runCurrent()
+        assertTrue(vm.state.value.chat!!.side.last().failed)
+    }
+
+    @Test fun anOfflineSendFailsAtOnceAndKeepsTheDraft() = modelTest {
+        val offline = AgentViewModel(repo, ModelChoice("a", "model"), online = { false }) { }
+        store.put("offline", offline)
+        runCurrent()
+        offline.open(conversation("one")); runCurrent()
+        offline.draft("hello"); offline.send(); runCurrent()
+        assertEquals("offline", offline.state.value.chat!!.error?.code)
+        assertEquals("hello", offline.state.value.chat!!.draft)
+        assertEquals(0, repo.sendCalls)
+    }
+
+    @Test fun aSendThatNeverLeftThePhoneComesBackToTheBox() = modelTest {
+        repo.followFlow = { _, _, send, _ -> flow { if (send != null) throw javax.net.ssl.SSLHandshakeException("connection closed"); awaitCancellation() } }
+        runCurrent()
+        vm.open(conversation("one")); runCurrent()
+        vm.draft("看这个"); vm.send(); runCurrent()
+        val chat = vm.state.value.chat!!
+        assertEquals("not_sent", chat.error?.code)
+        assertEquals("看这个", chat.draft)
+        assertNull(chat.live)
+        assertFalse(chat.running)  // the next message goes out as a normal send, not into a turn that never was
+    }
+
+    @Test fun aChatStuckOnALostSendRecoversWhenTheServerHasNoSuchTurn() = modelTest {
+        // The send's connection dropped mid-way (ambiguous), and the server never saved it.
+        repo.followFlow = { _, run, send, _ -> flow {
+            if (send != null) throw java.net.SocketException("Software caused connection abort")
+            throw ApiException(404, ClientError("no active stream", "no_active_stream"))
+        } }
+        runCurrent()
+        vm.open(conversation("one")); runCurrent()
+        vm.draft("撤单吗"); vm.send(); runCurrent()
+        assertTrue(vm.state.value.chat!!.running)  // ambiguous: held, not resent
+        vm.reload(); runCurrent()
+        assertTrue(vm.state.value.chat!!.running)  // it may still be on its way in
+        advanceTimeBy(61_000); runCurrent()
+        val chat = vm.state.value.chat!!
+        assertFalse(chat.running)
+        assertEquals("撤单吗", chat.draft)
+        assertEquals("not_sent", chat.error?.code)
+        assertTrue(chat.messages.none { it.id.startsWith("pending-") })
+    }
+
+    @Test fun aQueuedMessageForAChatThatOnlyLookedBusyIsSentNormally() = modelTest {
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        repo.admit = { throw ApiException(409, ClientError("conversation is not active", "conversation_idle")) }
+        repo.followFlow = { _, _, send, _ -> flow { if (send == null) awaitCancellation() else awaitCancellation() } }
+        runCurrent()
+        vm.open(conversation("one", running = true)); runCurrent()
+        repo.getDetail = { id, _ -> detail(id) }
+        vm.draft("在吗"); vm.queue(); runCurrent()
+        assertEquals(1, repo.queueCalls.size)
+        assertEquals(1, repo.sendCalls)
+        assertEquals("在吗", repo.followCalls.last().third?.text)
     }
 
     @Test fun staleDetailCannotReplaceNewSelection() = modelTest {
@@ -44,6 +121,29 @@ class AgentViewModelTest {
         vm.open(conversation("two")); runCurrent(); vm.draft("second draft")
         vm.open(conversation("one")); runCurrent()
         assertEquals("first draft", vm.state.value.chat!!.draft)
+    }
+    @Test fun browserFailureKeepsChatDraftAndRequestErrorAndCanBeDismissed() = modelTest {
+        vm.open(conversation("one")); runCurrent(); vm.draft("unsent draft")
+        vm.attachmentFailure(vm.attachmentOwner(), "Attachment could not be read")
+        val before = vm.state.value.chat!!
+        vm.browserUnavailable()
+        val failed = vm.state.value.chat!!
+        assertEquals("Could not open a browser. Install or enable a browser and try again.", failed.browserError!!.message)
+        assertEquals(before.error, failed.error)
+        assertEquals(before.draft, failed.draft)
+        assertEquals(before.messages, failed.messages)
+        assertEquals(0, repo.sendCalls)
+        vm.dismissBrowserError()
+        assertNull(vm.state.value.chat!!.browserError)
+        assertEquals(before, vm.state.value.chat)
+    }
+    @Test fun browserFailureDoesNotFollowNavigationToAnotherChat() = modelTest {
+        vm.open(conversation("one")); runCurrent(); vm.browserUnavailable()
+        vm.open(conversation("two")); runCurrent()
+        assertNull(vm.state.value.chat!!.browserError)
+        vm.back(); runCurrent(); vm.browserUnavailable()
+        assertNull(vm.state.value.chat)
+        assertNull(vm.state.value.error)
     }
     @Test fun attachmentsKeepDraftOwnershipAndStalePickerCannotCrossNavigation() = modelTest {
         vm.open(conversation("one")); runCurrent()
@@ -67,6 +167,23 @@ class AgentViewModelTest {
         assertEquals(1, repo.sendCalls)
         assertTrue(vm.state.value.chat!!.attachments.isEmpty())
         assertEquals(file.name, vm.state.value.chat!!.messages.last().blocks.filterIsInstance<ChatBlock.Media>().single().items.single().name)
+    }
+    @Test fun photosFollowTheSelectedModelNotTheWholeProvider() = modelTest {
+        repo.models = listOf("model", "pro"); repo.images = mapOf("model" to true, "pro" to false)
+        vm.open(conversation("one")); runCurrent()
+        val image = encodeAttachment("a.png", "image/png", byteArrayOf(1), AttachmentKind.IMAGE)
+        assertTrue(vm.addAttachments(vm.attachmentOwner(), listOf(image)))
+        vm.removeAttachment(image.id)
+        vm.choose(ModelChoice("a", "pro")); runCurrent()
+        assertFalse(vm.addAttachments(vm.attachmentOwner(), listOf(image)))
+        assertTrue(vm.state.value.chat!!.error!!.message.contains("不支持图片"))
+        val parsed = Agent.from(buildJsonObject {
+            put("id", "deepseek"); put("supportsImages", true)
+            putJsonObject("modelSupportsImages") { put("deepseek-flash", true); put("deepseek-v4-pro", false) }
+        })
+        assertTrue(parsed.readsImages("deepseek-flash")); assertFalse(parsed.readsImages("deepseek-v4-pro"))
+        assertTrue(parsed.readsImages("unlisted"))  // older servers: the provider-wide flag
+        assertFalse(Agent.from(buildJsonObject { put("id", "grok") }).readsImages("grok-4.5"))
     }
     @Test fun pickerReturnSurvivesForegroundReloadAndReadingKeepsSendDisabled() = modelTest {
         vm.open(conversation("one")); runCurrent()
@@ -121,6 +238,19 @@ class AgentViewModelTest {
         vm.reload(); runCurrent(); vm.selectProject(null); runCurrent()
         assertEquals(1, repo.createCalls)
     }
+    @Test fun newChatKeepsSelectedEffortAndPermissionsForFirstSend() = modelTest {
+        repo.models = listOf("model", "next")
+        val choice = ModelChoice("a", "next", "high", "plan")
+        val blank = conversation("new").copy(choice = ModelChoice("a", "next"))
+        repo.create = { blank }
+        repo.getDetail = { _, _ -> detail("new").copy(conversation = blank) }
+        runCurrent()
+        vm.choose(choice)
+        vm.newChat(); runCurrent()
+        assertEquals(choice, vm.state.value.choice)
+        vm.draft("hello"); vm.send(); runCurrent()
+        assertEquals(choice, repo.followCalls.last { it.third != null }.third!!.choice)
+    }
     @Test fun newChatIsSingleFlightAndCannotHijackLaterNavigation() = modelTest {
         runCurrent()
         val pending = CompletableDeferred<Conversation>()
@@ -145,6 +275,95 @@ class AgentViewModelTest {
         assertEquals(1, repo.sendCalls)
         assertEquals("", vm.state.value.chat!!.draft)
     }
+    @Test fun droppedSendIsSettledOnceItsMessageIsSavedAndALaterTurnOwnsTheStream() = modelTest {
+        vm.open(conversation("one")); runCurrent()
+        repo.followFlow = { _, _, send, _ -> flow {
+            if (send != null) throw IOException("stream dropped mid-turn")
+            throw StreamProtocolException("The run changed. Reloading saved history is required.")
+        } }
+        vm.draft("do work"); vm.send(); runCurrent()
+        assertFalse(vm.state.value.chat!!.canSend)
+        // The server finished that turn (and a queued follow-up); nothing runs now.
+        repo.getDetail = { id, _ -> ConversationDetail(conversation(id), listOf(
+            ChatMessage("5", "user", listOf(ChatBlock.Text("do work"))), message("6")), emptyList(), false, 0, null) }
+        val follows = repo.followCalls.size
+        vm.reload(); runCurrent()
+        val chat = vm.state.value.chat!!
+        assertTrue(chat.canSend)
+        assertNull(chat.live)
+        assertNull(chat.error)
+        assertEquals(follows, repo.followCalls.size)  // the stale run is not followed again
+    }
+    @Test fun failedReconcileStopsSpinning() = modelTest {
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        repo.followFlow = { _, _, _, _ -> flow { throw StreamProtocolException("The run changed.") } }
+        vm.open(conversation("one", true)); runCurrent()
+        val chat = vm.state.value.chat!!
+        assertEquals("stream_mismatch", chat.error?.code)
+        assertNull(chat.live)
+        assertNull(chat.connection)
+    }
+    @Test fun reopeningShowsCachedHistoryWhileRefreshing() = modelTest {
+        repo.getDetail = { id, _ -> ConversationDetail(conversation(id), listOf(message("1"), message("2")), emptyList(), false, 0, null) }
+        vm.open(conversation("one")); runCurrent()
+        vm.back(); runCurrent()
+        val gate = CompletableDeferred<Unit>()
+        repo.getDetail = { id, _ -> gate.await(); ConversationDetail(conversation(id), listOf(message("1"), message("2"), message("3")), emptyList(), false, 0, null) }
+        vm.open(conversation("one")); runCurrent()
+        assertFalse(vm.state.value.chat!!.loading)
+        assertEquals(listOf("1", "2"), vm.state.value.chat!!.messages.map { it.id })
+        gate.complete(Unit); runCurrent()
+        assertEquals(listOf("1", "2", "3"), vm.state.value.chat!!.messages.map { it.id })
+    }
+    @Test fun aChatOpensFromItsSavedPageBeforeTheNetworkAnswers() = modelTest {
+        runCurrent()
+        repo.cachedDetailResult = detail("one").copy(messages = listOf(message("1"), message("2")))
+        val gate = CompletableDeferred<Unit>()
+        repo.getDetail = { id, _ -> gate.await(); detail(id).copy(messages = listOf(message("1"), message("2"), message("3"))) }
+        vm.open(conversation("one"))
+        runCurrent()
+        // The disk copy is on screen while the first page is still on its way.
+        assertEquals(listOf("1", "2"), vm.state.value.chat!!.messages.map { it.id })
+        assertFalse(vm.state.value.chat!!.loading)
+        assertEquals(listOf("one"), repo.cachedDetailCalls)
+        gate.complete(Unit); runCurrent()
+        assertEquals(listOf("1", "2", "3"), vm.state.value.chat!!.messages.map { it.id })
+    }
+    @Test fun anIdenticalFreshPageLeavesTheShownChatUnchanged() = modelTest {
+        runCurrent()
+        val page = detail("one").copy(messages = listOf(message("1"), message("2")))
+        repo.cachedDetailResult = page
+        val gate = CompletableDeferred<Unit>()
+        repo.getDetail = { _, _ -> gate.await(); page }
+        vm.open(conversation("one")); runCurrent()
+        val shown = vm.state.value.chat!!
+        assertEquals(listOf("1", "2"), shown.messages.map { it.id })
+        val seen = mutableListOf<ClientState>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect { seen += it } }
+        runCurrent()
+        val before = seen.size
+        gate.complete(Unit); runCurrent()
+        assertSame(shown, vm.state.value.chat)  // the same instance, not a rebuilt chat
+        assertEquals(before, seen.size)  // and no new state emission at all
+    }
+    @Test fun coldStartShowsSavedListAndReusesItsPreviews() = modelTest {
+        val fresh = FakeRepository()
+        val saved = conversation("one").copy(updatedAt = 10, messageCount = 4, preview = "last words")
+        fresh.cached = listOf(saved)
+        fresh.list = listOf(conversation("one").copy(updatedAt = 10), conversation("two").copy(updatedAt = 20))
+        val gate = CompletableDeferred<Unit>(); fresh.listGate = gate
+        val cold = AgentViewModel(fresh, ModelChoice("a", "model")) { }
+        val holder = ViewModelStore().apply { put("cold", cold) }
+        try {
+            runCurrent()
+            assertEquals(listOf(saved), cold.state.value.conversations)  // shown before the network answers
+            gate.complete(Unit); runCurrent()
+            assertEquals(listOf("one", "two"), cold.state.value.conversations.map { it.id })
+            assertEquals("last words", cold.state.value.conversations.first().preview)
+            assertEquals(listOf("two"), fresh.previewCalls)  // the unchanged row is not fetched again
+            assertEquals(listOf("one", "two"), fresh.saved.last().map { it.id })
+        } finally { holder.clear() }
+    }
     @Test fun preStreamNegotiatedRejectionRestoresDraft() = modelTest {
         vm.open(conversation("one")); runCurrent()
         repo.followFlow = { _, _, _, _ -> flow { throw ApiException(409, ClientError("Incompatible protocol"), directSendRejected = true) } }
@@ -152,6 +371,35 @@ class AgentViewModelTest {
         assertEquals("keep this", vm.state.value.chat!!.draft)
         assertTrue(vm.state.value.chat!!.canSend)
         assertTrue(vm.state.value.chat!!.messages.isEmpty())
+    }
+    @Test fun quickRepliesFollowTheLatestAnswerAndSendOnTap() = modelTest {
+        repo.getDetail = { id, _ -> detail(id).copy(messages = listOf(ChatMessage("u1", "user", listOf(ChatBlock.Text("问颜色"))),
+            ChatMessage("a1", "assistant", listOf(ChatBlock.Text("选了蓝色"))))) }
+        vm.open(conversation("one")); runCurrent()
+        vm.loadSuggestions(); runCurrent()
+        assertEquals(listOf("改成红色", "应用到配置"), vm.state.value.chat!!.suggestions)
+        vm.sendSuggestion("改成红色"); runCurrent()
+        assertEquals("改成红色", repo.followCalls.last { it.third != null }.third!!.text)
+        assertTrue(vm.state.value.chat!!.suggestions.isEmpty())
+    }
+    @Test fun filesSentWhileWorkingGoIntoTheRunningTurn() = modelTest {
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        vm.open(conversation("one", true)); runCurrent()
+        val file = encodeAttachment("log.txt", "text/plain", byteArrayOf(1), AttachmentKind.FILE)
+        vm.addAttachments(vm.attachmentOwner(), listOf(file)); vm.draft("看这个日志"); vm.steer(); runCurrent()
+        assertEquals(listOf("看这个日志"), repo.steerCalls); assertEquals(listOf(file), repo.steerAttachments)
+        assertTrue(vm.state.value.chat!!.attachments.isEmpty()); assertTrue(repo.queueCalls.isEmpty())
+    }
+    @Test fun messageSentWhileWorkingSteersTheTurnOrQueuesWhenItCannot() = modelTest {
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        repo.admit = { buildJsonObject { put("pending", true) } }
+        vm.open(conversation("one", true)); runCurrent()
+        vm.draft("also check B"); vm.steer(); runCurrent()
+        assertEquals(listOf("also check B"), repo.steerCalls); assertTrue(repo.queueCalls.isEmpty())
+        assertEquals("", vm.state.value.chat!!.draft)
+        repo.steerAccepts = false  // the turn is finishing: the message waits for the next turn instead
+        vm.draft("next step"); vm.steer(); runCurrent()
+        assertEquals("next step", repo.queueCalls.single().text)
     }
     @Test fun queueCheckReusesEntireRequestAndNeverClearsNewDraft() = modelTest {
         repo.getDetail = { id, _ -> detail(id, running = true) }
@@ -175,6 +423,156 @@ class AgentViewModelTest {
         assertEquals(listOf("one" to CONTROL), repo.resumeCalls)
         assertTrue(vm.state.value.chat!!.queuePaused)
         assertEquals("queue_head_changed", vm.state.value.chat!!.error!!.code)
+    }
+    @Test fun aResumedQueueRunsAtOnceTalksToItsNewTurnAndASecondTapIsNoError() = modelTest {
+        val next = "b".repeat(32)
+        val gate = CompletableDeferred<Unit>()
+        var resumed = false
+        repo.getDetail = { id, _ ->
+            if (!resumed) detail(id).copy(queuePaused = true, queued = listOf(QueueItem(CONTROL, "later")))
+            else { gate.await(); detail(id, running = true).let { d -> d.copy(conversation = d.conversation.copy(controlId = next)) } }
+        }
+        repo.resumeCall = { _, _ -> resumed = true
+            buildJsonObject { put("started", true); put("active", true); put("starting", false); put("controlId", next) } }
+        vm.open(conversation("one")); runCurrent()
+        vm.resumeQueue(); runCurrent()
+        // The reload is still on its way: the turn already shows, the button is gone, a message goes to the new turn.
+        val chat = vm.state.value.chat!!
+        assertFalse(chat.queuePaused)
+        assertTrue(chat.queued.isEmpty())
+        assertTrue(chat.running)
+        assertEquals(next, chat.controlId)
+        vm.draft("also this"); vm.steer(); runCurrent()
+        assertEquals(listOf(next), repo.steerControls)
+        gate.complete(Unit); runCurrent()
+        // A second resume (another tap, another device) finds the queue already running: nothing to report.
+        repo.resumeCall = { _, _ -> throw ApiException(409, ClientError("queue is empty", "queue_empty", false)) }
+        repo.getDetail = { id, _ -> detail(id).copy(queuePaused = true, queued = listOf(QueueItem(CONTROL, "later"))) }
+        vm.reload(); runCurrent()
+        vm.resumeQueue(); runCurrent()
+        assertNull(vm.state.value.chat!!.error)
+    }
+    @Test fun aMessageForARunningTurnWithoutAKnownRunIsQueuedNotDropped() = modelTest {
+        // Seen 10-19: the send button stayed grey while the turn ran and no run id was known yet.
+        repo.getDetail = { id, _ -> detail(id, running = true).let { d -> d.copy(conversation = d.conversation.copy(controlId = null)) } }
+        vm.open(conversation("one", true).copy(controlId = null)); runCurrent()
+        assertNull(vm.state.value.chat!!.controlId)
+        vm.draft("later"); vm.steer(); runCurrent()
+        assertTrue(repo.steerCalls.isEmpty())
+        assertEquals(listOf("later"), repo.queueCalls.map { it.text })
+    }
+    @Test fun awayFromTheAppTheScreenLeavesTheTurnToTheFollowerAndResumesOnReturn() = modelTest {
+        var cancelled = 0
+        repo.followFlow = { _, _, _, _ -> flow { try { awaitCancellation() } finally { cancelled++ } } }
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        vm.open(conversation("one", true)); runCurrent()
+        assertEquals(1, repo.followCalls.size)
+        vm.onBackground(); vm.yieldStream(); runCurrent()
+        assertEquals(1, cancelled)
+        vm.onForeground(); runCurrent()
+        assertEquals(2, repo.followCalls.size)
+        assertEquals(CONTROL, repo.previousTurns.last()?.runId)  // picks up where it stopped
+    }
+    @Test fun anArchivedChatLeavesTheListAndComesBackFromTheArchive() = modelTest {
+        repo.list = listOf(conversation("one"), conversation("two"))
+        vm.refresh(); runCurrent()
+        vm.open(conversation("one")); runCurrent()
+        vm.setArchived("one", true); runCurrent()
+        assertNull(vm.state.value.chat)  // the archived chat was open: back on the list
+        assertEquals(listOf("two"), vm.state.value.conversations.map { it.id })
+        assertEquals(1, vm.state.value.archivedCount)
+        vm.openArchive(); runCurrent()
+        assertEquals(listOf("one"), vm.state.value.archivedList!!.map { it.id })
+        vm.setArchived("one", false); runCurrent()
+        assertEquals(emptyList<String>(), vm.state.value.archivedList!!.map { it.id })
+        assertTrue(vm.state.value.conversations.any { it.id == "one" })
+        vm.closeArchive()
+        assertNull(vm.state.value.archivedList)
+        vm.setPinned("two", true); runCurrent()
+        assertEquals(Triple("two", true, null), repo.changes.last())
+    }
+    @Test fun aSwipedChatLeavesAtOnceAndUndoOrARefusalPutsItBack() = modelTest {
+        runCurrent()  // the first list read, from start-up
+        repo.list = listOf(conversation("one"), conversation("two"))
+        vm.refresh(); runCurrent()
+        assertEquals(listOf("one", "two"), vm.state.value.conversations.map { it.id })
+        vm.setArchived("one", true)  // before the server answers
+        assertEquals(listOf("two"), vm.state.value.conversations.map { it.id })
+        assertEquals(1, vm.state.value.archivedCount)
+        runCurrent()
+        vm.setArchived("one", false)  // the undo bar
+        assertEquals(setOf("one", "two"), vm.state.value.conversations.map { it.id }.toSet())
+        assertEquals(0, vm.state.value.archivedCount)
+        runCurrent()
+        assertEquals(listOf(Triple("one", null, true), Triple("one", null, false)), repo.changes)
+        repo.refuseChanges = true
+        vm.setArchived("two", true); runCurrent()
+        assertTrue(vm.state.value.conversations.any { it.id == "two" && !it.archived })
+        assertEquals(0, vm.state.value.archivedCount)
+        assertEquals("busy", vm.state.value.error!!.code)
+    }
+    @Test fun anUndoNeverOvertakesTheArchiveItUndoes() = modelTest {
+        runCurrent()  // the first list read, from start-up
+        repo.list = listOf(conversation("one"), conversation("two"))
+        vm.refresh(); runCurrent()
+        val slow = CompletableDeferred<Unit>()
+        repo.slowChange = slow
+        vm.setArchived("one", true); runCurrent()  // still on its way to the server
+        vm.setArchived("one", false); runCurrent()
+        assertTrue(vm.state.value.conversations.any { it.id == "one" })
+        slow.complete(Unit); runCurrent()
+        assertEquals(listOf(Triple("one", null, true), Triple("one", null, false)), repo.changes)
+        assertEquals(setOf("one", "two"), vm.state.value.conversations.map { it.id }.toSet())
+        assertEquals(0, vm.state.value.archivedCount)
+    }
+    @Test fun searchAsksTheServerForChatsByTheirWordsOnceTypingPauses() = modelTest {
+        runCurrent()
+        repo.hits = listOf(ChatHit("old", "Kaggle GPU", "2026-10-01", "assistant", "两个 GPU 名额被占了", archived = true))
+        vm.search("G"); advanceTimeBy(1000); runCurrent()
+        assertTrue(repo.searches.isEmpty())  // one character: titles only
+        vm.search("GP"); vm.search("GPU"); advanceTimeBy(200); runCurrent()
+        assertTrue(repo.searches.isEmpty())  // still typing
+        advanceTimeBy(400); runCurrent()
+        assertEquals(listOf("GPU"), repo.searches)
+        assertEquals(listOf("old"), vm.state.value.contentHits.map { it.id })
+        assertTrue(vm.state.value.contentHits.single().archived)
+        vm.search(""); runCurrent()
+        assertTrue(vm.state.value.contentHits.isEmpty())
+    }
+    @Test fun aChatDeletedFromTheArchiveLeavesItAndItsCount() = modelTest {
+        runCurrent()  // the first list read, from start-up
+        repo.list = listOf(conversation("one"))
+        repo.archivedRows = listOf(conversation("old").copy(archived = true))
+        vm.refresh(); runCurrent()
+        vm.openArchive(); runCurrent()
+        assertEquals(1, vm.state.value.archivedCount)
+        vm.deleteConversation("old"); runCurrent()
+        assertEquals(emptyList<String>(), vm.state.value.archivedList!!.map { it.id })
+        assertEquals(0, vm.state.value.archivedCount)
+    }
+    @Test fun aListReadThatLosesItsConnectionOnceIsRetriedQuietly() = runTest {
+        var calls = 0
+        val rows = readTwice { calls++; if (calls == 1) throw java.io.IOException("connection closed") else listOf("one") }
+        assertEquals(listOf("one") to 2, rows to calls)
+        var failures = 0
+        try { readTwice<Unit> { failures++; throw java.io.IOException("still down") }; fail("Expected the second failure") }
+        catch (_: java.io.IOException) { }
+        assertEquals(2, failures)
+    }
+    @Test fun aDeletedChatLeavesTheScreenAndTheList() = modelTest {
+        repo.list = listOf(conversation("one"), conversation("two"))
+        vm.refresh(); runCurrent()
+        vm.open(conversation("one")); runCurrent()
+        vm.deleteConversation("one"); runCurrent()
+        assertEquals(listOf("one"), repo.deleted)
+        assertNull(vm.state.value.chat)
+        assertFalse(vm.state.value.conversations.any { it.id == "one" })
+        // A refusal (a turn still stopping, variants to delete first) stays on the chat and says why.
+        repo.deleteCall = { throw ApiException(409, ClientError("conversation is still stopping", "conversation_busy", true)) }
+        vm.open(conversation("two")); runCurrent()
+        vm.deleteConversation("two"); runCurrent()
+        assertEquals("conversation_busy", vm.state.value.chat!!.error!!.code)
+        assertFalse(vm.state.value.chat!!.controlBusy)
     }
     @Test fun stopUsesObservedOwnerAndNeverStopsOnNavigation() = modelTest {
         repo.getDetail = { id, _ -> detail(id, running = true) }
@@ -268,8 +666,10 @@ class AgentViewModelTest {
             conversation("week").copy(updatedAt = date(4), messageCount = 1), conversation("today").copy(updatedAt = date(0), messageCount = 1),
             conversation("pin").copy(pinned = true, updatedAt = date(30), messageCount = 1), conversation("yesterday").copy(updatedAt = date(1), messageCount = 1))
         vm.refresh(); runCurrent()
-        assertEquals(listOf(ConversationGroup.TODAY, ConversationGroup.YESTERDAY, ConversationGroup.OLDER), vm.state.value.sections.map { it.group })
-        assertEquals(listOf("today", "yesterday", "week", "old", "pin"), vm.state.value.sections.flatMap { it.conversations }.map { it.id })
+        // The three date groups stay; a pinned chat sits above them, as in Claude's sidebar.
+        assertEquals(listOf(ConversationGroup.PINNED, ConversationGroup.TODAY, ConversationGroup.YESTERDAY, ConversationGroup.OLDER),
+            vm.state.value.sections.map { it.group })
+        assertEquals(listOf("pin", "today", "yesterday", "week", "old"), vm.state.value.sections.flatMap { it.conversations }.map { it.id })
     }
     @Test fun previewDerivesBlankTitleAndRetainsUnknownOnFailedRead() = modelTest {
         runCurrent()
@@ -350,6 +750,46 @@ class AgentViewModelTest {
         assertEquals(AppTab.SETTINGS, observed.last().tab)
     }
 
+    @Test fun reenteringARunningChatContinuesTheReplyInsteadOfReplayingIt() = modelTest {
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        repo.followFlow = { id, run, _, previous -> flow {
+            emit(TurnSnapshot(previous?.takeIf { it.lastSequence > 0 } ?: TurnState(id, run!!, 3, listOf(ChatBlock.Text("first part")), startedAt = 1), Connection.LIVE))
+            awaitCancellation()
+        } }
+        vm.open(conversation("one", true)); runCurrent(); advanceTimeBy(1000); runCurrent()
+        assertEquals(0L, repo.previousTurns.last()?.lastSequence ?: 0L)  // the first visit follows from the start
+        vm.back(); runCurrent()
+        vm.open(conversation("one", true))
+        assertEquals("first part", vm.state.value.chat!!.live!!.text)  // shown at once, not rebuilt
+        runCurrent()
+        val resumed = repo.previousTurns.last()!!
+        assertEquals(3L, resumed.lastSequence); assertEquals(CONTROL, resumed.runId)  // continues after event 3
+        // A different run on return starts fresh rather than reusing the old reply.
+        vm.back(); runCurrent()
+        vm.open(conversation("one", true).copy(controlId = "fedcba0987654321fedcba0987654321"))
+        assertNull(vm.state.value.chat!!.live!!.text.takeIf { it.isNotEmpty() })
+    }
+    @Test fun comingBackResumesAfterTheScreensOwnLastEventSoTheAnswerHasNoHole() = modelTest {
+        repo.getDetail = { id, _ -> detail(id, running = true) }
+        repo.followFlow = { id, run, _, _ -> flow {
+            emit(TurnSnapshot(TurnState(id, run!!, 100, listOf(ChatBlock.Text("on screen")), startedAt = 1), Connection.LIVE))
+            awaitCancellation()
+        } }
+        vm.open(conversation("one", true)); runCurrent(); advanceTimeBy(1000); runCurrent()  // the screen paints it
+        assertEquals(100L, handover.furthest("one", CONTROL))
+        assertEquals(100L, vm.state.value.chat!!.live!!.lastSequence)
+        // The background follower read on after the screen's stream stopped.
+        handover.note("one", CONTROL, 900)
+        vm.onBackground(); vm.yieldStream(); runCurrent()
+        repo.followFlow = { id, run, _, previous -> flow {
+            emit(TurnSnapshot(previous ?: TurnState(id, run!!, 901, startedAt = 1), Connection.LIVE)); awaitCancellation()
+        } }
+        vm.onForeground(); runCurrent()
+        // Only what came after the screen's last event is read again; the follower's position is for the follower.
+        assertEquals(100L, repo.previousTurns.last()?.lastSequence)
+        assertEquals(CONTROL, repo.previousTurns.last()?.runId)
+        assertEquals("on screen", vm.state.value.chat!!.live!!.text)
+    }
     @Test fun disposedActivityFrameClockDoesNotCancelTheFollower() = modelTest {
         vm.frameClock = object : androidx.compose.runtime.MonotonicFrameClock {
             override suspend fun <R> withFrameNanos(onFrame: (Long) -> R): R = throw CancellationException("disposed clock")
@@ -494,11 +934,100 @@ class AgentViewModelTest {
         assertEquals(started, vm.state.value.chat!!.live!!.startedAt)
     }
 
+    @Test fun openingAStepOfAnOutlineMessageFetchesItsBlocksOnceAndReplacesThem() = modelTest {
+        val outline = ChatMessage("2", "assistant", listOf(
+            ChatBlock.Thought("", durationMs = 3000, status = StepStatus.COMPLETE, chars = 120),
+            ChatBlock.Tool("t", "Bash", """{"command":"ls"}""", result = "", status = StepStatus.COMPLETE, resultChars = 4096)), outline = true)
+        repo.getDetail = { id, _ -> detail(id).copy(messages = listOf(message("1"), outline)) }
+        val full = listOf(ChatBlock.Thought("look", durationMs = 3000, status = StepStatus.COMPLETE),
+            ChatBlock.Tool("t", "Bash", """{"command":"ls"}""", result = "a.txt", status = StepStatus.COMPLETE))
+        repo.blocksAction = { _, _ -> full }
+        vm.open(conversation("one")); runCurrent()
+        vm.loadMessageBlocks("2"); vm.loadMessageBlocks("2"); runCurrent()
+        assertEquals(listOf("one" to "2"), repo.blockCalls)
+        val loaded = vm.state.value.chat!!.messages.single { it.id == "2" }
+        assertEquals(full, loaded.blocks)
+        assertFalse(loaded.outline)
+        assertTrue(vm.state.value.chat!!.loadingBlocks.isEmpty())
+        // The message is complete now: another step of it never asks again.
+        vm.loadMessageBlocks("2"); runCurrent()
+        assertEquals(1, repo.blockCalls.size)
+        // A fresh outline page of the same chat keeps the steps already fetched.
+        vm.reload(); runCurrent()
+        assertEquals(full, vm.state.value.chat!!.messages.single { it.id == "2" }.blocks)
+        assertEquals(1, repo.blockCalls.size)
+    }
+    @Test fun aFailedStepFetchCanBeTriedAgain() = modelTest {
+        val outline = ChatMessage("2", "assistant", listOf(
+            ChatBlock.Thought("", durationMs = 3000, status = StepStatus.COMPLETE, chars = 120)), outline = true)
+        repo.getDetail = { id, _ -> detail(id).copy(messages = listOf(outline)) }
+        repo.blocksAction = { _, _ -> throw IOException("down") }
+        vm.open(conversation("one")); runCurrent()
+        vm.loadMessageBlocks("2"); runCurrent()
+        assertEquals(setOf("2"), vm.state.value.chat!!.blockErrors)
+        assertTrue(vm.state.value.chat!!.loadingBlocks.isEmpty())
+        repo.blocksAction = { _, _ -> listOf(ChatBlock.Thought("look", durationMs = 3000, status = StepStatus.COMPLETE)) }
+        vm.loadMessageBlocks("2"); runCurrent()
+        assertTrue(vm.state.value.chat!!.blockErrors.isEmpty())
+        assertFalse(vm.state.value.chat!!.messages.single().outline)
+    }
+    @Test fun chatsArePrefetchedOnlyAfterTheListIsShown() = modelTest {
+        // A fresh view model: its first list read must see these rows (the one from setUp ran already).
+        val fresh = FakeRepository().apply {
+            list = listOf(conversation("one"), conversation("two")).map { it.copy(messageCount = 0) }
+        }
+        val vm = AgentViewModel(fresh, ModelChoice("a", "model")) { }
+        store.put("prefetch", vm)
+        runCurrent(); advanceUntilIdle()
+        assertTrue(fresh.detailCalls.isEmpty())
+        vm.listShown(); advanceUntilIdle()
+        assertEquals(listOf("one", "two"), fresh.detailCalls)
+    }
+    @Test fun openingAChatStopsTheBackgroundWarmOfAnother() = modelTest {
+        val gate = CompletableDeferred<Unit>()
+        val fresh = FakeRepository().apply {
+            list = listOf(conversation("one"), conversation("two"), conversation("three")).map { it.copy(messageCount = 0) }
+            getDetail = { id, _ -> if (id == "one") gate.await(); AgentViewModelTest.detail(id) }
+        }
+        val vm = AgentViewModel(fresh, ModelChoice("a", "model")) { }
+        store.put("prefetch-cancel", vm)
+        runCurrent()
+        vm.listShown(); runCurrent()
+        assertEquals(listOf("one"), fresh.detailCalls)  // the warm is on "one", held open by the gate
+        vm.open(conversation("two")); runCurrent()  // the user's own chat comes first
+        gate.complete(Unit); runCurrent()
+        advanceTimeBy(5_000); runCurrent()
+        assertFalse(fresh.detailCalls.contains("three"))  // the cancelled warm never reached the next chat
+        assertEquals(1, fresh.detailCalls.count { it == "two" })
+    }
+    @Test fun prefetchWaitsWhileTheOpenedChatIsLoading() = modelTest {
+        val gate = CompletableDeferred<Unit>()
+        val fresh = FakeRepository().apply {
+            list = listOf(conversation("one"), conversation("two"), conversation("three")).map { it.copy(messageCount = 0) }
+            // Qualified: an unqualified detail(id) inside the fake resolves to its own override and recurses.
+            getDetail = { id, _ -> if (id == "one") gate.await(); AgentViewModelTest.detail(id) }
+        }
+        val vm = AgentViewModel(fresh, ModelChoice("a", "model")) { }
+        store.put("prefetch-wait", vm)
+        runCurrent()
+        vm.open(conversation("one")); runCurrent()
+        assertTrue(vm.state.value.chat!!.loading)
+        vm.listShown()
+        advanceTimeBy(1_000); runCurrent()
+        // The chat the user opened is still loading: no other chat's history is read behind it.
+        assertEquals(listOf("one"), fresh.detailCalls)
+        gate.complete(Unit); runCurrent(); advanceUntilIdle()
+        assertEquals(1, fresh.detailCalls.count { it == "one" })
+        assertTrue(fresh.detailCalls.contains("two"))
+        assertTrue(fresh.detailCalls.indexOf("two") < fresh.detailCalls.indexOf("three"))
+    }
+
     private class FakeRepository : AgentRepository {
         override val authenticationRequired = MutableStateFlow(false)
         var readCalls = 0
         var list = emptyList<Conversation>()
         var models = listOf("model")
+        var images = emptyMap<String, Boolean>()
         var projectList = emptyList<Project>()
         var createdProject: String? = null
         override suspend fun projects() = projectList
@@ -523,10 +1052,33 @@ class AgentViewModelTest {
         val stopCalls = mutableListOf<Pair<String, String>>()
         val queueCalls = mutableListOf<QueueRequest>()
         val resumeCalls = mutableListOf<Pair<String, String>>()
-        override suspend fun agents(): List<Agent> { readCalls++; return listOf(Agent("a", "Agent", models, emptyMap(), "model", true, true)) }
-        override suspend fun conversations(): List<Conversation> { readCalls++; return list }
+        override suspend fun agents(): List<Agent> { readCalls++; return listOf(Agent("a", "Agent", models, emptyMap(), "model", true, true, modelImages = images)) }
+        override suspend fun conversations(): List<Conversation> { readCalls++; listGate?.await(); return list }
+        var listGate: CompletableDeferred<Unit>? = null
+        var cached = emptyList<Conversation>()
+        val saved = mutableListOf<List<Conversation>>()
+        val previewCalls = mutableListOf<String>()
+        var cachedDetailResult: ConversationDetail? = null
+        val cachedDetailCalls = mutableListOf<String>()
+        override suspend fun cachedDetail(id: String): ConversationDetail? { cachedDetailCalls += id; return cachedDetailResult }
+        override suspend fun cachedConversations() = cached
+        override suspend fun saveConversations(rows: List<Conversation>) { saved += rows }
+        override suspend fun preview(id: String): ConversationDetail { previewCalls += id; return detail(id, null) }
         override suspend fun createConversation(choice: ModelChoice): Conversation { createCalls++; return create() }
-        override suspend fun detail(id: String, cursor: String?) = getDetail(id, cursor)
+        val detailCalls = mutableListOf<String>()
+        override suspend fun detail(id: String, cursor: String?): ConversationDetail {
+            detailCalls += id
+            return getDetail(id, cursor)
+        }
+        val blockCalls = mutableListOf<Pair<String, String>>()
+        var blocksAction: suspend (String, String) -> List<ChatBlock> = { _, _ -> emptyList() }
+        override suspend fun messageBlocks(conversationId: String, messageId: String): List<ChatBlock> {
+            blockCalls += conversationId to messageId
+            return blocksAction(conversationId, messageId)
+        }
+        var side: suspend (String, String, List<SideQuestion>) -> String = { _, question, _ -> "answer: $question" }
+        override suspend fun sideQuestion(conversationId: String, question: String, history: List<SideQuestion>) =
+            side(conversationId, question, history)
         override fun follow(conversationId: String, runId: String?, send: SendRequest?, previous: TurnState?): Flow<TurnSnapshot> {
             if (send != null) sendCalls++
             followCalls += Triple(conversationId, runId, send)
@@ -538,6 +1090,33 @@ class AgentViewModelTest {
             return buildJsonObject { put("committed", true); put("status", "running") }
         }
         override suspend fun queue(request: QueueRequest): JsonObject { queueCalls += request; return admit(request) }
+        var suggestionItems = listOf("改成红色", "应用到配置")
+        override suspend fun suggestions(conversationId: String) = "a1" to suggestionItems
+        val steerCalls = mutableListOf<String>()
+        var steerAccepts = true
+        val steerControls = mutableListOf<String>()
+        override suspend fun steer(conversationId: String, controlId: String, message: String, attachments: List<Attachment>): Boolean { steerCalls += message; steerControls += controlId; steerAttachments += attachments; return steerAccepts }
+        val steerAttachments = mutableListOf<Attachment>()
+        var archivedRows = listOf<Conversation>()
+        val changes = mutableListOf<Triple<String, Boolean?, Boolean?>>()
+        override suspend fun archiveInfo() = ArchiveInfo(14, listOf(0, 7, 14, 30), archivedRows.size)
+        override suspend fun archivedConversations() = archivedRows
+        val searches = mutableListOf<String>()
+        var hits = listOf<ChatHit>()
+        override suspend fun searchChats(query: String): List<ChatHit> { searches += query; return hits }
+        var refuseChanges = false
+        /** Holds the next change in flight (a slow connection) until completed. */
+        var slowChange: CompletableDeferred<Unit>? = null
+        override suspend fun updateConversation(id: String, pinned: Boolean?, archived: Boolean?) {
+            slowChange?.let { gate -> slowChange = null; gate.await() }
+            if (refuseChanges) throw ApiException(503, ClientError("server busy", "busy", true))
+            changes += Triple(id, pinned, archived)
+            if (archived == true) { archivedRows = archivedRows + list.filter { it.id == id }; list = list.filterNot { it.id == id } }
+            if (archived == false) { list = list + archivedRows.filter { it.id == id }; archivedRows = archivedRows.filterNot { it.id == id } }
+        }
+        val deleted = mutableListOf<String>()
+        var deleteCall: suspend (String) -> Unit = { id -> deleted += id; list = list.filterNot { it.id == id } }
+        override suspend fun deleteConversation(id: String) = deleteCall(id)
         override suspend fun resume(conversationId: String, headId: String): JsonObject {
             resumeCalls += conversationId to headId
             return resumeCall(conversationId, headId)

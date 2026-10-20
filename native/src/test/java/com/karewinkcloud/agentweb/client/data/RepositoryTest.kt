@@ -12,12 +12,14 @@ import java.util.concurrent.TimeUnit
 class RepositoryTest {
     private lateinit var server: MockWebServer
     private lateinit var repo: HttpAgentRepository
+    private lateinit var cacheDir: java.io.File
     private val control = "1234567890abcdef1234567890abcdef"
     @Before fun setup() {
         server = MockWebServer().apply { start() }
         repo = HttpAgentRepository(server.url("/").toString().trimEnd('/'), TokenProvider { "test-token" }, reconnectDelayMs = 0)
+        cacheDir = java.nio.file.Files.createTempDirectory("agentweb-chat-cache").toFile()
     }
-    @After fun cleanup() { server.shutdown() }
+    @After fun cleanup() { server.shutdown(); cacheDir.deleteRecursively() }
     private fun json(body: String, status: Int = 200) = MockResponse().setResponseCode(status)
         .addHeader("Content-Type", "application/json").addHeader("X-AgentWeb-Protocol-Version", "1.0").setBody(body)
     private fun sse(body: String, run: String = control) = MockResponse().addHeader("Content-Type", "text/event-stream")
@@ -25,6 +27,18 @@ class RepositoryTest {
     private fun text(seq: Int, content: String) = "id: $control:$seq\ndata: {\"type\":\"text\",\"seq\":$seq,\"content\":\"$content\"}\n\n"
     private fun done(seq: Int) = "id: $control:$seq\ndata: {\"type\":\"done\",\"seq\":$seq,\"conversationId\":\"conversation\"}\n\n"
     private fun next() = requireNotNull(server.takeRequest(3, TimeUnit.SECONDS))
+    private fun cachedRepo(token: String = "test-token") =
+        HttpAgentRepository(server.url("/").toString().trimEnd('/'), TokenProvider { token }, reconnectDelayMs = 0, listCacheDir = cacheDir)
+    private fun page(id: String, texts: List<String>) = buildJsonObject {
+        put("conversation", buildJsonObject { put("id", id); put("title", "Chat") })
+        putJsonArray("messages") { texts.forEach { text -> addJsonObject {
+            put("id", text); put("role", "assistant")
+            putJsonArray("blocks") { addJsonObject { put("type", "text"); put("content", text) } }
+        } } }
+        putJsonArray("queued") {}
+        put("queuePaused", false)
+        putJsonObject("messagePage") { put("olderCount", 0) }
+    }.toString()
 
     @Test fun forkPostsExactRequestToEncodedPathAndReturnsAdvertisedRun() = runBlocking {
         server.enqueue(json("""{"conversation":{"id":"child","active":true},"variant":{"kind":"retry","parentConversation":{"id":"parent","title":"Parent"}},"run":{"id":"$control","status":"running","agent":"a","model":"m"},"streamUrl":"https://untrusted.invalid/stream","existing":false}""", 202))
@@ -54,6 +68,105 @@ class RepositoryTest {
         try { repo.fork(ForkRequest("parent", ForkMode.RETRY, 42, ModelChoice())); fail("Expected IOException") }
         catch (_: java.io.IOException) { }
         assertEquals(1, server.requestCount)
+    }
+
+    @Test fun freshConnectionsClosesSocketsOffTheCallingThread() = runBlocking {
+        // Closing TLS sockets writes to the network; doing that on the main thread killed build 420452.
+        val caller = Thread.currentThread()
+        var ranOn: Thread? = null
+        val repository = HttpAgentRepository("https://example.invalid", TokenProvider { null },
+            evictConnections = { ranOn = Thread.currentThread() })
+        repository.freshConnections()
+        assertNotNull(ranOn)
+        assertNotSame(caller, ranOn)
+    }
+
+    @Test fun aWriteWhoseHandshakeIsCutOffIsSentOnceMore() = runBlocking {
+        var attempts = 0
+        val flaky = HttpAgentRepository.defaultClient().newBuilder().addInterceptor { chain ->
+            if (++attempts == 1) throw javax.net.ssl.SSLHandshakeException("connection closed")
+            chain.proceed(chain.request())
+        }.build()
+        val repo = HttpAgentRepository(server.url("/").toString().trimEnd('/'), TokenProvider { "test-token" }, flaky, reconnectDelayMs = 0)
+        server.enqueue(json("""{"ok":true}"""))
+        repo.updateConversation("chat", pinned = true)
+        assertEquals(2, attempts)
+        assertEquals("PATCH", next().method)
+        assertEquals(1, server.requestCount)
+    }
+    @Test fun aWriteThatCannotConnectGivesUpAfterTwoMoreTries() = runBlocking {
+        var attempts = 0
+        val down = HttpAgentRepository.defaultClient().newBuilder().addInterceptor { _ ->
+            attempts++; throw javax.net.ssl.SSLHandshakeException("connection closed")
+        }.build()
+        val repo = HttpAgentRepository(server.url("/").toString().trimEnd('/'), TokenProvider { "test-token" }, down, reconnectDelayMs = 0)
+        try { repo.updateConversation("chat", archived = false); fail("Expected the handshake failure") }
+        catch (_: javax.net.ssl.SSLHandshakeException) { }
+        assertEquals(3, attempts)
+        assertEquals(0, server.requestCount)
+    }
+    @Test fun pinAndArchiveRideTheSharedConnectionOtherWritesDoNot() = runBlocking {
+        val https = HttpAgentRepository("https://agent.example", TokenProvider { "t" })
+        val patch = https.javaClass.getDeclaredMethod("idempotent", okhttp3.Request::class.java).apply { isAccessible = true }
+        val built = patch.invoke(https, okhttp3.Request.Builder().url("https://agent.example/api/x").build()) as okhttp3.Request
+        assertNull(built.header("Connection"))  // HTTPS: may share the connection
+        val local = HttpAgentRepository("http://127.0.0.1:18791", TokenProvider { "t" })
+        val plain = patch.invoke(local, okhttp3.Request.Builder().url("http://127.0.0.1:18791/api/x").build()) as okhttp3.Request
+        assertEquals("close", plain.header("Connection"))  // plain HTTP (the server closes every connection)
+    }
+    @Test fun aSearchSendsTheWordsEncodedAndReadsTheHits() = runBlocking {
+        server.enqueue(json("""{"results":[{"conversationId":"trade","title":"Polymarket","date":"2026-10-18","match":"user","snippet":"止损 0.45","archived":true},{"title":"no id"}]}"""))
+        val hits = repo.searchChats("止损 0.45")
+        assertEquals("/api/chat/search?q=%E6%AD%A2%E6%8D%9F%200.45&limit=20", next().path)
+        assertEquals(listOf(ChatHit("trade", "Polymarket", "2026-10-18", "user", "止损 0.45", true)), hits)
+    }
+    @Test fun onlyFailuresBeforeAnyByteWasSentCountAsNeverSent() {
+        assertTrue(neverSent(javax.net.ssl.SSLHandshakeException("connection closed")))
+        assertTrue(neverSent(java.net.ConnectException("Failed to connect")))
+        assertTrue(neverSent(java.net.SocketTimeoutException("failed to connect to /1.2.3.4 (port 443) after 15000ms")))
+        assertFalse(neverSent(java.net.SocketTimeoutException("timeout")))
+        assertFalse(neverSent(java.io.IOException("unexpected end of stream")))
+        assertFalse(neverSent(java.io.InterruptedIOException("canceled")))
+    }
+
+    @Test fun aFileIsReadWithWhatTheServerSaysAboutIt() = runBlocking {
+        server.enqueue(MockResponse().addHeader("Content-Type", "text/plain; charset=utf-8").addHeader("X-AgentWeb-Protocol-Version", "1.0")
+            .addHeader("AgentWeb-File-Kind", "text").addHeader("AgentWeb-File-Path", "/w/%E6%8A%A5%E5%91%8A%20v2.md")
+            .addHeader("AgentWeb-File-Size", "4096").addHeader("AgentWeb-File-Modified", "1792244969000")
+            .addHeader("AgentWeb-File-Truncated", "1").setBody("# 结果"))
+        val file = repo.readFile("c/1", "docs/报告 v2.md")
+        val sent = next()
+        assertEquals("/api/chat/conversations/c%2F1/file", sent.requestUrl!!.encodedPath)
+        assertEquals("docs/报告 v2.md", sent.requestUrl!!.queryParameter("path"))
+        assertEquals(listOf("/w/报告 v2.md", "text", "text/plain", "# 结果"), listOf(file.path, file.kind, file.mime, file.text))
+        assertEquals(Triple(4096L, 1792244969000L, true), Triple(file.size, file.modifiedAt, file.truncated))
+        assertEquals("报告 v2.md", file.name)
+    }
+    @Test fun aChatIsDeletedByItsEncodedId() = runBlocking {
+        server.enqueue(json("""{"ok":true}"""))
+        repo.deleteConversation("c/1")
+        val sent = next()
+        assertEquals("DELETE" to "/api/chat/conversations/c%2F1", sent.method to sent.path)
+    }
+    @Test fun aRefusedFileKeepsTheServersReason() = runBlocking {
+        server.enqueue(json("""{"error":"This file may hold passwords or keys, so it is not shown here.","code":"file_private","retryable":false}""", 403))
+        try { repo.readFile("c1", "/home/me/.env"); fail("Expected refusal") }
+        catch (e: ApiException) { assertEquals(403 to "file_private", e.status to e.problem.code) }
+    }
+
+    @Test fun onlyReadsToAnHttpsOriginShareAConnection() {
+        assertTrue(reusesConnection("https://agent.example.com", read = true))
+        assertFalse(reusesConnection("https://agent.example.com", read = false))
+        // The AgentWeb server itself (LAN, adb reverse) speaks HTTP/1.0 and closes every connection.
+        assertFalse(reusesConnection("http://192.168.1.5:18791", read = true))
+    }
+    @Test fun aPlainHttpOriginStillClosesEveryConnection() = runBlocking {
+        server.enqueue(json("""{"messageId":null,"suggestions":[]}"""))
+        repo.suggestions("c1")
+        assertEquals("close", next().getHeader("Connection"))
+        server.enqueue(json("""{"steered":true}""", 202))
+        assertTrue(repo.steer("c1", control, "hi"))
+        assertEquals("close", next().getHeader("Connection"))
     }
 
     @Test fun claudeSessionPagingEncodesOpaqueCursorAndProjectPath() = runBlocking {
@@ -113,7 +226,7 @@ class RepositoryTest {
         val req = next()
         assertEquals("1.0", req.getHeader("AgentWeb-Protocol-Min"))
         assertEquals("1.0", req.getHeader("AgentWeb-Protocol-Max"))
-        assertEquals("android/0.5.0", req.getHeader("AgentWeb-Client"))
+        assertEquals("android/${com.karewinkcloud.agentweb.client.BuildConfig.VERSION_NAME}", req.getHeader("AgentWeb-Client"))
         assertEquals("Bearer test-token", req.getHeader("Authorization"))
         assertEquals("close", req.getHeader("Connection"))
     }
@@ -138,12 +251,40 @@ class RepositoryTest {
         assertEquals("你好", snapshots.last().turn.text)
         assertTrue(snapshots.last().turn.done)
         assertTrue(snapshots.any { it.connection == Connection.RECONNECTING })
-        assertEquals("POST", next().method)
+        val post = next()
+        assertEquals("POST", post.method)
+        assertEquals("1", post.getHeader("AgentWeb-Coalesce"))
         val resumed = next()
         assertEquals("GET", resumed.method)
         assertEquals("/api/chat/stream/conversation", resumed.path)
         assertEquals("$control:1", resumed.getHeader("Last-Event-ID"))
+        assertEquals("1", resumed.getHeader("AgentWeb-Coalesce"))
         assertEquals(2, server.requestCount)
+    }
+    @Test fun aMergedReplayEventResumesAfterItsThroughSequence() = runBlocking {
+        server.enqueue(sse("id: $control:1\ndata: {\"type\":\"text\",\"seq\":1,\"content\":\"Hello world\",\"through\":3}\n\n"))
+        server.enqueue(sse(done(4)))
+        val last = repo.follow("conversation", control).toList().last()
+        assertEquals("Hello world", last.turn.text)
+        assertEquals(4L, last.turn.lastSequence)
+        assertEquals("GET", next().method)
+        val resumed = next()
+        assertEquals("GET", resumed.method)
+        assertEquals("$control:3", resumed.getHeader("Last-Event-ID"))
+    }
+    @Test fun aMessageWhoseHandshakeBrokeIsSentAgainButOnlyThen() = runBlocking {
+        var posts = 0
+        val flaky = HttpAgentRepository.defaultClient().newBuilder().addInterceptor { chain ->
+            if (chain.request().method == "POST" && ++posts == 1) throw javax.net.ssl.SSLHandshakeException("connection closed")
+            chain.proceed(chain.request())
+        }.build()
+        val repo = HttpAgentRepository(server.url("/").toString().trimEnd('/'), TokenProvider { "test-token" }, flaky, reconnectDelayMs = 0)
+        server.enqueue(sse(text(1, "hi") + done(2)))
+        val last = repo.follow("conversation", control, SendRequest("conversation", "hello", ModelChoice("agent", "model"), control)).toList().last()
+        assertEquals("hi", last.turn.text)
+        assertEquals(2, posts)  // the first never left the phone
+        assertEquals("POST", next().method)
+        assertEquals(1, server.requestCount)
     }
     @Test fun textIsDeliveredBeforeTransportCompletion() = runBlocking {
         server.enqueue(sse(text(1, "early") + done(2)).throttleBody(text(1, "early").toByteArray().size.toLong(), 1, TimeUnit.SECONDS))
@@ -267,11 +408,100 @@ class RepositoryTest {
     @Test fun historyPagingUsesFortyAndExclusiveCursor() = runBlocking {
         server.enqueue(json("""{"conversation":{"id":"conversation","title":"Chat","agent":"agent","model":"model","pinned":1,"active":false,"project":{"name":"Project"}},"messages":[],"queued":[],"queuePaused":true,"messagePage":{"olderCount":41,"nextCursor":"123","limit":40,"compactionCount":0}}"""))
         val detail = repo.detail("conversation", "456")
-        assertEquals("/api/chat/conversations/conversation?messageLimit=40&messageCursor=456", next().path)
+        assertEquals("/api/chat/conversations/conversation?compact=1&outline=1&messageLimit=40&messageCursor=456", next().path)
         assertTrue(detail.conversation.pinned)
         assertTrue(detail.queuePaused)
         assertEquals("Project", detail.conversation.project)
         assertEquals("123", detail.nextCursor)
+    }
+    @Test fun anOutlineHistoryPageKeepsWhatTheSummaryNeedsAndThePageSize() = runBlocking {
+        server.enqueue(json("""{"outline":true,"conversation":{"id":"conversation","title":"Chat"},"messages":[{"id":"2","role":"assistant","outline":true,"blocks":[{"type":"thinking","content":"","chars":120,"duration":3.5},{"type":"tool","id":"t","name":"Bash","input":{"command":"ls"},"result":"","resultChars":4096}]}],"queued":[],"queuePaused":false,"messagePage":{"olderCount":0}}"""))
+        val detail = repo.detail("conversation")
+        assertEquals("/api/chat/conversations/conversation?compact=1&outline=1&messageLimit=40", next().path)
+        assertTrue(detail.outline)
+        assertTrue(detail.messages.single().outline)
+        val thought = detail.messages.single().blocks.filterIsInstance<ChatBlock.Thought>().single()
+        assertEquals(120, thought.chars)
+        assertEquals("", thought.content)
+        assertEquals(3500L, thought.durationMs)  // what "Thought for 3 s" reads
+        val tool = detail.messages.single().blocks.filterIsInstance<ChatBlock.Tool>().single()
+        assertEquals(4096, tool.resultChars)
+        assertEquals("", tool.result)
+        assertTrue((detail.pageBytes ?: 0) > 0)
+    }
+    @Test fun oneMessagesFullBlocksAreReadByItsEncodedIds() = runBlocking {
+        server.enqueue(json("""{"messageId":"7","blocks":[{"type":"thinking","content":"why","duration":2.5},{"type":"tool","id":"t","name":"Bash","input":{"command":"ls"},"result":"a.txt"}]}"""))
+        val blocks = repo.messageBlocks("c/1", "7")
+        assertEquals("/api/chat/conversations/c%2F1/messages/7/blocks", next().path)
+        assertEquals("why", blocks.filterIsInstance<ChatBlock.Thought>().single().content)
+        assertEquals(2500L, blocks.filterIsInstance<ChatBlock.Thought>().single().durationMs)
+        assertEquals("a.txt", blocks.filterIsInstance<ChatBlock.Tool>().single().result)
+    }
+    @Test fun aChatsFirstPageIsSavedAndCachedDetailGivesTheSameDetail() = runBlocking {
+        val repo = cachedRepo()
+        server.enqueue(json(page("conversation", listOf("1", "2"))))
+        val fresh = repo.detail("conversation")
+        assertEquals(2, fresh.messages.size)
+        assertEquals(fresh, repo.cachedDetail("conversation"))
+        val folder = java.io.File(cacheDir, requireNotNull(repo.credentialKey()))
+        assertTrue(java.io.File(folder, "chats/conversation.json").isFile)
+    }
+    @Test fun anotherAccountNeverSeesThePageAndItsFolderIsRemovedOnSave() = runBlocking {
+        val first = cachedRepo("token-one")
+        server.enqueue(json(page("conversation", listOf("1"))))
+        first.detail("conversation")
+        assertNotNull(first.cachedDetail("conversation"))
+        val second = cachedRepo("token-two")
+        assertNull(second.cachedDetail("conversation"))
+        // The per-account folder rule still holds: another account's save removes the first's folder.
+        second.saveConversations(emptyList())
+        assertFalse(java.io.File(cacheDir, requireNotNull(first.credentialKey())).exists())
+    }
+    @Test fun anOlderPageReadLeavesTheNewestPageCached() = runBlocking {
+        val repo = cachedRepo()
+        server.enqueue(json(page("conversation", listOf("3", "4"))))
+        repo.detail("conversation")
+        server.enqueue(json(page("conversation", listOf("1", "2"))))
+        repo.detail("conversation", "3")
+        assertEquals(listOf("3", "4"), repo.cachedDetail("conversation")!!.messages.map { it.id })
+    }
+    @Test fun signingOutRemovesSavedChatPages() = runBlocking {
+        val repo = cachedRepo()
+        server.enqueue(json(page("conversation", listOf("1"))))
+        repo.detail("conversation")
+        assertNotNull(repo.cachedDetail("conversation"))
+        repo.clearConversationCache()
+        assertNull(repo.cachedDetail("conversation"))
+    }
+    @Test fun onlyTheFortyMostRecentlyWrittenChatsAreKept() = runBlocking {
+        val repo = cachedRepo()
+        repeat(41) { index ->
+            server.enqueue(json(page("chat$index", listOf("$index"))))
+            repo.detail("chat$index")
+            // Trimming goes by the file's write time; keep the writes apart even on a coarse clock.
+            Thread.sleep(3)
+        }
+        assertNull(repo.cachedDetail("chat0"))
+        assertNotNull(repo.cachedDetail("chat1"))
+        assertNotNull(repo.cachedDetail("chat40"))
+        val pages = java.io.File(java.io.File(cacheDir, requireNotNull(repo.credentialKey())), "chats")
+            .listFiles()!!.filter { it.name.endsWith(".json") }
+        assertEquals(40, pages.size)
+    }
+    @Test fun aPageOverThreeMegabytesIsNotKept() = runBlocking {
+        val repo = cachedRepo()
+        server.enqueue(json(page("huge", listOf("x".repeat(3 * 1024 * 1024)))))
+        repo.detail("huge")
+        assertNull(repo.cachedDetail("huge"))
+    }
+    @Test fun deletingAChatRemovesItsSavedPage() = runBlocking {
+        val repo = cachedRepo()
+        server.enqueue(json(page("gone", listOf("1"))))
+        repo.detail("gone")
+        assertNotNull(repo.cachedDetail("gone"))
+        server.enqueue(json("""{"ok":true}"""))
+        repo.deleteConversation("gone")
+        assertNull(repo.cachedDetail("gone"))
     }
     @Test fun redirectsDoNotForwardCredentialsOrReplayMutations() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(307).addHeader("Location", server.url("/other")))

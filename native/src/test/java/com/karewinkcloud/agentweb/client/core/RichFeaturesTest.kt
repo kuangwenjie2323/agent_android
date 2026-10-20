@@ -47,6 +47,13 @@ class RichFeaturesTest {
         val math = richMarkdownParser().parse("$$\nx^2 + \\broken{").firstChild as MathBlock
         assertTrue(readableMath(math.literal).contains("x²"))
     }
+    @Test fun concreteClaudeIdsReadAsVersions() {
+        assertEquals("Haiku 4.5", readableModelId("claude-haiku-4-5-20251001"))
+        assertEquals("Sonnet 5.5", readableModelId("claude-sonnet-5-5"))
+        assertEquals("Opus 5", readableModelId("claude-opus-5"))
+        assertEquals("gpt-6-luna", readableModelId("gpt-6-luna"))
+        assertEquals("deepseek-flash", readableModelId("deepseek-flash[1m]"))  // DeepSeek's own id, without the context hint
+    }
     @Test fun commonHtmlFromModelsRendersAsText() {
         assertEquals("a\nb\nc", simpleHtmlText("a<br>b</br>c"))
         assertEquals("bold and key", simpleHtmlText("<b>bold</b> and <kbd>key</kbd>"))
@@ -117,6 +124,7 @@ class RichFeaturesTest {
         assertEquals("done", plainPreview("intro\n- [x] ~~done~~"))
         assertEquals("https://example.test", plainPreview("<https://example.test>"))
         assertEquals("DS V4.1 Flash", compactModelLabel("DeepSeek V4.1 Flash"))
+        assertEquals("deepseek-flash", compactModelLabel("deepseek-flash"))
         assertEquals("snake_case", plainPreview("`snake_case`"))
     }
     @Test fun reconnectBackoffIsCappedAndHttpRejectionsStopRetries() {

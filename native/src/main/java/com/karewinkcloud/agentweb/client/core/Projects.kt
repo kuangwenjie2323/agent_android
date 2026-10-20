@@ -23,6 +23,13 @@ object ReconnectPolicy {
     fun retryStatus(status: Int) = status == 408 || status == 429 || status in 500..599
 }
 
-fun compactModelLabel(label: String) = label.replace(Regex("DeepSeek", RegexOption.IGNORE_CASE), "DS")
-    .replace(Regex("\\s*\\([^)]*\\)"), "").replace("Claude ", "").replace("deepseek-", "DS ", true)
-    .replace(Regex("(?i)v(\\d+(?:\\.\\d+)?)-"), "V$1 ").trim()
+// Shortens a display name ("DeepSeek V4 Pro" -> "DS V4 Pro"); official ids such as deepseek-flash stay as they are.
+fun compactModelLabel(label: String) = label.replace(Regex("DeepSeek(?=\\s)", RegexOption.IGNORE_CASE), "DS")
+
+private val claudeModelId = Regex("claude-(opus|sonnet|haiku|fable)-(\\d+)(?:-(\\d))?(?:-\\d{8})?")
+/** Concrete Claude ids recorded in usage ("claude-haiku-4-5-20251001") read as "Haiku 4.5". */
+fun readableModelId(raw: String): String = raw.removeSuffix("[1m]").let { model -> claudeModelId.matchEntire(model)?.let { m ->
+    m.groupValues[1].replaceFirstChar { it.uppercase() } + " " + m.groupValues[2] + (m.groupValues[3].takeIf { it.isNotEmpty() }?.let { ".$it" } ?: "")
+} ?: model
+    .replace(Regex("\\s*\\([^)]*\\)"), "").replace("Claude ", "")
+    .replace(Regex("(?i)v(\\d+(?:\\.\\d+)?)-"), "V$1 ").trim() }

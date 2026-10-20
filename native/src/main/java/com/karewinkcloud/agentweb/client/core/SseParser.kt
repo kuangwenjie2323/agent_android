@@ -3,6 +3,7 @@ package com.karewinkcloud.agentweb.client.core
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.longOrNull
 
 data class SseFrame(val id: String?, val data: String)
 
@@ -65,7 +66,11 @@ data class EventId(val run: String, val sequence: Long) {
     }
 }
 
-data class StreamEvent(val id: EventId, val type: String, val payload: JsonObject) {
+data class StreamEvent(
+    val id: EventId, val type: String, val payload: JsonObject,
+    /** The last sequence of a merged replay event: its content covers [id] through here. */
+    val through: Long? = null,
+) {
     companion object {
         fun from(frame: SseFrame): StreamEvent {
             val id = EventId.parse(frame.id) ?: throw StreamProtocolException("The stream has an invalid event ID.")
@@ -78,8 +83,10 @@ data class StreamEvent(val id: EventId, val type: String, val payload: JsonObjec
                 throw StreamProtocolException("The stream event ID and sequence disagree.")
             }
             val stringFields = when (type) {
-                "text", "thinking", "error", "notice", "queued" -> listOf("content")
+                "text", "thinking", "error", "notice", "queued", "steer" -> listOf("content")
                 "tool_call" -> listOf("id", "name")
+                "question" -> listOf("id", "question")
+                "answer" -> listOf("id", "content")
                 "tool_result" -> listOf("id", "content")
                 "done" -> listOf("conversationId")
                 else -> emptyList()
@@ -90,7 +97,14 @@ data class StreamEvent(val id: EventId, val type: String, val payload: JsonObjec
                     (json["is_error"] as? JsonPrimitive)?.booleanOrNull == null))) {
                 throw StreamProtocolException("The stream event does not match the protocol schema.")
             }
-            return StreamEvent(id, type, json)
+            val through = if (!json.containsKey("through")) null else {
+                // Only a merged run of an append-only block may name the sequence it ends at.
+                if (type != "text" && type != "thinking") throw StreamProtocolException("Only append events may name a through sequence.")
+                val value = (json["through"] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull
+                if (value == null || value < id.sequence) throw StreamProtocolException("The stream event has an invalid through sequence.")
+                value
+            }
+            return StreamEvent(id, type, json, through)
         }
     }
 }

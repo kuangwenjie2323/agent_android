@@ -59,4 +59,29 @@ class SseParserTest {
         assertNull(EventId.parse(":1"))
         assertNull(EventId.parse("run:1 "))
     }
+
+    @Test fun aMergedReplayEventCarriesTheSequenceItsRunEndsAt() {
+        val text = StreamEvent.from(SseFrame("run:4", """{"type":"text","seq":4,"content":"Hello world","through":6}"""))
+        assertEquals(6L, text.through)
+        assertEquals("Hello world", text.payload.string("content"))
+        val thinking = StreamEvent.from(SseFrame("run:8", """{"type":"thinking","seq":8,"content":"hm","through":9}"""))
+        assertEquals(9L, thinking.through)
+        // A run of one event is sent unchanged; through == seq is still a valid range.
+        assertEquals(4L, StreamEvent.from(SseFrame("run:4", """{"type":"text","seq":4,"content":"a","through":4}""")).through)
+        assertNull(StreamEvent.from(SseFrame("run:7", """{"type":"text","seq":7,"content":"a"}""")).through)
+    }
+
+    @Test fun invalidThroughSequencesAreRejected() {
+        val bad = listOf(
+            """{"type":"text","seq":4,"content":"a","through":3}""",
+            """{"type":"text","seq":4,"content":"a","through":"6"}""",
+            """{"type":"text","seq":4,"content":"a","through":6.5}""",
+            """{"type":"text","seq":4,"content":"a","through":null}""",
+            """{"type":"done","seq":4,"conversationId":"c","through":5}""",
+            """{"type":"tool_call","seq":4,"id":"t","name":"Read","input":{},"through":5}""",
+        )
+        for (data in bad) {
+            assertThrows(data, StreamProtocolException::class.java) { StreamEvent.from(SseFrame("run:4", data)) }
+        }
+    }
 }

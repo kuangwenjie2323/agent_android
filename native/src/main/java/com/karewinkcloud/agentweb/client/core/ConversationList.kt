@@ -4,21 +4,26 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
-enum class ConversationGroup { TODAY, YESTERDAY, OLDER }
+enum class ConversationGroup { PINNED, TODAY, YESTERDAY, OLDER }
 data class ConversationSection(val group: ConversationGroup, val conversations: List<Conversation>)
+
+/** Default titles of a chat nobody has written in yet (server and clients, both languages). */
+private val placeholderTitles = setOf("new chat", "新对话", "新聊天", "新会话")
 
 fun conversationSections(conversations: List<Conversation>, query: String, showEmpty: Boolean,
     today: LocalDate = LocalDate.now(), zone: ZoneId = ZoneId.systemDefault()): List<ConversationSection> {
     val needle = query.trim()
     val filtered = conversations.filter { conversation ->
         (showEmpty || conversation.messageCount != 0 || conversation.running || conversation.pinned ||
-            !(conversation.title.isBlank() || conversation.title.equals("New chat", true))) &&
+            !(conversation.title.isBlank() || conversation.title.trim().lowercase() in placeholderTitles)) &&
             (needle.isEmpty() || listOf(conversation.title, conversation.preview, conversation.project.orEmpty(),
                 conversation.choice.agent, conversation.choice.model).any { it.contains(needle, ignoreCase = true) })
     }.sortedByDescending { it.updatedAt }
+    // Pinned chats stay on top whatever their age, as in Claude's sidebar.
     val groups = filtered.groupBy {
         val date = Instant.ofEpochSecond(it.updatedAt).atZone(zone).toLocalDate()
         when {
+            it.pinned -> ConversationGroup.PINNED
             date >= today -> ConversationGroup.TODAY
             date == today.minusDays(1) -> ConversationGroup.YESTERDAY
             else -> ConversationGroup.OLDER

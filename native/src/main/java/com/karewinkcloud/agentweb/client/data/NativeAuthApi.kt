@@ -26,7 +26,7 @@ interface NativeAuthApi {
     suspend fun revoke(credential: DeviceCredential): Boolean
 }
 
-class HttpNativeAuthApi(client: OkHttpClient = OkHttpClient(), private val clock: () -> Long = System::currentTimeMillis) : NativeAuthApi {
+class HttpNativeAuthApi(client: OkHttpClient = OkHttpClient.Builder().addInterceptor(Diagnostics.interceptor).build(), private val clock: () -> Long = System::currentTimeMillis) : NativeAuthApi {
     private val client = client.newBuilder().cookieJar(CookieJar.NO_COOKIES).cache(null)
         .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
         .authenticator(Authenticator.NONE).proxyAuthenticator(Authenticator.NONE)

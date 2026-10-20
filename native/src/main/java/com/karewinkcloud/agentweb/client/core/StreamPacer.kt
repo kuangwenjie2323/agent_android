@@ -12,6 +12,11 @@ class StreamPacer {
     private var credit = 0.0
     val pending get() = visible < target
 
+    /** Text already on screen before this stream (a resumed turn) stays shown; only what arrives later is revealed. */
+    fun prime(length: Int) {
+        target = max(target, length); visible = max(visible, length)
+    }
+
     fun offer(length: Int, now: Long) {
         if (length < target) { target = 0; visible = 0; arrivals.clear(); credit = 0.0 }
         if (length > target) arrivals.addLast(Arrival(length, now))

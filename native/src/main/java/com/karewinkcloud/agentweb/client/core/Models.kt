@@ -27,8 +27,14 @@ data class Agent(
     val contextKinds: Map<String, String> = emptyMap(),
     val effortLevels: Map<String, List<String>> = emptyMap(),
     val supportsImages: Boolean = false,
+    /** Per-model image support; older servers send only [supportsImages]. */
+    val modelImages: Map<String, Boolean> = emptyMap(),
+    /** The subscription's usage windows from the last turn's report (Claude only). */
+    val limits: UsageLimits? = null,
 ) {
-    fun label(model: String) = labels[model] ?: model.substringAfterLast('/')
+    fun label(model: String) = model.removeSuffix("[1m]").let { id -> labels[id] ?: id.substringAfterLast('/') }
+    /** Whether [model] reads attached photos (DeepSeek V4.1 Flash does, V4 Pro does not). */
+    fun readsImages(model: String?) = model?.let { modelImages[it] } ?: supportsImages
     fun resumeModel(model: String): String = if (model in models || id != "claude") model else
         models.firstOrNull { it in setOf("opus", "sonnet", "haiku") && model.startsWith("claude-$it-") } ?: model
     companion object {
@@ -42,7 +48,32 @@ data class Agent(
             j.obj("contextKinds")?.mapValues { (_, v) -> (v as? JsonPrimitive)?.contentOrNull.orEmpty() }.orEmpty(),
             j.obj("modelEffortLevels")?.mapValues { (_, v) -> (v as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty() }.orEmpty(),
             j.boolean("supportsImages") == true,
+            j.obj("modelSupportsImages")?.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.booleanOrNull?.let { k to it } }?.toMap().orEmpty(),
+            UsageLimits.from(j.obj("limits")),
         )
+    }
+}
+
+/**
+ * How much of a subscription's usage windows is used (Claude Code reports it during each turn): [windows] maps
+ * "five_hour" / "seven_day" to the share used (0..1) and when it resets (epoch seconds); [exhausted] when the
+ * last turn was refused for the limit. [updatedAt] is when that report came.
+ */
+data class UsageLimits(val windows: Map<String, LimitWindow>, val exhausted: Boolean, val resetsAt: Long?, val updatedAt: Long?) {
+    data class LimitWindow(val used: Double, val resetsAt: Long?)
+    val highest get() = windows.values.maxOfOrNull { it.used } ?: 0.0
+    companion object {
+        fun from(j: JsonObject?): UsageLimits? {
+            j ?: return null
+            val windows = j.obj("windows")?.mapNotNull { (name, value) ->
+                val window = value as? JsonObject ?: return@mapNotNull null
+                val used = (window["used"] as? JsonPrimitive)?.doubleOrNull ?: return@mapNotNull null
+                name to LimitWindow(used, window.long("resetsAt"))
+            }?.toMap().orEmpty()
+            if (windows.isEmpty() && j.string("status") == null) return null
+            return UsageLimits(windows, j.string("status") == "rejected", j.long("resetsAt"),
+                (j["updatedAt"] as? JsonPrimitive)?.doubleOrNull?.toLong())
+        }
     }
 }
 
@@ -55,8 +86,26 @@ data class Conversation(
     val preview: String = "",
     val projectId: String? = null,
     val lineage: ConversationLineage? = null,
+    /** Its running turn waits on the user's pick (an ask_user question). */
+    val waitingInput: Boolean = false,
+    /** Moved out of the list after a while without activity, or by hand; new activity brings it back. */
+    val archived: Boolean = false,
 ) {
     val running get() = active || starting
+    /** The list-API shape of this row (without live run state), for the on-device list cache. */
+    fun cacheJson(): JsonObject = buildJsonObject {
+        put("id", id); put("title", title); put("pinned", pinned); put("updated_at", updatedAt)
+        if (choice.agent.isNotBlank()) put("agent", choice.agent)
+        if (choice.model.isNotBlank()) put("model", choice.model)
+        choice.effort?.let { put("effort", it) }
+        put("perm_mode", choice.permission); put("execution_mode", choice.execution)
+        if (nativeControl) put("controlKind", "codexNative")
+        messageCount?.let { put("message_count", it) }
+        if (preview.isNotEmpty()) put("last_message_preview", preview)
+        if (projectId != null || project != null) put("project", buildJsonObject {
+            projectId?.let { put("id", it) }; project?.let { put("name", it) }
+        })
+    }
     companion object {
         fun from(j: JsonObject) = Conversation(
             j.string("id").orEmpty(), j.string("title").orEmpty().ifBlank { "New chat" },
@@ -68,28 +117,77 @@ data class Conversation(
             j.long("updated_at") ?: j.long("created_at") ?: 0,
             j.long("message_count")?.toInt(), j.string("last_message_preview").orEmpty(),
             j.obj("project")?.string("id"), ConversationLineage.from(j.obj("lineage")),
+            waitingInput = j.boolean("waiting_input") == true,
+            archived = j.long("archived_at") != null,
         )
     }
 }
 
 enum class StepStatus { RUNNING, COMPLETE, ERROR, INTERRUPTED }
+
+/**
+ * Work a step left running in the background (Bash or Agent with run_in_background): the step itself
+ * returns at once, the task runs on and its end is announced later in the turn. [status] is running,
+ * completed, failed or stopped. [startedAt] is when it started by the server's clock (epoch ms, 0 when
+ * unknown), so a reconnect that replays the turn keeps its running time; [durationMs] once it ended.
+ */
+data class BackgroundTask(val id: String, val status: String = RUNNING, val description: String = "", val kind: String = "",
+    val exitCode: Int? = null, val startedAt: Long = 0, val durationMs: Long? = null) {
+    val running get() = status == RUNNING
+    val agent get() = kind.endsWith("agent")
+    companion object {
+        const val RUNNING = "running"
+        fun from(j: JsonObject?): BackgroundTask? {
+            val id = j?.string("id")?.takeIf(String::isNotBlank) ?: return null
+            val started = (j["started_at"] as? JsonPrimitive)?.doubleOrNull
+            val ended = (j["ended_at"] as? JsonPrimitive)?.doubleOrNull
+            return BackgroundTask(id, j.string("status") ?: RUNNING, j.string("description").orEmpty(), j.string("kind").orEmpty(),
+                j.long("exit_code")?.toInt(), durationMs = if (started != null && ended != null) ((ended - started) * 1000).toLong().coerceAtLeast(0) else null)
+        }
+    }
+}
+
+/** One side question and its answer (null while it is being answered; [failed] when it could not be). */
+data class SideQuestion(val question: String, val answer: String? = null, val failed: Boolean = false)
+
+/** The last part of a background task's output, as a terminal would show it. */
+data class TaskOutput(val text: String, val truncated: Boolean = false, val size: Long = 0)
+
 sealed interface ChatBlock {
     data class Text(val content: String) : ChatBlock
+    /** [chars] is how long the thought's text was when an outline page left it out (null when [content] is here). */
     data class Thought(val content: String = "", val startedAt: Long = 0, val durationMs: Long? = null,
-        val status: StepStatus = StepStatus.RUNNING) : ChatBlock
+        val status: StepStatus = StepStatus.RUNNING, val chars: Int? = null) : ChatBlock
+    /** [resultChars] is how long the output was when an outline page left it out (null when [result] is here). */
     data class Tool(val id: String, val name: String, val input: String = "", val result: String? = null,
-        val status: StepStatus = StepStatus.RUNNING, val startedAt: Long = 0, val durationMs: Long? = null, val diff: String? = null) : ChatBlock
+        val status: StepStatus = StepStatus.RUNNING, val startedAt: Long = 0, val durationMs: Long? = null, val diff: String? = null,
+        val task: BackgroundTask? = null, val resultChars: Int? = null) : ChatBlock
+    /** A background task ended here in the turn (Claude Code announces it, then answers it). */
+    data class TaskNotice(val taskId: String, val toolId: String, val status: String, val description: String = "",
+        val exitCode: Int? = null) : ChatBlock
     data class Error(val problem: ClientError) : ChatBlock
     data class Notice(val content: String) : ChatBlock
+    /** A message the user sent into the running turn; the model read it at its next step. */
+    data class Steer(val content: String, val items: List<MessageMedia> = emptyList()) : ChatBlock
+    /** A choice the agent asked the user to make (ask_user); [answer] once the user picked. */
+    data class Question(val id: String, val question: String, val options: List<String>, val multi: Boolean = false,
+        val answer: String? = null) : ChatBlock
     data class Media(val items: List<MessageMedia>) : ChatBlock
 }
+
+/** Shown when the user stopped a turn; not an error. */
+const val STOPPED_NOTICE = "stopped by user"
+/** A command the stop itself killed (SIGKILL/SIGTERM) rather than one that failed on its own. */
+internal fun killedByStop(tool: ChatBlock.Tool) = tool.status == StepStatus.ERROR &&
+    tool.result?.trim() in setOf("Exit code 137", "Exit code 143")
 
 fun historyBlocks(j: JsonObject): List<ChatBlock> {
     val blocks = j.objects("blocks").mapIndexedNotNull { index, b ->
         when (b.string("type")) {
             "text" -> ChatBlock.Text(b.string("content").orEmpty())
             "thinking" -> ChatBlock.Thought(b.string("content").orEmpty(), durationMs =
-                (b["duration"] as? JsonPrimitive)?.doubleOrNull?.times(1000)?.toLong(), status = StepStatus.COMPLETE)
+                (b["duration"] as? JsonPrimitive)?.doubleOrNull?.times(1000)?.toLong(), status = StepStatus.COMPLETE,
+                chars = b.long("chars")?.toInt())
             "tool" -> ChatBlock.Tool(
                 b.string("id") ?: "history-$index", b.string("name").orEmpty().ifBlank { "Tool" },
                 b["input"]?.toString().orEmpty(), b.string("result"),
@@ -97,27 +195,46 @@ fun historyBlocks(j: JsonObject): List<ChatBlock> {
                     b.containsKey("result") -> StepStatus.COMPLETE
                     else -> StepStatus.INTERRUPTED },
                 durationMs = b.long("duration_ms")?.coerceAtLeast(0), diff = b.string("diff"),
+                // A task still "running" in a saved turn ended with it (the CLI stops its tasks when it exits).
+                task = BackgroundTask.from(b.obj("task"))?.let { if (it.running) it.copy(status = "stopped") else it },
+                resultChars = b.long("resultChars")?.toInt(),
             )
-            "error" -> ChatBlock.Error(ClientError(b.string("content").orEmpty(), b.string("code"), b.boolean("retryable")))
+            "task_notice" -> ChatBlock.TaskNotice(b.string("task_id").orEmpty(), b.string("tool_id").orEmpty(),
+                b.string("status") ?: "completed", b.string("description").orEmpty(), b.long("exit_code")?.toInt())
+            "error" -> if (b.string("code") == "interrupted") ChatBlock.Notice(STOPPED_NOTICE)
+                else ChatBlock.Error(ClientError(b.string("content").orEmpty(), b.string("code"), b.boolean("retryable")))
+            "steer" -> ChatBlock.Steer(b.string("content").orEmpty(), b.objects("items").map(MessageMedia::from))
+            "question" -> ChatBlock.Question(b.string("id").orEmpty(), b.string("question").orEmpty(),
+                b.array("options").mapNotNull { (it as? JsonPrimitive)?.contentOrNull }, b.boolean("multi") == true, b.string("answer"))
             else -> null
         }
     }.toMutableList()
     if (blocks.none { it is ChatBlock.Text } && !j.string("content").isNullOrEmpty()) {
         blocks.add(0, ChatBlock.Text(j.string("content").orEmpty()))
     }
-    if (j.string("status") in setOf("error", "interrupted") && blocks.none { it is ChatBlock.Error }) {
-        blocks.add(ChatBlock.Error(ClientError("This turn was ${j.string("status")}.", retryable = false)))
+    if (j.string("status") == "interrupted") {
+        blocks.replaceAll { if (it is ChatBlock.Tool && killedByStop(it)) it.copy(status = StepStatus.INTERRUPTED) else it }
+        if (blocks.none { it is ChatBlock.Error || (it is ChatBlock.Notice && it.content == STOPPED_NOTICE) }) blocks.add(ChatBlock.Notice(STOPPED_NOTICE))
+    } else if (j.string("status") == "error" && blocks.none { it is ChatBlock.Error }) {
+        blocks.add(ChatBlock.Error(ClientError("This turn was error.", retryable = false)))
     }
     if (j.objects("images").isNotEmpty()) blocks.add(ChatBlock.Media(j.objects("images").map(MessageMedia::from)))
     return blocks
 }
 
+/** The words of a message: its text blocks as paragraphs (work or a mid-turn message came between them). */
+fun answerText(blocks: List<ChatBlock>): String =
+    blocks.filterIsInstance<ChatBlock.Text>().map { it.content.trim('\n') }.filter(String::isNotBlank).joinToString("\n\n")
+
 data class ChatMessage(val id: String, val role: String, val blocks: List<ChatBlock>, val model: String? = null,
-    val usage: TurnUsage? = null) {
-    val text get() = blocks.filterIsInstance<ChatBlock.Text>().joinToString("") { it.content }
+    val usage: TurnUsage? = null,
+    /** Its blocks came from an outline page: thinking text and tool output were left out of them. */
+    val outline: Boolean = false) {
+    val text get() = answerText(blocks)
     companion object {
         fun from(j: JsonObject) = ChatMessage(j.string("id").orEmpty(), j.string("role") ?: "assistant", historyBlocks(j),
-            j.string("model") ?: j.obj("usage")?.string("model"), TurnUsage.from(j.obj("usage")))
+            j.string("model") ?: j.obj("usage")?.string("model"), TurnUsage.from(j.obj("usage")),
+            outline = j.boolean("outline") == true)
     }
 }
 data class QueueItem(val id: String, val text: String) {
@@ -127,6 +244,10 @@ data class ConversationDetail(
     val conversation: Conversation, val messages: List<ChatMessage>, val queued: List<QueueItem>,
     val queuePaused: Boolean, val olderCount: Int, val nextCursor: String?,
 ) {
+    /** The page's size in bytes as the server sent it; known only for a live read, never for a saved one. */
+    var pageBytes: Int? = null
+    /** Whether this page came as an outline (thinking text and tool output left out). */
+    val outline get() = messages.any { it.outline }
     companion object {
         fun from(j: JsonObject) = ConversationDetail(
             Conversation.from(requireNotNull(j.obj("conversation"))), j.objects("messages").map(ChatMessage::from),
@@ -168,4 +289,40 @@ data class QueueRequest(val conversationId: String, val text: String, val choice
     val attachments: List<Attachment> = emptyList()) {
     fun json() = JsonObject(choice.fields() + mapOf("conversationId" to JsonPrimitive(conversationId),
         "message" to JsonPrimitive(attachmentMessage(text, attachments)), "queueId" to JsonPrimitive(queueId)) + attachmentFields(attachments))
+}
+
+/** How long a chat may sit idle before the server archives it (0 = never), and how many it has archived. */
+data class ArchiveInfo(val days: Int, val choices: List<Int>, val archived: Int) {
+    companion object {
+        fun from(j: JsonObject) = ArchiveInfo((j.long("days") ?: 14).toInt(),
+            j.array("choices").mapNotNull { (it as? JsonPrimitive)?.longOrNull?.toInt() }.ifEmpty { listOf(0, 7, 14, 30) },
+            (j.long("archived") ?: 0).toInt())
+    }
+}
+
+/** A chat found by its words (GET /api/chat/search): where they matched and the text around them. */
+data class ChatHit(val id: String, val title: String, val date: String, val match: String, val snippet: String, val archived: Boolean) {
+    companion object {
+        fun from(j: JsonObject) = ChatHit(j.string("conversationId").orEmpty(), j.string("title").orEmpty(), j.string("date").orEmpty(),
+            j.string("match").orEmpty(), j.string("snippet").orEmpty(), j.boolean("archived") ?: false)
+    }
+}
+
+/** One memory the agents keep (a line of MEMORY.md): its title, file, one-line hook and kind. */
+data class MemoryEntry(val title: String, val file: String, val hook: String, val type: String?, val modified: Long?)
+/** The last nightly (or requested) tidy of the shared memory: when, what it changed, its own summary. */
+data class MemoryPass(val status: String, val at: Long, val summary: String, val changed: List<String>, val removed: List<String>,
+    val files: Int)
+data class MemoryOverview(val entries: List<MemoryEntry>, val lastPass: MemoryPass?, val running: Boolean) {
+    companion object {
+        fun from(j: JsonObject): MemoryOverview {
+            fun names(o: JsonObject, key: String) = o.array(key).mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            return MemoryOverview(j.objects("entries").map {
+                MemoryEntry(it.string("title").orEmpty(), it.string("file").orEmpty(), it.string("hook").orEmpty(), it.string("type"), it.long("modified"))
+            }, j.obj("lastPass")?.let { p ->
+                MemoryPass(p.string("status").orEmpty(), p.long("at") ?: 0, p.string("summary").orEmpty(), names(p, "changed"),
+                    names(p, "removed"), (p.long("files") ?: 0).toInt())
+            }, j.boolean("running") == true)
+        }
+    }
 }

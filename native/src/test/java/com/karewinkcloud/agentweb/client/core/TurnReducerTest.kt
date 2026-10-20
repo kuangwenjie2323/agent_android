@@ -18,6 +18,39 @@ class TurnReducerTest {
     }
     private val initial = TurnState("conversation", "run")
 
+    @Test fun questionCardFillsInWithTheAnswerLiveAndInHistory() {
+        var state = initial
+        val question = StreamEvent.from(SseFrame("run:1", """{"type":"question","seq":1,"id":"q1","question":"哪个颜色？","options":["红色","蓝色"],"multi":false}"""))
+        state = TurnReducer.reduce(state, question, 0)
+        assertEquals(ChatBlock.Question("q1", "哪个颜色？", listOf("红色", "蓝色")), state.blocks.single())
+        state = TurnReducer.reduce(state, event(2, "answer", "id" to "q1", "content" to "蓝色"), 1)
+        assertEquals("蓝色", (state.blocks.single() as ChatBlock.Question).answer)
+        val history = historyBlocks(buildJsonObject { putJsonArray("blocks") { addJsonObject {
+            put("type", "question"); put("id", "q1"); put("question", "哪个颜色？"); put("multi", false); put("answer", "蓝色")
+            putJsonArray("options") { add("红色"); add("蓝色") } } } })
+        assertEquals(ChatBlock.Question("q1", "哪个颜色？", listOf("红色", "蓝色"), answer = "蓝色"), history.single())
+    }
+    @Test fun aStopTheUserAskedForIsANoticeNotAnError() {
+        var state = initial
+        val events = listOf(
+            event(1, "tool_call", "id" to "t1", "name" to "Bash", "input" to "{}"),
+            event(2, "tool_result", "id" to "t1", "content" to "Exit code 137", "is_error" to true),
+            event(3, "error", "code" to "interrupted", "content" to "stopped by user", "retryable" to true),
+            event(4, "done", "conversationId" to "conversation"))
+        events.forEachIndexed { i, e -> state = TurnReducer.reduce(state, e, i.toLong()) }
+        assertEquals(StepStatus.INTERRUPTED, (state.blocks.first() as ChatBlock.Tool).status)
+        assertEquals(ChatBlock.Notice(STOPPED_NOTICE), state.blocks.last())
+        assertTrue(state.blocks.none { it is ChatBlock.Error })
+        val history = historyBlocks(buildJsonObject {
+            put("status", "interrupted")
+            putJsonArray("blocks") {
+                addJsonObject { put("type", "tool"); put("id", "t1"); put("name", "Bash"); put("result", "Exit code 143"); put("is_error", true) }
+                addJsonObject { put("type", "error"); put("code", "interrupted"); put("content", "stopped by user") }
+            }
+        })
+        assertEquals(listOf(StepStatus.INTERRUPTED), history.filterIsInstance<ChatBlock.Tool>().map { it.status })
+        assertEquals(1, history.count { it == ChatBlock.Notice(STOPPED_NOTICE) }); assertTrue(history.none { it is ChatBlock.Error })
+    }
     @Test fun streamingTextAccumulatesWithoutLosingCjk() {
         var state = initial
         listOf("你", "好", "\n", "**AgentWeb**").forEachIndexed { i, text ->
@@ -82,6 +115,29 @@ class TurnReducerTest {
     @Test fun sequenceGapFailsClosed() {
         assertThrows(StreamProtocolException::class.java) { TurnReducer.reduce(initial, event(2, "text", "content" to "missing"), 0) }
     }
+    @Test fun aMergedReplayEventBuildsTheSameTurnAsItsSingleEvents() {
+        var oneByOne = initial
+        listOf("Hel", "lo ", "world").forEachIndexed { i, part ->
+            oneByOne = TurnReducer.reduce(oneByOne, event(i + 1, "text", "content" to part), i.toLong())
+        }
+        val merged = TurnReducer.reduce(initial, event(1, "text", "content" to "Hello world", "through" to 3), 0)
+        assertEquals(oneByOne.blocks, merged.blocks)
+        assertEquals(oneByOne.lastSequence, merged.lastSequence)
+        assertEquals("run:3", merged.lastEventId)
+    }
+    @Test fun anEventRightAfterAMergedRunContinuesFromThrough() {
+        var state = TurnReducer.reduce(initial, event(1, "text", "content" to "abc", "through" to 3), 0)
+        assertEquals(3L, state.lastSequence)
+        state = TurnReducer.reduce(state, event(4, "text", "content" to "d"), 1)
+        assertEquals("abcd", state.text)
+        assertEquals(4L, state.lastSequence)
+    }
+    @Test fun aGapAfterAMergedRunStillFailsClosed() {
+        val state = TurnReducer.reduce(initial, event(1, "text", "content" to "abc", "through" to 3), 0)
+        assertThrows(StreamProtocolException::class.java) {
+            TurnReducer.reduce(state, event(5, "text", "content" to "d"), 1)
+        }
+    }
     @Test fun foreignRunCannotMutateTurn() {
         assertThrows(StreamProtocolException::class.java) { TurnReducer.reduce(initial, event(1, "text", "content" to "x", run = "other"), 0) }
     }
@@ -110,5 +166,50 @@ class TurnReducerTest {
         assertEquals(1500L, (parsed.blocks[0] as ChatBlock.Thought).durationMs)
         assertEquals(StepStatus.ERROR, (parsed.blocks[1] as ChatBlock.Tool).status)
         assertEquals(false, (parsed.blocks[3] as ChatBlock.Error).problem.retryable)
+    }
+
+    @Test fun aBackgroundTaskRunsPastTheAnswerAndItsEndIsAnnounced() {
+        var state = initial
+        val events = listOf(
+            event(1, "tool_call", "id" to "t1", "name" to "Bash", "input" to "{}"),
+            event(2, "task", "id" to "bz1", "tool_id" to "t1", "status" to "running", "description" to "Run tests", "kind" to "local_bash",
+                "at" to 1_700_000_000.5),
+            event(3, "tool_result", "id" to "t1", "content" to "Command running in background with ID: bz1.", "is_error" to false),
+            event(4, "text", "content" to "Started."),
+            event(5, "background_wait", "waiting" to true))
+        events.forEachIndexed { i, e -> state = TurnReducer.reduce(state, e, 1000L * i) }
+        val running = (state.blocks.first() as ChatBlock.Tool).task!!
+        assertEquals(BackgroundTask("bz1", "running", "Run tests", "local_bash", startedAt = 1_700_000_000_500), running)
+        assertTrue(state.backgroundWait)
+        // Replayed after a reconnect, both events arrive at once: the times come from the server's stamps.
+        state = TurnReducer.reduce(state, event(6, "task", "id" to "bz1", "tool_id" to "t1", "status" to "failed",
+            "description" to "Run tests", "exit_code" to 1, "notice" to true, "at" to 1_700_000_060.5), 4_001)
+        val ended = (state.blocks.first() as ChatBlock.Tool).task!!
+        assertEquals(Triple("failed", 1, 60_000L), Triple(ended.status, ended.exitCode, ended.durationMs))
+        assertEquals(ChatBlock.TaskNotice("bz1", "t1", "failed", "Run tests", 1), state.blocks.last())
+        // The CLI answers the notification on its own: the model is at work again.
+        state = TurnReducer.reduce(state, event(7, "text", "content" to "Two tests failed."), 62_000)
+        assertFalse(state.backgroundWait)
+    }
+
+    @Test fun aTaskStillRunningWhenTheTurnEndsWentDownWithIt() {
+        var state = initial
+        val events = listOf(
+            event(1, "tool_call", "id" to "t1", "name" to "Bash", "input" to "{}"),
+            event(2, "task", "id" to "bz1", "tool_id" to "t1", "status" to "running"),
+            event(3, "done", "conversationId" to "conversation"))
+        events.forEachIndexed { i, e -> state = TurnReducer.reduce(state, e, i.toLong()) }
+        assertEquals("stopped", (state.blocks.single() as ChatBlock.Tool).task!!.status)
+        val history = historyBlocks(buildJsonObject { putJsonArray("blocks") {
+            addJsonObject { put("type", "tool"); put("id", "t1"); put("name", "Bash"); put("result", "ok")
+                putJsonObject("task") { put("id", "bz1"); put("status", "completed"); put("exit_code", 0)
+                    put("started_at", 100.0); put("ended_at", 145.5) } }
+            addJsonObject { put("type", "tool"); put("id", "t2"); put("name", "Bash"); put("result", "ok")
+                putJsonObject("task") { put("id", "bz2"); put("status", "running") } }
+            addJsonObject { put("type", "task_notice"); put("task_id", "bz1"); put("tool_id", "t1"); put("status", "completed")
+                put("description", "Sample"); put("exit_code", 0) } } })
+        assertEquals(BackgroundTask("bz1", "completed", exitCode = 0, durationMs = 45_500), (history[0] as ChatBlock.Tool).task)
+        assertEquals("stopped", (history[1] as ChatBlock.Tool).task!!.status)
+        assertEquals(ChatBlock.TaskNotice("bz1", "t1", "completed", "Sample", 0), history[2])
     }
 }

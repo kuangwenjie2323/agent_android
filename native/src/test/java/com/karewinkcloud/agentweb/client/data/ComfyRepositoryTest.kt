@@ -124,8 +124,40 @@ class ComfyRepositoryTest {
         server.enqueue(MockResponse().setHeader("Content-Type", "text/html").setBody("html"))
         fails("network") { repo.download(id, ComfyOutput(0, "image/png", 4), file) }; assertFalse(file.exists())
     }
+    @Test fun photoUploadAsksForALinkThenNeverSendsCredentialsToStorage() = runBlocking {
+        val upload = "0123456789abcdef0123456789abcdef"
+        server.enqueue(json("""{"input":{"upload_id":"$upload","put_url":"http://storage.invalid/inputs/x.jpg","content_type":"image/jpeg","expires_in":900}}""", 201))
+        fails("invalid_response") { repo.uploadInput(byteArrayOf(-1, -40, -1, 1), "image/jpeg") }
+        val created = next(); assertEquals("POST", created.method); assertEquals("/api/comfy/inputs", created.path)
+        assertEquals("Bearer test-only", created.getHeader("Authorization"))
+        val body = wireJson.parseToJsonElement(created.body.readUtf8()).jsonObject
+        assertEquals("image/jpeg", body.string("mime")); assertEquals(4L, body.long("bytes"))
+        assertEquals(1, server.requestCount) // a plain-http link is refused before anything is sent to it
+        server.enqueue(json("""{"input":{"upload_id":"../bad","put_url":"https://storage.invalid/x","content_type":"image/jpeg"}}""", 201))
+        fails("invalid_response") { repo.uploadInput(byteArrayOf(1), "image/jpeg") }
+        fails("invalid_response") { repo.uploadInput(byteArrayOf(1), "image/gif") }
+        assertEquals(2, server.requestCount)
+    }
+    @Test fun storageUploadIsAnUnauthenticatedPutOfTheExactBytes() = runBlocking {
+        val http = HttpAgentRepository(server.url("/").toString().trimEnd('/'), TokenProvider { "test-only" })
+        val bytes = byteArrayOf(-1, -40, -1, 7, 8, 9)
+        server.enqueue(MockResponse().setResponseCode(200))
+        http.uploadStorage(server.url("/kaggle-cloud/inputs/a.jpg?X-Amz-Signature=s").toString(), bytes, "image/jpeg")
+        val request = next(); assertEquals("PUT", request.method); assertEquals("/kaggle-cloud/inputs/a.jpg?X-Amz-Signature=s", request.path)
+        assertNull(request.getHeader("Authorization")); assertEquals("image/jpeg", request.getHeader("Content-Type"))
+        assertArrayEquals(bytes, request.body.readByteArray())
+        server.enqueue(MockResponse().setResponseCode(403))
+        try { http.uploadStorage(server.url("/x").toString(), bytes, "image/jpeg"); fail() } catch (_: java.io.IOException) { }
+    }
+    @Test fun cloudStorageLinksMustBePlainHttps() {
+        assertEquals("https://kaggle.karewinkcloud.com/outputs/k.png", storageUrl("https://kaggle.karewinkcloud.com/outputs/k.png"))
+        assertNull(storageUrl("http://kaggle.karewinkcloud.com/outputs/k.png"))
+        assertNull(storageUrl("https://user:secret@kaggle.karewinkcloud.com/k.png"))
+        assertNull(storageUrl("not a url"))
+        assertNull(storageUrl(null))
+    }
     @Test fun oversizedOutputRejectedBeforeDownload() = runBlocking {
-        fails("too_large") { repo.download(id, ComfyOutput(0, "image/png", 33L * 1024 * 1024), temporary.newFile()) }
+        fails("too_large") { repo.download(id, ComfyOutput(0, "image/png", 65L * 1024 * 1024), temporary.newFile()) }
         assertEquals(0, server.requestCount)
     }
     @Test fun authenticationLossUsesSharedTokenProviderAndBlocksLaterRequests() = runBlocking {

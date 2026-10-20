@@ -77,11 +77,17 @@ private fun MarkdownBlock(node: Node) {
 
 private fun Node.images(): List<Image> = children().flatMap { if (it is Image) listOf(it) else it.images() }
 
+/** Web addresses, e-mail addresses and $math$ in running text. */
+private val INLINE_SPECIALS = Regex("https?://[^\\s<>]+|www\\.[^\\s<>]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}|(?<!\\\\)\\$([^$\\n]+)\\$")
+/** The same, and full file paths ("saved to /home/me/report.md"), where files can be opened. */
+private val INLINE_SPECIALS_AND_FILES = Regex(INLINE_SPECIALS.pattern + "|" + PLAIN_PATH.pattern)
+
 @Composable
 private fun inlineText(node: Node): AnnotatedString {
     val colors = MaterialTheme.colorScheme
     val open = LocalOpenLink.current
-    return remember(node, colors, open) {
+    val openFile = LocalOpenFile.current
+    return remember(node, colors, open, openFile) {
         buildAnnotatedString {
             var insideLink = false
             fun AnnotatedString.Builder.link(url: String, label: () -> Unit) {
@@ -91,12 +97,22 @@ private fun inlineText(node: Node): AnnotatedString {
                     LinkInteractionListener { open(url) })) { label() }
                 insideLink = false
             }
+            // A file the answer names opens in the file viewer, like a file link in Claude's desktop app.
+            fun AnnotatedString.Builder.fileLink(ref: FileRef, style: SpanStyle, label: () -> Unit) {
+                val opener = openFile
+                if (insideLink || opener == null) { label(); return }
+                insideLink = true
+                withLink(LinkAnnotation.Clickable("file", TextLinkStyles(style), LinkInteractionListener { opener(ref) })) { label() }
+                insideLink = false
+            }
             fun AnnotatedString.Builder.literal(value: String) {
-                val pattern = Regex("https?://[^\\s<>]+|www\\.[^\\s<>]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}|(?<!\\\\)\\$([^$\\n]+)\\$")
+                val pattern = if (openFile != null) INLINE_SPECIALS_AND_FILES else INLINE_SPECIALS
                 var start = 0
                 pattern.findAll(value).forEach { match ->
                     append(value.substring(start, match.range.first))
-                    if (match.value.startsWith('$')) withStyle(SpanStyle(fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic)) { append(readableMath(match.groupValues[1])) }
+                    val file = if (match.value.startsWith('/') || match.value.startsWith("~/")) fileRef(match.value) else null
+                    if (file != null) fileLink(file, SpanStyle(color = colors.primary, textDecoration = TextDecoration.Underline)) { append(match.value) }
+                    else if (match.value.startsWith('$')) withStyle(SpanStyle(fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic)) { append(readableMath(match.groupValues[1])) }
                     else {
                         val url = match.value.trimEnd('.', ',', ';', ':', '!', '?', ')', ']')
                         link(when { url.startsWith("www.") -> "https://$url"; '@' in url && !url.startsWith("http") -> "mailto:$url"; else -> url }) { append(url) }
@@ -114,13 +130,22 @@ private fun inlineText(node: Node): AnnotatedString {
                     }
                     is SoftLineBreak -> append("\n")
                     is HardLineBreak -> append("\n")
-                    is Code -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = colors.surfaceContainerLow)) { append(current.literal) }
+                    is Code -> {
+                        val code = SpanStyle(fontFamily = CodeFont, background = colors.surfaceContainerLow)
+                        val file = if (openFile != null) namedFile(current.literal) else null
+                        if (file != null) fileLink(file, code.copy(color = colors.primary)) { append(current.literal) }
+                        else withStyle(code) { append(current.literal) }
+                    }
                     is StrongEmphasis -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { current.children().forEach { walk(it) } }
                     is Emphasis -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { current.children().forEach { walk(it) } }
                     is Strike -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { current.children().forEach { walk(it) } }
                     is Link -> {
                         val safe = current.destination.startsWith("https://", true) || current.destination.startsWith("http://", true) || current.destination.startsWith("mailto:", true) || current.destination.startsWith("/api/files/")
+                        val file = if (!safe && openFile != null) linkedFile(current.destination) else null
                         if (safe) link(current.destination) { current.children().forEach { walk(it) } }
+                        else if (file != null) fileLink(file, SpanStyle(color = colors.primary, textDecoration = TextDecoration.Underline)) {
+                            current.children().forEach { walk(it) }
+                        }
                         else current.children().forEach { walk(it) }
                     }
                     is Image -> Unit
@@ -148,7 +173,7 @@ internal fun CodeBlock(code: String, language: String) {
             SelectionContainer {
                 if (language.lowercase() in setOf("diff", "patch")) DiffView(code)
                 else Text(highlightedCode(code, language), Modifier.horizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
-                    fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 21.sp)
+                    fontFamily = CodeFont, fontSize = 13.sp, lineHeight = 21.sp)
             }
         }
     }
@@ -178,10 +203,10 @@ internal fun DiffView(diff: String) {
             val background = when(line.kind) { DiffKind.ADD -> if (dark) Color(0xff213c28) else Color(0xffe0f0de)
                 DiffKind.REMOVE -> MaterialTheme.colorScheme.errorContainer; else -> Color.Transparent }
             Row(Modifier.fillMaxWidth().background(background).padding(horizontal = 8.dp, vertical = 1.dp)) {
-                Text(line.gutter, Modifier.width(24.dp), fontFamily = FontFamily.Monospace,
+                Text(line.gutter, Modifier.width(24.dp), fontFamily = CodeFont,
                     color = when (line.kind) { DiffKind.ADD -> if (dark) Color(0xffb2e3b3) else Color(0xff285b30)
                         DiffKind.REMOVE -> MaterialTheme.colorScheme.onErrorContainer; else -> MaterialTheme.colorScheme.onSurfaceVariant })
-                Text(line.text, fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 21.sp,
+                Text(line.text, fontFamily = CodeFont, fontSize = 13.sp, lineHeight = 21.sp,
                     color = if (line.kind == DiffKind.REMOVE) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface)
             }
         }
@@ -196,7 +221,10 @@ private fun TableView(table: TableBlock) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(12.dp)) {
         Column {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton({ clipboard.setText(AnnotatedString(table.tsv())) }, Modifier.heightIn(min = 48.dp)) { Text(tr(S.copy_table)) }
+                TextButton({ clipboard.setText(AnnotatedString(table.tsv())) }, Modifier.heightIn(min = 40.dp), colors = quietButton()) {
+                    Box(Modifier.size(16.dp)) { AppIcon(R.drawable.aw_copy) }; Spacer(Modifier.width(4.dp))
+                    Text(tr(S.copy_table), style = MaterialTheme.typography.labelMedium)
+                }
             }
             // Up to three columns share the bubble width; wider tables keep 180 dp cells and scroll.
             BoxWithConstraints { val cellWidth = table.header.size.coerceAtLeast(1).let { n -> if (n <= 3) maxWidth / n else 180.dp }

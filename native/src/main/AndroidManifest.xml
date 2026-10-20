@@ -1,10 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Settings > Check for updates hands a downloaded build to the system installer. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <queries>
         <intent><action android:name="android.support.customtabs.action.CustomTabsService" /></intent>
     </queries>
     <application
+        android:name=".AgentWebApplication"
         android:allowBackup="false"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -31,5 +38,7 @@
                 <data android:scheme="com.karewinkcloud.agentweb.client" />
             </intent-filter>
         </activity>
+        <service android:name=".AgentWorkService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <receiver android:name=".AnswerReceiver" android:exported="false" />
     </application>
 </manifest>

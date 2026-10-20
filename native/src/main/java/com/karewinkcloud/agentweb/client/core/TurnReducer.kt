@@ -1,13 +1,19 @@
 package com.karewinkcloud.agentweb.client.core
 
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+
 data class TurnState(
     val conversationId: String, val runId: String, val lastSequence: Long = 0,
     val blocks: List<ChatBlock> = emptyList(), val done: Boolean = false,
     val startedAt: Long? = null, val finishedAt: Long? = null,
     val revealing: Boolean = false, val usage: TurnUsage? = null,
+    /** The model has answered and the turn stays open only for its background tasks. */
+    val backgroundWait: Boolean = false,
 ) {
     val lastEventId get() = EventId(runId, lastSequence).toString()
-    val text get() = blocks.filterIsInstance<ChatBlock.Text>().joinToString("") { it.content }
+    val text get() = answerText(blocks)
 }
 
 /** Only server events change terminal truth. Callers inject a monotonic clock. */
@@ -19,6 +25,7 @@ object TurnReducer {
         if (state.done) throw StreamProtocolException("The stream sent an event after completion.")
         val j = event.payload
         val blocks = state.blocks.toMutableList()
+        var backgroundWait = state.backgroundWait
         val reportedUsage = TurnUsage.from(j.obj("usage") ?: j.takeIf { event.type in setOf("usage", "final", "done") })
         val usage = state.usage?.merge(reportedUsage) ?: reportedUsage
         fun content(): String = j.string("content") ?: throw StreamProtocolException("The stream event has no content.")
@@ -62,8 +69,41 @@ object TurnReducer {
                     durationMs = (now - b.startedAt).coerceAtLeast(0), diff = j.string("diff") ?: b.diff)
                 if (index >= 0) blocks[index] = result else blocks += result
             }
-            "error" -> blocks += ChatBlock.Error(ClientError(content(), j.string("code"), j.boolean("retryable")))
+            "error" -> if (j.string("code") == "interrupted") {
+                blocks.indices.forEach { i ->
+                    val b = blocks[i]
+                    if (b is ChatBlock.Tool && (b.status == StepStatus.RUNNING || killedByStop(b))) blocks[i] = b.copy(status = StepStatus.INTERRUPTED)
+                }
+                blocks += ChatBlock.Notice(STOPPED_NOTICE)
+            } else blocks += ChatBlock.Error(ClientError(content(), j.string("code"), j.boolean("retryable")))
+            "task" -> {
+                val id = j.string("id")?.takeIf(String::isNotBlank) ?: throw StreamProtocolException("Task identity is missing.")
+                val status = j.string("status") ?: BackgroundTask.RUNNING
+                val description = j.string("description").orEmpty()
+                val exitCode = j.long("exit_code")?.toInt()
+                val index = blocks.indexOfLast { it is ChatBlock.Tool && (it.task?.id == id || it.id == j.string("tool_id")) }
+                // The server stamps each task event; a replay after a reconnect arrives all at once.
+                val at = (j["at"] as? JsonPrimitive)?.doubleOrNull?.let { (it * 1000).toLong() }
+                if (index >= 0) {
+                    val tool = blocks[index] as ChatBlock.Tool
+                    val task = tool.task ?: BackgroundTask(id, startedAt = at ?: 0)
+                    blocks[index] = tool.copy(task = task.copy(status = status, description = description.ifBlank { task.description },
+                        kind = j.string("kind")?.takeIf(String::isNotBlank) ?: task.kind, exitCode = exitCode ?: task.exitCode,
+                        durationMs = if (status == BackgroundTask.RUNNING || at == null || task.startedAt <= 0) null
+                            else (at - task.startedAt).coerceAtLeast(0)))
+                }
+                if (j.boolean("notice") == true) blocks += ChatBlock.TaskNotice(id, j.string("tool_id").orEmpty(), status,
+                    description.ifBlank { (blocks.getOrNull(index) as? ChatBlock.Tool)?.task?.description.orEmpty() }, exitCode)
+            }
+            "background_wait" -> backgroundWait = j.boolean("waiting") == true
             "notice", "queued" -> blocks += ChatBlock.Notice(content())
+            "steer" -> { blocks += ChatBlock.Steer(content(), j.objects("items").map(MessageMedia::from)); backgroundWait = false }
+            "question" -> blocks += ChatBlock.Question(j.string("id").orEmpty(), j.string("question").orEmpty(),
+                j.array("options").mapNotNull { (it as? JsonPrimitive)?.contentOrNull }, j.boolean("multi") == true)
+            "answer" -> {
+                val index = blocks.indexOfLast { it is ChatBlock.Question && it.id == j.string("id") }
+                if (index >= 0) blocks[index] = (blocks[index] as ChatBlock.Question).copy(answer = content())
+            }
             "artifacts" -> {
                 val media = j.objects("items").ifEmpty { j.objects("images") }.map(MessageMedia::from)
                 // User uploads already live in the optimistic/history user bubble.
@@ -76,11 +116,20 @@ object TurnReducer {
                     val b = blocks[i]
                     if (b is ChatBlock.Tool && b.status == StepStatus.RUNNING) blocks[i] = b.copy(status = StepStatus.INTERRUPTED,
                         durationMs = (now - b.startedAt).coerceAtLeast(0))
+                    // A task that never reported its end went down with the turn.
+                    val task = (blocks[i] as? ChatBlock.Tool)?.task
+                    if (task != null && task.running) blocks[i] = (blocks[i] as ChatBlock.Tool).copy(task = task.copy(status = "stopped",
+                        durationMs = (now - task.startedAt).coerceAtLeast(0)))
                 }
+                backgroundWait = false
             }
             // Additive events still consume their sequence, including usage/artifacts.
         }
-        return state.copy(lastSequence = event.id.sequence, blocks = blocks, done = event.type == "done",
-            usage = usage, startedAt = state.startedAt ?: now, finishedAt = if (event.type == "done") now else null)
+        // Any sign of the model at work ends the wait (a follow-up turn for a finished task, or a reply).
+        if (event.type in setOf("text", "thinking_start", "thinking", "tool_call")) backgroundWait = false
+        // A merged replay event stands for a whole run: it renders once but consumes up to through.
+        return state.copy(lastSequence = event.through ?: event.id.sequence, blocks = blocks, done = event.type == "done",
+            usage = usage, startedAt = state.startedAt ?: now, finishedAt = if (event.type == "done") now else null,
+            backgroundWait = backgroundWait)
     }
 }

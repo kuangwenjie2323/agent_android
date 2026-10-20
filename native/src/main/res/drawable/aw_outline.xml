@@ -1,0 +1,8 @@
+<!-- A list of entries with bullets: the outline of a chat's questions. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:strokeColor="#FF000000" android:strokeWidth="2" android:strokeLineCap="round"
+        android:pathData="M9,6.5L20,6.5M9,12L20,12M9,17.5L17,17.5" />
+    <path android:fillColor="#FF000000"
+        android:pathData="M3.75,6.5a1.25,1.25 0,1 0,2.5 0a1.25,1.25 0,1 0,-2.5 0ZM3.75,12a1.25,1.25 0,1 0,2.5 0a1.25,1.25 0,1 0,-2.5 0ZM3.75,17.5a1.25,1.25 0,1 0,2.5 0a1.25,1.25 0,1 0,-2.5 0Z" />
+</vector>
