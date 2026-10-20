@@ -41,6 +41,8 @@ interface AgentRepository {
     suspend fun conversations(): List<Conversation>
     /** The last list saved on this device for the current server and account; empty when none. */
     suspend fun cachedConversations(): List<Conversation> = emptyList()
+    /** The newest history page saved on this device for [id]; null when none was saved. */
+    suspend fun cachedDetail(id: String): ConversationDetail? = null
     /** The last model list saved on this device, so names show right away on a cold start. */
     suspend fun cachedAgents(): List<Agent> = emptyList()
     suspend fun saveConversations(rows: List<Conversation>) {}
@@ -97,6 +99,10 @@ interface AgentRepository {
 
 /** The most the file viewer takes: the server sends at most 20 MB of a picture or PDF. */
 private const val MAX_FILE_BYTES = 21L * 1024 * 1024
+/** The chat pages kept on disk: the newest written pages, the rest are dropped. */
+private const val MAX_CHAT_PAGES = 40
+/** A first page bigger than this is not kept: it would spend more disk than it saves time. */
+private const val MAX_CHAT_PAGE_BYTES = 3L * 1024 * 1024
 
 /** Whether a request may share a pooled connection: reads to an HTTPS origin only. */
 internal fun reusesConnection(origin: String, read: Boolean) = read && origin.startsWith("https://", ignoreCase = true)
@@ -295,7 +301,9 @@ class HttpAgentRepository(
     }
     override suspend fun conversations() = json("/api/chat/conversations").objects("conversations").map(Conversation::from)
     // Last-known responses, one folder per server + credential so another account never sees
-    // them; other accounts' folders are removed on save. Only lists are kept, never history.
+    // them; other accounts' folders are removed on save. Besides the lists, the newest page of
+    // up to 40 chats is kept in the app's private storage for this server and credential; sign-out
+    // removes it with everything else here. Older history is never saved.
     private fun snapshotDir(): java.io.File? = listCacheDir?.let { dir -> credentialKey()?.let { java.io.File(dir, it) } }
     /** A stable folder name for this server + credential; a different account never gets the same one. */
     internal fun credentialKey(): String? {
@@ -323,6 +331,39 @@ class HttpAgentRepository(
     override suspend fun cachedConversations(): List<Conversation> =
         snapshot("conversations")?.objects("conversations")?.map(Conversation::from).orEmpty()
     override fun clearConversationCache() { listCacheDir?.listFiles()?.forEach { it.deleteRecursively() } }
+    // The newest page of each chat, so a cold start shows a chat at once instead of waiting for the
+    // network. Bounded so the cache cannot grow without end.
+    private fun chatPageDir(): java.io.File? = snapshotDir()?.let { java.io.File(it, "chats") }
+    private fun chatPageFile(id: String): java.io.File? {
+        if (id.isBlank()) return null
+        return chatPageDir()?.let { java.io.File(it, segment(id) + ".json") }
+    }
+    override suspend fun cachedDetail(id: String): ConversationDetail? = withContext(Dispatchers.IO) {
+        runCatching {
+            val file = chatPageFile(id)?.takeIf { it.isFile } ?: return@runCatching null
+            ConversationDetail.from(wireJson.parseToJsonElement(file.readText()).jsonObject)
+        }.getOrNull()
+    }
+    /** Saves a first page exactly as the server sent it, so [cachedDetail] gives back the same detail. */
+    private suspend fun saveChatPage(id: String, page: JsonObject) = withContext(Dispatchers.IO) {
+        val dir = chatPageDir() ?: return@withContext
+        val file = chatPageFile(id) ?: return@withContext
+        runCatching {
+            val text = page.toString()
+            // A page with big tool output costs more disk than it saves time; keep the old one.
+            if (text.toByteArray(Charsets.UTF_8).size > MAX_CHAT_PAGE_BYTES) return@runCatching
+            dir.mkdirs()
+            val temp = java.io.File.createTempFile(file.name, ".tmp", dir)
+            temp.writeText(text)
+            if (!temp.renameTo(file)) temp.delete()
+            // Trimming goes by write time; make this page the newest even on a coarse clock.
+            file.setLastModified(System.currentTimeMillis())
+            val pages = dir.listFiles()?.filter { it.isFile && it.name.endsWith(".json") }.orEmpty()
+            if (pages.size > MAX_CHAT_PAGES) pages.sortedBy { it.lastModified() }
+                .take(pages.size - MAX_CHAT_PAGES).forEach { it.delete() }
+        }
+        Unit
+    }
     override suspend fun saveConversations(rows: List<Conversation>) =
         saveSnapshot("conversations", buildJsonObject { put("conversations", JsonArray(rows.take(200).map { it.cacheJson() })) })
     override suspend fun createConversation(choice: ModelChoice) = createConversation(choice, null)
@@ -367,8 +408,12 @@ class HttpAgentRepository(
     }
     override suspend fun detail(id: String, cursor: String?): ConversationDetail {
         require(cursor == null || (cursor.isNotEmpty() && cursor.all { it in '0'..'9' }))
-        return ConversationDetail.from(json("/api/chat/conversations/${segment(id)}?compact=1&messageLimit=40" +
-            (cursor?.let { "&messageCursor=$it" } ?: "")))
+        val page = json("/api/chat/conversations/${segment(id)}?compact=1&messageLimit=40" +
+            (cursor?.let { "&messageCursor=$it" } ?: ""))
+        val detail = ConversationDetail.from(page)
+        // Only the newest page is shown at once on a later cold start; older pages are always read live.
+        if (cursor == null) saveChatPage(id, page)
+        return detail
     }
     override suspend fun fork(request: ForkRequest) = ForkResponse.from(
         json("/api/chat/conversations/${segment(request.conversationId)}/forks", request.json()))
@@ -414,7 +459,11 @@ class HttpAgentRepository(
             putJsonArray("history") { history.filter { it.answer != null }.forEach { item -> addJsonObject {
                 put("question", item.question); put("answer", item.answer.orEmpty()) } } }
         }, timeoutSeconds = 120).string("answer").orEmpty()
-    override suspend fun deleteConversation(id: String) { delete("/api/chat/conversations/${segment(id)}", 30) }
+    override suspend fun deleteConversation(id: String) {
+        delete("/api/chat/conversations/${segment(id)}", 30)
+        // The chat is gone on the server; its cached page must not bring it back.
+        withContext(Dispatchers.IO) { chatPageFile(id)?.delete() }
+    }
     override suspend fun archiveInfo() = ArchiveInfo.from(json("/api/chat/archive"))
     override suspend fun memory() = MemoryOverview.from(json("/api/memory"))
     override suspend fun memoryFile(file: String) = json("/api/memory/${segment(file)}").string("text").orEmpty()

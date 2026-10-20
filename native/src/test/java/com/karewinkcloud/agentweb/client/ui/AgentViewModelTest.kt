@@ -313,6 +313,37 @@ class AgentViewModelTest {
         gate.complete(Unit); runCurrent()
         assertEquals(listOf("1", "2", "3"), vm.state.value.chat!!.messages.map { it.id })
     }
+    @Test fun aChatOpensFromItsSavedPageBeforeTheNetworkAnswers() = modelTest {
+        runCurrent()
+        repo.cachedDetailResult = detail("one").copy(messages = listOf(message("1"), message("2")))
+        val gate = CompletableDeferred<Unit>()
+        repo.getDetail = { id, _ -> gate.await(); detail(id).copy(messages = listOf(message("1"), message("2"), message("3"))) }
+        vm.open(conversation("one"))
+        runCurrent()
+        // The disk copy is on screen while the first page is still on its way.
+        assertEquals(listOf("1", "2"), vm.state.value.chat!!.messages.map { it.id })
+        assertFalse(vm.state.value.chat!!.loading)
+        assertEquals(listOf("one"), repo.cachedDetailCalls)
+        gate.complete(Unit); runCurrent()
+        assertEquals(listOf("1", "2", "3"), vm.state.value.chat!!.messages.map { it.id })
+    }
+    @Test fun anIdenticalFreshPageLeavesTheShownChatUnchanged() = modelTest {
+        runCurrent()
+        val page = detail("one").copy(messages = listOf(message("1"), message("2")))
+        repo.cachedDetailResult = page
+        val gate = CompletableDeferred<Unit>()
+        repo.getDetail = { _, _ -> gate.await(); page }
+        vm.open(conversation("one")); runCurrent()
+        val shown = vm.state.value.chat!!
+        assertEquals(listOf("1", "2"), shown.messages.map { it.id })
+        val seen = mutableListOf<ClientState>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect { seen += it } }
+        runCurrent()
+        val before = seen.size
+        gate.complete(Unit); runCurrent()
+        assertSame(shown, vm.state.value.chat)  // the same instance, not a rebuilt chat
+        assertEquals(before, seen.size)  // and no new state emission at all
+    }
     @Test fun coldStartShowsSavedListAndReusesItsPreviews() = modelTest {
         val fresh = FakeRepository()
         val saved = conversation("one").copy(updatedAt = 10, messageCount = 4, preview = "last words")
@@ -916,6 +947,9 @@ class AgentViewModelTest {
         var cached = emptyList<Conversation>()
         val saved = mutableListOf<List<Conversation>>()
         val previewCalls = mutableListOf<String>()
+        var cachedDetailResult: ConversationDetail? = null
+        val cachedDetailCalls = mutableListOf<String>()
+        override suspend fun cachedDetail(id: String): ConversationDetail? { cachedDetailCalls += id; return cachedDetailResult }
         override suspend fun cachedConversations() = cached
         override suspend fun saveConversations(rows: List<Conversation>) { saved += rows }
         override suspend fun preview(id: String): ConversationDetail { previewCalls += id; return detail(id, null) }

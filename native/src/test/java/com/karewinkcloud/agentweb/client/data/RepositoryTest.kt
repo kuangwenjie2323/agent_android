@@ -12,12 +12,14 @@ import java.util.concurrent.TimeUnit
 class RepositoryTest {
     private lateinit var server: MockWebServer
     private lateinit var repo: HttpAgentRepository
+    private lateinit var cacheDir: java.io.File
     private val control = "1234567890abcdef1234567890abcdef"
     @Before fun setup() {
         server = MockWebServer().apply { start() }
         repo = HttpAgentRepository(server.url("/").toString().trimEnd('/'), TokenProvider { "test-token" }, reconnectDelayMs = 0)
+        cacheDir = java.nio.file.Files.createTempDirectory("agentweb-chat-cache").toFile()
     }
-    @After fun cleanup() { server.shutdown() }
+    @After fun cleanup() { server.shutdown(); cacheDir.deleteRecursively() }
     private fun json(body: String, status: Int = 200) = MockResponse().setResponseCode(status)
         .addHeader("Content-Type", "application/json").addHeader("X-AgentWeb-Protocol-Version", "1.0").setBody(body)
     private fun sse(body: String, run: String = control) = MockResponse().addHeader("Content-Type", "text/event-stream")
@@ -25,6 +27,18 @@ class RepositoryTest {
     private fun text(seq: Int, content: String) = "id: $control:$seq\ndata: {\"type\":\"text\",\"seq\":$seq,\"content\":\"$content\"}\n\n"
     private fun done(seq: Int) = "id: $control:$seq\ndata: {\"type\":\"done\",\"seq\":$seq,\"conversationId\":\"conversation\"}\n\n"
     private fun next() = requireNotNull(server.takeRequest(3, TimeUnit.SECONDS))
+    private fun cachedRepo(token: String = "test-token") =
+        HttpAgentRepository(server.url("/").toString().trimEnd('/'), TokenProvider { token }, reconnectDelayMs = 0, listCacheDir = cacheDir)
+    private fun page(id: String, texts: List<String>) = buildJsonObject {
+        put("conversation", buildJsonObject { put("id", id); put("title", "Chat") })
+        putJsonArray("messages") { texts.forEach { text -> addJsonObject {
+            put("id", text); put("role", "assistant")
+            putJsonArray("blocks") { addJsonObject { put("type", "text"); put("content", text) } }
+        } } }
+        putJsonArray("queued") {}
+        put("queuePaused", false)
+        putJsonObject("messagePage") { put("olderCount", 0) }
+    }.toString()
 
     @Test fun forkPostsExactRequestToEncodedPathAndReturnsAdvertisedRun() = runBlocking {
         server.enqueue(json("""{"conversation":{"id":"child","active":true},"variant":{"kind":"retry","parentConversation":{"id":"parent","title":"Parent"}},"run":{"id":"$control","status":"running","agent":"a","model":"m"},"streamUrl":"https://untrusted.invalid/stream","existing":false}""", 202))
@@ -360,6 +374,72 @@ class RepositoryTest {
         assertTrue(detail.queuePaused)
         assertEquals("Project", detail.conversation.project)
         assertEquals("123", detail.nextCursor)
+    }
+    @Test fun aChatsFirstPageIsSavedAndCachedDetailGivesTheSameDetail() = runBlocking {
+        val repo = cachedRepo()
+        server.enqueue(json(page("conversation", listOf("1", "2"))))
+        val fresh = repo.detail("conversation")
+        assertEquals(2, fresh.messages.size)
+        assertEquals(fresh, repo.cachedDetail("conversation"))
+        val folder = java.io.File(cacheDir, requireNotNull(repo.credentialKey()))
+        assertTrue(java.io.File(folder, "chats/conversation.json").isFile)
+    }
+    @Test fun anotherAccountNeverSeesThePageAndItsFolderIsRemovedOnSave() = runBlocking {
+        val first = cachedRepo("token-one")
+        server.enqueue(json(page("conversation", listOf("1"))))
+        first.detail("conversation")
+        assertNotNull(first.cachedDetail("conversation"))
+        val second = cachedRepo("token-two")
+        assertNull(second.cachedDetail("conversation"))
+        // The per-account folder rule still holds: another account's save removes the first's folder.
+        second.saveConversations(emptyList())
+        assertFalse(java.io.File(cacheDir, requireNotNull(first.credentialKey())).exists())
+    }
+    @Test fun anOlderPageReadLeavesTheNewestPageCached() = runBlocking {
+        val repo = cachedRepo()
+        server.enqueue(json(page("conversation", listOf("3", "4"))))
+        repo.detail("conversation")
+        server.enqueue(json(page("conversation", listOf("1", "2"))))
+        repo.detail("conversation", "3")
+        assertEquals(listOf("3", "4"), repo.cachedDetail("conversation")!!.messages.map { it.id })
+    }
+    @Test fun signingOutRemovesSavedChatPages() = runBlocking {
+        val repo = cachedRepo()
+        server.enqueue(json(page("conversation", listOf("1"))))
+        repo.detail("conversation")
+        assertNotNull(repo.cachedDetail("conversation"))
+        repo.clearConversationCache()
+        assertNull(repo.cachedDetail("conversation"))
+    }
+    @Test fun onlyTheFortyMostRecentlyWrittenChatsAreKept() = runBlocking {
+        val repo = cachedRepo()
+        repeat(41) { index ->
+            server.enqueue(json(page("chat$index", listOf("$index"))))
+            repo.detail("chat$index")
+            // Trimming goes by the file's write time; keep the writes apart even on a coarse clock.
+            Thread.sleep(3)
+        }
+        assertNull(repo.cachedDetail("chat0"))
+        assertNotNull(repo.cachedDetail("chat1"))
+        assertNotNull(repo.cachedDetail("chat40"))
+        val pages = java.io.File(java.io.File(cacheDir, requireNotNull(repo.credentialKey())), "chats")
+            .listFiles()!!.filter { it.name.endsWith(".json") }
+        assertEquals(40, pages.size)
+    }
+    @Test fun aPageOverThreeMegabytesIsNotKept() = runBlocking {
+        val repo = cachedRepo()
+        server.enqueue(json(page("huge", listOf("x".repeat(3 * 1024 * 1024)))))
+        repo.detail("huge")
+        assertNull(repo.cachedDetail("huge"))
+    }
+    @Test fun deletingAChatRemovesItsSavedPage() = runBlocking {
+        val repo = cachedRepo()
+        server.enqueue(json(page("gone", listOf("1"))))
+        repo.detail("gone")
+        assertNotNull(repo.cachedDetail("gone"))
+        server.enqueue(json("""{"ok":true}"""))
+        repo.deleteConversation("gone")
+        assertNull(repo.cachedDetail("gone"))
     }
     @Test fun redirectsDoNotForwardCredentialsOrReplayMutations() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(307).addHeader("Location", server.url("/other")))

@@ -45,6 +45,7 @@ import com.karewinkcloud.agentweb.client.R.string as S
 import com.karewinkcloud.agentweb.client.core.*
 import com.karewinkcloud.agentweb.client.data.*
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.time.Instant
 import java.time.ZoneId
@@ -503,7 +504,7 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
                     Box(Modifier.weight(1f).fillMaxWidth()) { LoadingState(tr(S.loading_chat)) }
                 } else {
                     // The items the list composes before the messages, matching the LazyColumn below.
-                    val initialItems = chat.messages.size +
+                    fun itemCount() = chat.messages.size +
                         (if (chat.loading) 1 else 0) +
                         (if (chat.nextCursor != null) 1 else 0) +
                         (if (!chat.loading && chat.messages.isEmpty() && chat.live == null && chat.error == null) 1 else 0) +
@@ -514,7 +515,7 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
                     // Start at the last item and, when it is taller than the viewport, at its end:
                     // the follow effect would otherwise jump within the latest reply on the next frame.
                     val list = rememberLazyListState(
-                        initialFirstVisibleItemIndex = (initialItems - 1).coerceAtLeast(0),
+                        initialFirstVisibleItemIndex = (itemCount() - 1).coerceAtLeast(0),
                         initialFirstVisibleItemScrollOffset = 100_000)
                     var followTail by remember { mutableStateOf(true) }
                     // Selected text clears like anywhere on Android: a tap elsewhere or a scroll ends it (selection
@@ -544,6 +545,20 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
                                 if (total > 0) list.scrollToItem(total - 1, Int.MAX_VALUE)
                             }
                         }
+                    }
+                    // The fresh page can replace the cached one while the list shows its tail. Requesting
+                    // the new last item for the next measure keeps that replacement from painting the old
+                    // offset for a frame (the jump the phone showed when the server's copy arrived).
+                    LaunchedEffect(list, chat.messages, followTail) {
+                        if (followTail && chat.messages.isNotEmpty() && list.layoutInfo.totalItemsCount > 0)
+                            list.requestScrollToItem(itemCount() - 1, Int.MAX_VALUE)
+                    }
+                    // The first layout that shows messages: the open's log line records where it started.
+                    LaunchedEffect(list, chat.messages.isNotEmpty()) {
+                        if (chat.messages.isEmpty()) return@LaunchedEffect
+                        val layout = snapshotFlow { list.layoutInfo }
+                            .first { it.totalItemsCount > 0 && it.visibleItemsInfo.isNotEmpty() }
+                        vm.reportChatLayout(chat.conversation.id, layout.visibleItemsInfo.first().index, layout.totalItemsCount)
                     }
                     LazyColumn(state = list, modifier = Modifier.weight(1f).fillMaxWidth().clearSelectionOnTap(focus), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)) {

@@ -127,6 +127,23 @@ class AgentViewModel(
     /** History, and a reply still streaming when the chat was left (resumed from its last event, not replayed). */
     private data class CachedChat(val messages: List<ChatMessage>, val olderCount: Int, val nextCursor: String?, val live: TurnState? = null)
     private val chatCache = java.util.concurrent.ConcurrentHashMap<String, CachedChat>()
+    /**
+     * One open of a chat, from the tap to the fresh page: what was shown first, when, and whether the
+     * server's page differed. Written as a single diagnostics line, so a later log says where a slow
+     * or jumping open spent its time.
+     */
+    private class ChatOpen(val id: String, val startedAt: Long) {
+        var source: String? = null
+        var firstCount = 0
+        var firstContentAt: Long? = null
+        var freshAt: Long? = null
+        var changed: Boolean? = null
+        var firstVisible: Int? = null
+        var total: Int? = null
+        var written = false
+    }
+    /** The chat open being measured; one line per open (see [writeOpenReport]). */
+    private var openReport: ChatOpen? = null
     /** Chats archived from the list this session, so an undo can put one back before the list is read again. */
     private val recentlyArchived = mutableMapOf<String, Conversation>()
     /** Pins and archive moves sent but not yet confirmed, by chat id: the latest one for each chat. */
@@ -157,6 +174,7 @@ class AgentViewModel(
     }
 
     private fun requireSignIn() {
+        flushOpenReport()
         generation++; attachmentScope = newControlId(); epoch++; livePresentation.value = null
         repository.clearConversationCache()
         // Close followers and pending client requests; never send Stop or replay mutations.
@@ -167,6 +185,10 @@ class AgentViewModel(
     }
 
     fun changeServer(newRepository: AgentRepository, choice: ModelChoice, signInRequired: Boolean = false) {
+        flushOpenReport()
+        // Signed out or switched to a server with no credential: no request will run to clear it later,
+        // and the previous account's saved chats and lists must not stay on the phone.
+        if (signInRequired) repository.clearConversationCache()
         generation++; attachmentScope = newControlId(); epoch++; livePresentation.value = null
         viewModelScope.coroutineContext.cancelChildren()
         repository = newRepository
@@ -312,6 +334,12 @@ class AgentViewModel(
             for (id in ids) {
                 if (owner != epoch || state.value.chat?.conversation?.id == id) continue
                 try {
+                    // The saved page makes the first open instant even before this network read lands.
+                    if (!chatCache.containsKey(id)) source.cachedDetail(id)?.let { saved ->
+                        if (owner == epoch && !chatCache.containsKey(id))
+                            chatCache[id] = CachedChat(saved.messages, saved.olderCount, saved.nextCursor)
+                    }
+                    if (owner != epoch || state.value.chat?.conversation?.id == id) continue
                     val detail = source.detail(id)
                     if (owner == epoch && !chatCache.containsKey(id)) chatCache[id] = CachedChat(detail.messages, detail.olderCount, detail.nextCursor)
                 } catch (e: CancellationException) { throw e } catch (_: Exception) { }
@@ -390,10 +418,17 @@ class AgentViewModel(
     /** [fresh] marks a conversation just created here: it is known to be empty, so skip the loading state. */
     fun open(conversation: Conversation, fresh: Boolean = false) {
         if (state.value.signInRequired) return
+        flushOpenReport()
+        val openedAt = monotonicMillis()
         markSeen(conversation.id, maxOf(conversation.updatedAt, System.currentTimeMillis() / 1000))
         saveDraft()
         attachmentScope = newControlId()
         val cached = chatCache[conversation.id]
+        val report = ChatOpen(conversation.id, openedAt)
+        openReport = report
+        if (cached != null && cached.messages.isNotEmpty()) {
+            report.source = "memory"; report.firstCount = cached.messages.size; report.firstContentAt = openedAt
+        }
         // A reply that was streaming when this chat was left shows as it was and continues from its last
         // event; starting empty made the follower replay and rebuild the whole turn.
         val resumed = cached?.live?.takeIf { conversation.running && (conversation.controlId == null || it.runId == conversation.controlId) }
@@ -416,7 +451,7 @@ class AgentViewModel(
             pendingQueue = unresolvedQueues[conversation.id], queueUncertain = unresolvedQueues.containsKey(conversation.id), loading = !fresh && cached == null)) }
         // Creation only stores agent/model; its empty detail has default effort and
         // permissions. Keep the user's selection for the first send in a fresh chat.
-        sessionJob = viewModelScope.launch { loadAndFollow(owner, applyChoice = !fresh) }
+        sessionJob = viewModelScope.launch { loadAndFollow(owner, applyChoice = !fresh, open = report) }
     }
     /** Opens a conversation by id (a tapped notification); reads the list first when it is not loaded yet. */
     fun openById(id: String) {
@@ -439,6 +474,34 @@ class AgentViewModel(
         seenChats.markSeen(id, at)
         seenMarks.update { it + (id to (seenChats.seenAt(id) ?: at)) }
     }
+
+    /** Records what a cold open showed first: memory or the disk copy, or nothing until the network. */
+    private fun noteFirstContent(report: ChatOpen?, source: String, count: Int) {
+        if (report == null || report.source != null) return
+        report.source = source; report.firstCount = count
+        if (count > 0) report.firstContentAt = monotonicMillis()
+    }
+    /** The chat list's first layout with messages, for the open's diagnostic line. */
+    fun reportChatLayout(conversationId: String, firstVisible: Int, total: Int) {
+        val report = openReport?.takeIf { it.id == conversationId } ?: return
+        if (report.firstVisible != null) return
+        report.firstVisible = firstVisible; report.total = total
+        // The fresh page normally comes later; if it is already here, this completes the line.
+        if (report.freshAt != null) writeOpenReport(report)
+    }
+    /** Writes the open's one line; fields not reported yet stay absent rather than guessed. */
+    private fun writeOpenReport(report: ChatOpen) {
+        if (report.written) return
+        report.written = true
+        Diagnostics.event("chat", "opened", "conversation" to report.id, "source" to (report.source ?: "none"),
+            "messages" to report.firstCount,
+            "firstContentMs" to report.firstContentAt?.let { it - report.startedAt },
+            "freshMs" to report.freshAt?.let { it - report.startedAt },
+            "changed" to report.changed,
+            "firstVisible" to report.firstVisible, "total" to report.total)
+        if (openReport === report) openReport = null
+    }
+    private fun flushOpenReport() { openReport?.let(::writeOpenReport) }
 
     /**
      * A side question, like the side chats in Claude's desktop app: answered from this chat's transcript
@@ -471,6 +534,7 @@ class AgentViewModel(
     }
 
     fun back() {
+        flushOpenReport()
         state.value.chat?.conversation?.id?.let { markSeen(it) }
         cacheChat(); saveDraft(); generation++; attachmentScope = newControlId(); sessionJob?.cancel()
         val current = state.value
@@ -655,7 +719,9 @@ class AgentViewModel(
         // A retry after the first page failed has no messages yet: show the loading state again,
         // so the list is recreated at its tail instead of staying anchored at item 0.
         editChat(owner) { it.copy(error = null, loading = it.messages.isEmpty() && it.live == null) }
-        sessionJob = viewModelScope.launch { loadAndFollow(owner) }
+        // The open's line has not been written yet when the first page failed: this read can finish it.
+        val report = openReport?.takeIf { !it.written && it.id == state.value.chat?.conversation?.id }
+        sessionJob = viewModelScope.launch { loadAndFollow(owner, open = report) }
     }
     /**
      * Leaving the app hands a running turn to the notification follower, so the screen's own stream stops: a
@@ -700,6 +766,7 @@ class AgentViewModel(
 
     fun selectTab(tab: AppTab) {
         if (tab == AppTab.CLAUDE && !state.value.signInRequired) { showClaudeSessions(); return }
+        flushOpenReport()
         saveDraft(); generation++; attachmentScope = newControlId(); sessionJob?.cancel()
         mutable.update { it.copy(tab = tab, chat = null, claudeVisible = false, claudePreview = null) }
         if (tab == AppTab.CONVERSATIONS) refresh()
@@ -707,6 +774,7 @@ class AgentViewModel(
 
     fun showClaudeSessions() {
         if (state.value.signInRequired) return
+        flushOpenReport()
         saveDraft(); generation++; attachmentScope = newControlId(); sessionJob?.cancel()
         mutable.update { it.copy(tab = AppTab.CLAUDE, chat = null, claudeVisible = true, claudePreview = null) }
         refreshClaudeSessions()
@@ -740,6 +808,7 @@ class AgentViewModel(
     fun openClaudeSession(session: ClaudeSession) {
         if (state.value.signInRequired) return
         if (session.linkedConversationId != null) { open(session.conversation()); return }
+        flushOpenReport()
         saveDraft()
         attachmentScope = newControlId()
         livePresentation.value = null
@@ -818,25 +887,45 @@ class AgentViewModel(
         return false
     }
 
-    private suspend fun loadAndFollow(owner: Long, applyChoice: Boolean = false, allowReconcile: Boolean = true) {
+    /** Shows the page saved on the phone at once, off the main thread, while the network read runs. */
+    private suspend fun showDiskPage(owner: Long, id: String, open: ChatOpen?) {
+        val current = state.value.chat ?: return
+        if (current.messages.isNotEmpty()) return
+        val saved = try { repository.cachedDetail(id) } catch (e: CancellationException) { throw e } catch (_: Exception) { null } ?: return
+        if (!owned(owner) || state.value.chat?.conversation?.id != id) return
+        editChat(owner) { chat ->
+            if (chat.messages.isNotEmpty()) chat else chat.copy(
+                messages = saved.messages, queued = saved.queued, queuePaused = saved.queuePaused,
+                olderCount = saved.olderCount, nextCursor = saved.nextCursor, loading = false)
+        }
+        val shown = state.value.chat?.takeIf { it.conversation.id == id }?.messages.orEmpty()
+        if (shown.isNotEmpty()) noteFirstContent(open, "disk", shown.size)
+    }
+
+    private suspend fun loadAndFollow(owner: Long, applyChoice: Boolean = false, allowReconcile: Boolean = true,
+        open: ChatOpen? = null) {
         try {
             val id = state.value.chat?.conversation?.id ?: return
             var first = true
             var missingStreams = 0
             var settleWaited = false
+            var readDisk = false
             while (owned(owner)) {
+                // The page saved on the phone shows at once; the network read below still always runs
+                // and replaces it. Reading it off the main thread keeps the chat screen responsive.
+                if (!readDisk) { readDisk = true; showDiskPage(owner, id, open) }
                 val detail = repository.detail(id)
                 if (!owned(owner)) return
                 var unresolved = unresolvedSends[id]
                 val forkRun = forkRuns[id]
-                val priorChat = state.value.chat
+                val priorChat = state.value.chat ?: return
                 // A send whose stream dropped is settled once the server has saved its message and
                 // nothing runs: a later (queued) turn may own the stream now, so following the old
                 // run would fail forever with "run changed" and keep the chat looking busy.
-                if (unresolved != null && !detail.conversation.running && unresolvedSettled(unresolved, detail.messages, priorChat?.beforeSendId ?: 0)) {
+                if (unresolved != null && !detail.conversation.running && unresolvedSettled(unresolved, detail.messages, priorChat.beforeSendId)) {
                     unresolvedSends.remove(id); unresolved = null
                 }
-                val prior = priorChat?.live
+                val prior = priorChat.live
                 // Attribute only a completed locally observed turn to its captured send model.
                 // The API does not persist models for all historical messages.
                 val last = detail.messages.lastOrNull()
@@ -845,23 +934,45 @@ class AgentViewModel(
                     priorChat.liveModel?.let { messageModels["$id:${last.id}"] = it }
                     prior.usage?.let { messageUsage["$id:${last.id}"] = it }
                 }
-                editChat(owner) { old ->
-                    val firstId = detail.messages.firstOrNull()?.id?.toLongOrNull()
-                    val prefix = if (firstId == null) emptyList() else old.messages.filter { (it.id.toLongOrNull() ?: Long.MAX_VALUE) < firstId }
-                    old.copy(conversation = withLineage(detail.conversation), messages = prefix + detail.messages.map { message ->
-                        message.copy(model = message.model ?: messageModels["$id:${message.id}"],
-                            usage = messageUsage["$id:${message.id}"]?.merge(message.usage) ?: message.usage)
-                    },
-                        queued = detail.queued, queuePaused = detail.queuePaused,
-                        olderCount = if (prefix.isEmpty()) detail.olderCount else old.olderCount,
-                        nextCursor = if (prefix.isEmpty()) detail.nextCursor else old.nextCursor, loading = false,
-                        // A message given back to the box keeps its note until the user acts on it.
-                        error = old.error?.takeIf { it.code == "not_sent" },
-                        live = (unresolved?.controlId ?: forkRun ?: detail.conversation.controlId?.takeIf { detail.conversation.running })?.let { run ->
-                            prior?.takeIf { p -> p.runId == run && !p.done } ?: TurnState(id, run,
-                                startedAt = prior?.takeIf { p -> p.runId.isBlank() && !p.done }?.startedAt ?: monotonicMillis())
-                        } ?: prior?.takeIf { detail.conversation.running && !it.done && it.runId.isBlank() },
-                        connection = null, stopRequested = false, revealing = false)
+                val firstId = detail.messages.firstOrNull()?.id?.toLongOrNull()
+                val prefix = if (firstId == null) emptyList() else priorChat.messages.filter { (it.id.toLongOrNull() ?: Long.MAX_VALUE) < firstId }
+                val messages = prefix + detail.messages.map { message ->
+                    message.copy(model = message.model ?: messageModels["$id:${message.id}"],
+                        usage = messageUsage["$id:${message.id}"]?.merge(message.usage) ?: message.usage)
+                }
+                // A cold open served from the disk copy can get back exactly what it already shows.
+                // Writing that back gives the list a new identity and re-lays it out (the jump seen
+                // on the phone), so an unchanged page leaves the whole state object untouched.
+                val sameContent = sameMessages(messages, priorChat.messages)
+                val next = priorChat.copy(conversation = withLineage(detail.conversation),
+                    messages = if (sameContent) priorChat.messages else messages,
+                    queued = detail.queued, queuePaused = detail.queuePaused,
+                    olderCount = if (prefix.isEmpty()) detail.olderCount else priorChat.olderCount,
+                    nextCursor = if (prefix.isEmpty()) detail.nextCursor else priorChat.nextCursor, loading = false,
+                    // A message given back to the box keeps its note until the user acts on it.
+                    error = priorChat.error?.takeIf { it.code == "not_sent" },
+                    live = (unresolved?.controlId ?: forkRun ?: detail.conversation.controlId?.takeIf { detail.conversation.running })?.let { run ->
+                        prior?.takeIf { p -> p.runId == run && !p.done } ?: TurnState(id, run,
+                            startedAt = prior?.takeIf { p -> p.runId.isBlank() && !p.done }?.startedAt ?: monotonicMillis())
+                    } ?: prior?.takeIf { detail.conversation.running && !it.done && it.runId.isBlank() },
+                    connection = null, stopRequested = false, revealing = false)
+                if (next != priorChat) editChat(owner) { next }
+                if (open != null) {
+                    val now = monotonicMillis()
+                    if (open.freshAt == null) {
+                        open.freshAt = now
+                        // The first layout is usually known by now; otherwise let the screen report it,
+                        // with a fallback so leaving the chat at once still leaves the line in the log.
+                        if (open.firstVisible != null || messages.isEmpty()) writeOpenReport(open) else {
+                            val report = open
+                            viewModelScope.launch { delay(750); writeOpenReport(report) }
+                        }
+                    }
+                    if (open.source == null) {
+                        open.source = "none"; open.firstCount = messages.size
+                        if (messages.isNotEmpty()) open.firstContentAt = now
+                    }
+                    if (open.changed == null) open.changed = !sameContent
                 }
                 cacheChat()
                 resolveParentTitle(owner)
@@ -915,7 +1026,7 @@ class AgentViewModel(
         catch (e: StreamProtocolException) {
             if (allowReconcile && owned(owner)) {
                 editChat(owner) { it.copy(live = null) }
-                loadAndFollow(owner, allowReconcile = false)
+                loadAndFollow(owner, allowReconcile = false, open = open)
             } else {
                 // Reconciling failed too: stop following, so the chat is usable again instead of spinning.
                 state.value.chat?.conversation?.id?.let { unresolvedSends.remove(it) }
@@ -1114,6 +1225,7 @@ class AgentViewModel(
     }
 
     private fun openFork(result: ForkResponse) {
+        flushOpenReport()
         saveDraft()
         attachmentScope = newControlId()
         val owner = ++generation
@@ -1385,6 +1497,12 @@ fun problem(e: Throwable): ClientError = when (e) {
 
 /** How long a send whose connection broke may still be on its way to the server (admission takes seconds). */
 private const val SEND_SETTLE_MS = 60_000L
+
+/** Whether two lists show the same words: same ids, roles and blocks (a locally known model or usage aside). */
+internal fun sameMessages(shown: List<ChatMessage>, fresh: List<ChatMessage>): Boolean =
+    shown.size == fresh.size && shown.indices.all { i ->
+        shown[i].id == fresh[i].id && shown[i].role == fresh[i].role && shown[i].blocks == fresh[i].blocks
+    }
 
 /** Excludes per-token and per-frame content while retaining all actionable server truth. */
 internal fun screenSnapshot(state: ClientState): ClientState = state.copy(chat = state.chat?.let { chat ->
