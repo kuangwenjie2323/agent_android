@@ -47,7 +47,8 @@ interface AgentRepository {
     suspend fun cachedAgents(): List<Agent> = emptyList()
     suspend fun saveConversations(rows: List<Conversation>) {}
     suspend fun cachedClaudeSessions(): ClaudeSessionPage? = null
-    fun clearConversationCache() {}
+    /** Deletes this device's saved lists and chat pages; it touches disk, so it is never a plain call. */
+    suspend fun clearConversationCache() {}
     suspend fun createConversation(choice: ModelChoice): Conversation
     suspend fun createConversation(choice: ModelChoice, projectId: String?): Conversation = createConversation(choice)
     suspend fun projects(): List<Project> = emptyList()
@@ -86,8 +87,11 @@ interface AgentRepository {
     suspend fun consolidateMemory() {}
     /** Deletes a chat on the server for good, stopping its running turn first. */
     suspend fun deleteConversation(id: String): Unit = error("Deleting chats is unavailable")
-    /** Drops idle connections, so the next request dials afresh (the app was away; they may be dead). */
-    fun freshConnections() {}
+    /**
+     * Drops idle connections, so the next request dials afresh (the app was away; they may be dead).
+     * Suspending on purpose: it closes sockets, which no caller may do on the main thread.
+     */
+    suspend fun freshConnections() {}
     /** A file the chat names, read from the computer for viewing: text cut at 1 MB, pictures and PDFs whole. */
     suspend fun readFile(conversationId: String, path: String): FileContent =
         throw ApiException(404, ClientError("Files cannot be opened on this server.", "not_found", false))
@@ -113,6 +117,8 @@ class HttpAgentRepository(
     private val client: OkHttpClient = defaultClient(),
     private val reconnectDelayMs: Long = 500,
     private val listCacheDir: java.io.File? = null,
+    /** Closes the given pool's idle sockets; a test replaces it to see the thread this runs on. */
+    private val evictConnections: (ConnectionPool) -> Unit = { it.evictAll() },
 ) : AgentRepository {
     private val authRequired = MutableStateFlow(false)
     override val authenticationRequired = authRequired.asStateFlow()
@@ -171,7 +177,11 @@ class HttpAgentRepository(
 
     // After the app was away the shared connection can be dead without knowing it (the VPN or the radio dropped it):
     // a request on it waited for the 20 s ping to notice (10-20 s on a foreground in release check 420416).
-    override fun freshConnections() { readClient.connectionPool.evictAll() }
+    // evictAll() closes TLS sockets synchronously, and Conscrypt's close write throws
+    // NetworkOnMainThreadException on the main thread (build 420452); the repository moves it to IO itself.
+    override suspend fun freshConnections() {
+        withContext(Dispatchers.IO) { evictConnections(readClient.connectionPool) }
+    }
 
     private fun idempotent(request: Request): Request = request.newBuilder().tag(Idempotent::class.java, Idempotent)
         .apply { if (!reusesConnection(origin, true)) header("Connection", "close") }.build()
@@ -330,7 +340,9 @@ class HttpAgentRepository(
     }
     override suspend fun cachedConversations(): List<Conversation> =
         snapshot("conversations")?.objects("conversations")?.map(Conversation::from).orEmpty()
-    override fun clearConversationCache() { listCacheDir?.listFiles()?.forEach { it.deleteRecursively() } }
+    override suspend fun clearConversationCache() {
+        withContext(Dispatchers.IO) { listCacheDir?.listFiles()?.forEach { it.deleteRecursively() } }
+    }
     // The newest page of each chat, so a cold start shows a chat at once instead of waiting for the
     // network. Bounded so the cache cannot grow without end.
     private fun chatPageDir(): java.io.File? = snapshotDir()?.let { java.io.File(it, "chats") }

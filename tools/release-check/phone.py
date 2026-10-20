@@ -20,6 +20,7 @@ screenshots. Elements are found by their visible text or accessibility label, ne
     phone.py frames reset|report        frame statistics (dumpsys gfxinfo): janky %, p90/p99 ms
     phone.py crashes <since-epoch-s>    crashes and ANRs of the app since then (logcat crash buffer, app log)
     phone.py net <since-epoch-s>        request timings, stream reconnects and errors from the app's own log
+    phone.py strict <since-epoch-s>     main-thread disk/network/leak findings from the app's own log
     phone.py swipe <text> left|right    swipe the row containing <text> all the way
     phone.py peek <text> left|right <png>  half a slow swipe on that row, screenshot taken mid-gesture
     phone.py palette <png>              flat areas in Material's default colours (a component the app did not style)
@@ -189,6 +190,17 @@ def net(since):
     out(ok=True, requests=len(times), avgMs=round(statistics.mean(times)) if times else None,
         p95Ms=times[int(len(times) * .95) - 1] if len(times) >= 20 else (times[-1] if times else None),
         failures=failures[:10], failureCount=len(failures), retried=retried, streamReconnects=reconnects, errorsShown=errors)
+
+
+def strict(since):
+    """StrictMode found work on the main thread: not a crash, but disk or sockets where the UI runs."""
+    rows = [r for r in app_log(since) if r.get("tag") == "strict"]
+    kinds = {}
+    for r in rows:
+        kind = r.get("m", "")
+        kinds[kind] = kinds.get(kind, 0) + 1
+    out(ok=not rows, total=len(rows), types=kinds,
+        violations=[{"type": r.get("m"), "at": r.get("at")} for r in rows[:10]])
 
 
 # Material 3's baseline (default) scheme, light and dark, without white and black: a flat area in one of these is a
@@ -363,6 +375,7 @@ def main(argv):
     if command == "frames": return frames(rest[0])
     if command == "crashes": return crashes(float(rest[0]))
     if command == "net": return net(float(rest[0]))
+    if command == "strict": return strict(float(rest[0]))
     if command == "swipe": return swipe_row(rest[0], rest[1])
     if command == "peek": return swipe_row(rest[0], rest[1], rest[2])
     if command == "palette": return palette(rest[0])

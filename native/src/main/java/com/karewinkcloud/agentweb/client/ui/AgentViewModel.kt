@@ -175,10 +175,11 @@ class AgentViewModel(
         }
     }
 
-    private fun requireSignIn() {
+    private suspend fun requireSignIn() {
         flushOpenReport()
-        generation++; attachmentScope = newControlId(); epoch++; livePresentation.value = null
+        // The cache is on disk; the repository deletes it on its own IO context.
         repository.clearConversationCache()
+        generation++; attachmentScope = newControlId(); epoch++; livePresentation.value = null
         // Close followers and pending client requests; never send Stop or replay mutations.
         viewModelScope.coroutineContext.cancelChildren()
         drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear(); chatCache.clear(); claudeHistoryCache.clear()
@@ -188,11 +189,13 @@ class AgentViewModel(
 
     fun changeServer(newRepository: AgentRepository, choice: ModelChoice, signInRequired: Boolean = false) {
         flushOpenReport()
-        // Signed out or switched to a server with no credential: no request will run to clear it later,
-        // and the previous account's saved chats and lists must not stay on the phone.
-        if (signInRequired) repository.clearConversationCache()
+        val previous = repository
         generation++; attachmentScope = newControlId(); epoch++; livePresentation.value = null
         viewModelScope.coroutineContext.cancelChildren()
+        // Signed out or switched to a server with no credential: no request will run to clear it later,
+        // and the previous account's saved chats and lists must not stay on the phone. The repository
+        // deletes them on IO; launched after cancelChildren so this job is not the one cancelled.
+        if (signInRequired) viewModelScope.launch { previous.clearConversationCache() }
         repository = newRepository
         drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear(); chatCache.clear(); claudeHistoryCache.clear()
         previews.clear(); messageModels.clear(); messageUsage.clear(); lineages.clear(); unresolvedForks.clear(); forkRuns.clear(); lineageTitleReads.clear()
@@ -753,10 +756,9 @@ class AgentViewModel(
         val token = ++foregroundToken
         if (!stale) { inForeground = true; resumeForeground(); return }
         viewModelScope.launch {
-            // evictAll() closes TLS sockets synchronously; on the main thread Conscrypt's close
-            // write trips NetworkOnMainThreadException and kills the app on every return.
+            // The repository closes the sockets on an IO dispatcher itself; this thread is the main one.
             // Stay "away" until it finishes, so the idle poll cannot start on the old pool.
-            withContext(Dispatchers.IO) { repository.freshConnections() }
+            repository.freshConnections()
             if (token != foregroundToken) return@launch
             inForeground = true
             resumeForeground()

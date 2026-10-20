@@ -87,12 +87,14 @@ Baselines (build 420317, 10-19, phone CPH2723): cold start 469 ms median; chat l
 | M1 | `phone.py memory` after the smoke checks | PSS ≤ 300 MB, Java heap ≤ 96 MB (baseline 165–196 MB PSS, 20–30 MB Java) |
 | M2 | Before and after ST1 | PSS grows ≤ 60 MB, Java heap grows ≤ 30 MB |
 
-## N: network (on the phone's current network; say which: Wi-Fi or mobile, with or without VPN)
+## N: network and main-thread work (on the phone's current network; say which: Wi-Fi or mobile, with or without VPN)
 
 | ID | How | Pass |
 |---|---|---|
 | N1 | `phone.py net <start>` at the end | `failureCount` minus `retried` is 0 (a request that failed before it was sent and was tried once more counts in both); `errorsShown` empty; record `avgMs` and `p95Ms` (baseline mobile + VPN: avg 1.7 s, p95 5.6 s; 420317: avg 0.9 s, p95 2.6 s). A failed request the app retried quietly is not a failure when no error was shown |
 | N2 | Same output | `streamReconnects` ≤ 3 over the whole run |
+| N3 | `phone.py strict <start>` at the end | `ok` true: no `strict` line in the app log (no disk, socket or leaked-closable work on the main thread during the run; each line names its type and the app call site) |
+| N4 Return after a pause (the 420452 crash path) | `phone.py launch`, `wait 对话 10`; note `t0` (`date +%s`); `phone.py home`; wait 20 s; `phone.py launch`; `wait 对话 10`; then `phone.py crashes <t0>` and `phone.py strict <t0>` | `crashes` ok (no crash, ANR or bad exit) and `strict` ok (returning must not close sockets on the main thread). Build 420452 died on every return after 15 s away |
 
 ## UI: look and consistency (about 15 minutes; read-only apart from the test chat)
 

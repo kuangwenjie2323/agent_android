@@ -29,8 +29,9 @@ data class CachedMedia(val file: File, val mime: String)
 class ChatMediaStore(private val repository: HttpAgentRepository, cache: File) {
     // One folder per server + credential, kept across launches so pictures already seen show at once
     // (each used to cost a fresh download after every restart); another account's downloads are never
-    // reused. Without a credential (local testing) each launch gets its own folder.
-    private val root = File(cache, "chat-media/${repository.credentialKey() ?: newControlId()}").apply { mkdirs() }
+    // reused. Without a credential (local testing) each launch gets its own folder. Made lazily: the
+    // store is created while the screen is composed, and mkdirs() there would be a main-thread disk write.
+    private val root by lazy { File(cache, "chat-media/${repository.credentialKey() ?: newControlId()}").apply { mkdirs() } }
     private val permits = Semaphore(2)
     private val locks = Array(32) { Mutex() }
     private val downloads = mutableMapOf<String, CachedMedia>()

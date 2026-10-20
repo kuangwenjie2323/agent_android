@@ -70,6 +70,17 @@ class RepositoryTest {
         assertEquals(1, server.requestCount)
     }
 
+    @Test fun freshConnectionsClosesSocketsOffTheCallingThread() = runBlocking {
+        // Closing TLS sockets writes to the network; doing that on the main thread killed build 420452.
+        val caller = Thread.currentThread()
+        var ranOn: Thread? = null
+        val repository = HttpAgentRepository("https://example.invalid", TokenProvider { null },
+            evictConnections = { ranOn = Thread.currentThread() })
+        repository.freshConnections()
+        assertNotNull(ranOn)
+        assertNotSame(caller, ranOn)
+    }
+
     @Test fun aWriteWhoseHandshakeIsCutOffIsSentOnceMore() = runBlocking {
         var attempts = 0
         val flaky = HttpAgentRepository.defaultClient().newBuilder().addInterceptor { chain ->
