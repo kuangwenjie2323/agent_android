@@ -508,6 +508,7 @@
     <string name="step_todo">Updated tasks</string>
     <string name="step_mcp">Used %1$s</string>
     <string name="step_earlier">%1$d earlier steps</string>
+    <string name="step_fewer">Hide %1$d earlier steps</string>
     <string name="step_more_lines">%1$d more lines, tap to show</string>
     <string name="step_file_removed">Deleted this file</string>
     <plurals name="work_commands"><item quantity="one">Ran %1$d command</item><item quantity="other">Ran %1$d commands</item></plurals>

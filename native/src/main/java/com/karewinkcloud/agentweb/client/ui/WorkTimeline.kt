@@ -48,17 +48,17 @@ private const val OUTPUT_PREVIEW_LINES = 10
 private const val DIFF_PREVIEW_ROWS = 14
 
 /**
- * One run of thinking and tool steps between pieces of the answer, drawn the way Claude does: while it
- * runs, a timeline of its latest steps (what is happening right now is always visible); once the turn
- * has moved past it, one summary line ("Thought for 12 s · Ran 3 commands · Edited 1 file +12 −3") that
- * opens into the timeline. File edits show their diff.
+ * One run of thinking and tool steps between pieces of the answer, drawn the way Claude does: a summary
+ * line ("Thought for 12 s · Ran 3 commands · Edited 1 file +12 −3") that opens into a timeline. While the
+ * section is current it starts open, so what is happening right now is visible, but it can still be
+ * folded; once the turn has moved past it, it starts folded. File edits show their diff.
  */
 @Composable
 internal fun WorkSection(steps: List<ChatBlock>, live: Boolean, current: Boolean, key: Int) {
     var open by rememberSaveable(key) { mutableStateOf(current) }
     var earlier by rememberSaveable(key) { mutableStateOf(false) }
     // The section folds away once the turn moves past it (the answer started, or the turn ended).
-    LaunchedEffect(current) { open = current }
+    LaunchedEffect(current) { open = current; earlier = false }
     val ticking = live && steps.any { it.isRunning() }
     val now by produceState(System.nanoTime() / 1_000_000, ticking) {
         while (ticking) { value = System.nanoTime() / 1_000_000; delay(1000) }
@@ -71,11 +71,17 @@ internal fun WorkSection(steps: List<ChatBlock>, live: Boolean, current: Boolean
             StepItem(steps[0], live, now, last = true, rail = false, key = key)
             return@Column
         }
-        if (!current) SummaryRow(steps, open, live, Modifier.semantics { stateDescription = state }) { open = !open }
+        // The running section gets the same fold control; its WorkingIndicator still reports activity.
+        SummaryRow(steps, open, live, Modifier.semantics { stateDescription = state }) { open = !open }
         if (open) {
             val hidden = if (current && !earlier && steps.size > LIVE_TAIL) steps.size - LIVE_TAIL else 0
             Column(Modifier.padding(top = if (current) 0.dp else 8.dp)) {
-                if (hidden > 0) EarlierRow(hidden) { earlier = true }
+                // "Earlier steps" used to be one-way: once opened, the row disappeared and the
+                // whole chain stayed on screen. Show the matching fold control while it is open.
+                if (current && earlier && steps.size > LIVE_TAIL) {
+                    EarlierRow(steps.size - LIVE_TAIL, expanded = true) { earlier = false }
+                }
+                if (hidden > 0) EarlierRow(hidden, expanded = false) { earlier = true }
                 val shown = steps.drop(hidden)
                 shown.forEachIndexed { index, step ->
                     StepItem(step, live, now, last = index == shown.lastIndex, rail = true, key = key * 1000 + hidden + index)
@@ -145,14 +151,17 @@ private fun SummaryRow(steps: List<ChatBlock>, open: Boolean, live: Boolean, mod
 }
 
 @Composable
-private fun EarlierRow(hidden: Int, onClick: () -> Unit) {
+private fun EarlierRow(hidden: Int, expanded: Boolean, onClick: () -> Unit) {
+    val state = tr(if (expanded) S.expanded else S.collapsed)
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).heightIn(min = 32.dp)
-        .padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        .padding(bottom = 6.dp).semantics { stateDescription = state },
+        verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(28.dp), contentAlignment = Alignment.Center) {
             Text("⋮", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
         }
         Spacer(Modifier.width(10.dp))
-        Text(tr(S.step_earlier, hidden), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(tr(if (expanded) S.step_fewer else S.step_earlier, hidden),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

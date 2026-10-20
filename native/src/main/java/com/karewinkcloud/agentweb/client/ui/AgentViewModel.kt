@@ -652,7 +652,9 @@ class AgentViewModel(
         if (state.value.chat == null) { refresh(); return }
         val owner = ++generation
         sessionJob?.cancel()
-        editChat(owner) { it.copy(error = null) }
+        // A retry after the first page failed has no messages yet: show the loading state again,
+        // so the list is recreated at its tail instead of staying anchored at item 0.
+        editChat(owner) { it.copy(error = null, loading = it.messages.isEmpty() && it.live == null) }
         sessionJob = viewModelScope.launch { loadAndFollow(owner) }
     }
     /**
@@ -668,12 +670,27 @@ class AgentViewModel(
     /** The app is on screen; an idle open chat watches the server only then. */
     @Volatile private var inForeground = true
     private var backgroundSince = 0L
-    fun onBackground() { inForeground = false; backgroundSince = System.currentTimeMillis() }
+    private var foregroundToken = 0L
+    fun onBackground() {
+        inForeground = false; backgroundSince = System.currentTimeMillis(); foregroundToken++
+    }
     fun onForeground() {
-        inForeground = true
-        if (backgroundSince > 0 && System.currentTimeMillis() - backgroundSince > 15_000) repository.freshConnections()
+        val stale = backgroundSince > 0 && System.currentTimeMillis() - backgroundSince > 15_000
         backgroundSince = 0
-        if (state.value.signInRequired) return
+        val token = ++foregroundToken
+        if (!stale) { inForeground = true; resumeForeground(); return }
+        viewModelScope.launch {
+            // evictAll() closes TLS sockets synchronously; on the main thread Conscrypt's close
+            // write trips NetworkOnMainThreadException and kills the app on every return.
+            // Stay "away" until it finishes, so the idle poll cannot start on the old pool.
+            withContext(Dispatchers.IO) { repository.freshConnections() }
+            if (token != foregroundToken) return@launch
+            inForeground = true
+            resumeForeground()
+        }
+    }
+    private fun resumeForeground() {
+        if (!inForeground || state.value.signInRequired) return
         if (state.value.claudeVisible && state.value.chat == null) {
             if (sessionJob?.isActive != true && state.value.claudePreview != null) refreshClaudePreview()
             else if (state.value.claudePreview == null) refreshClaudeSessions()

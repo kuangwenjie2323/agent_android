@@ -494,81 +494,103 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
                     leadingIcon = { AppIcon(R.drawable.aw_back) }, modifier = Modifier.padding(horizontal = 16.dp).heightIn(min = 48.dp))
             }
             key(chat.conversation.id) {
-                val list = rememberLazyListState()
-                var followTail by remember { mutableStateOf(true) }
-                // Selected text clears like anywhere on Android: a tap elsewhere or a scroll ends it (selection
-                // lives while its container is focused; the handles would otherwise stay behind when the list moves).
-                val focus = LocalFocusManager.current
-                // Only the user's own drag stops following the newest text. Watching "a scroll is in progress"
-                // also caught the list's own jumps to the end (seen a moment late), which left a streaming
-                // answer running on below the screen.
-                LaunchedEffect(list) {
-                    list.interactionSource.interactions.collect { interaction ->
-                        if (interaction is DragInteraction.Start) { followTail = false; focus.clearFocus(force = true) }
-                    }
-                }
-                LaunchedEffect(list) {
-                    snapshotFlow { list.isScrollInProgress to list.canScrollForward }.distinctUntilChanged().collect { (scrolling, canForward) ->
-                        if (!scrolling && !canForward) followTail = true
-                    }
-                }
-                LaunchedEffect(list, followTail, chat.loading) {
-                    snapshotFlow { list.layoutInfo.let { info ->
-                        Triple(info.totalItemsCount, info.visibleItemsInfo.lastOrNull()?.size, info.viewportEndOffset)
-                    } }.distinctUntilChanged().collect {
-                        if (followTail && !chat.loading) {
-                            val total = list.layoutInfo.totalItemsCount
-                            // One clamped jump to the very end. Scrolling to the item's top and then
-                            // down by its height showed an intermediate frame on every growth (jitter).
-                            if (total > 0) list.scrollToItem(total - 1, Int.MAX_VALUE)
+                // The first page arrives after this screen opens. Creating the list while it is still
+                // empty anchors it at item 0, so the first painted frame is the oldest message of the
+                // page and the follow effect then jumps to the end. Wait for the first page and start
+                // the list at its last item instead, so opening a long chat never renders the history
+                // above the latest reply.
+                if (chat.loading && chat.messages.isEmpty() && chat.live == null) {
+                    Box(Modifier.weight(1f).fillMaxWidth()) { LoadingState(tr(S.loading_chat)) }
+                } else {
+                    // The items the list composes before the messages, matching the LazyColumn below.
+                    val initialItems = chat.messages.size +
+                        (if (chat.loading) 1 else 0) +
+                        (if (chat.nextCursor != null) 1 else 0) +
+                        (if (!chat.loading && chat.messages.isEmpty() && chat.live == null && chat.error == null) 1 else 0) +
+                        (if (chat.live != null) 1 else 0) +
+                        (if (chat.suggestions.isNotEmpty() && !chat.running && chat.live == null &&
+                            chat.messages.lastOrNull()?.id == chat.suggestionsFor) 1 else 0) +
+                        (if (chat.error != null) 1 else 0)
+                    // Start at the last item and, when it is taller than the viewport, at its end:
+                    // the follow effect would otherwise jump within the latest reply on the next frame.
+                    val list = rememberLazyListState(
+                        initialFirstVisibleItemIndex = (initialItems - 1).coerceAtLeast(0),
+                        initialFirstVisibleItemScrollOffset = 100_000)
+                    var followTail by remember { mutableStateOf(true) }
+                    // Selected text clears like anywhere on Android: a tap elsewhere or a scroll ends it (selection
+                    // lives while its container is focused; the handles would otherwise stay behind when the list moves).
+                    val focus = LocalFocusManager.current
+                    // Only the user's own drag stops following the newest text. Watching "a scroll is in progress"
+                    // also caught the list's own jumps to the end (seen a moment late), which left a streaming
+                    // answer running on below the screen.
+                    LaunchedEffect(list) {
+                        list.interactionSource.interactions.collect { interaction ->
+                            if (interaction is DragInteraction.Start) { followTail = false; focus.clearFocus(force = true) }
                         }
                     }
-                }
-                LazyColumn(state = list, modifier = Modifier.weight(1f).fillMaxWidth().clearSelectionOnTap(focus), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    if (chat.loading) item("loading") { LoadingState(tr(S.loading_chat)) }
-                    if (chat.nextCursor != null) item("older") {
-                        TextButton(onClick = { followTail = false; vm.loadOlder() }, enabled = !chat.loadingOlder,
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(if (chat.loadingOlder) tr(S.loading) else countLabel(R.plurals.load_older, chat.olderCount)) }
+                    LaunchedEffect(list) {
+                        snapshotFlow { list.isScrollInProgress to list.canScrollForward }.distinctUntilChanged().collect { (scrolling, canForward) ->
+                            if (!scrolling && !canForward) followTail = true
+                        }
                     }
-                    if (!chat.loading && chat.messages.isEmpty() && chat.live == null && chat.error == null) item("empty") {
-                        EmptyState(R.drawable.aw_chat, tr(S.empty_chat), tr(S.empty_chat_hint))
+                    LaunchedEffect(list, followTail, chat.loading) {
+                        snapshotFlow { list.layoutInfo.let { info ->
+                            Triple(info.totalItemsCount, info.visibleItemsInfo.lastOrNull()?.size, info.viewportEndOffset)
+                        } }.distinctUntilChanged().collect {
+                            if (followTail && !chat.loading) {
+                                val total = list.layoutInfo.totalItemsCount
+                                // One clamped jump to the very end. Scrolling to the item's top and then
+                                // down by its height showed an intermediate frame on every growth (jitter).
+                                if (total > 0) list.scrollToItem(total - 1, Int.MAX_VALUE)
+                            }
+                        }
                     }
-                    items(chat.messages, key = { it.id }, contentType = { it.role }) { message ->
-                        MessageView(message, modelLabel = message.model?.let { model -> state.agents.find { model.removeSuffix("[1m]") in it.models }?.label(model) ?: readableModelId(model) },
-                            canFork = chat.canFork,
-                            onRetry = if (message.role == "assistant" && message.id == chat.messages.lastOrNull { it.role == "assistant" }?.id) ({ vm.retry(message.id) }) else null,
-                            onEdit = if (message.role == "user" && message.id == chat.messages.lastOrNull { it.role == "user" }?.id) ({ text -> vm.edit(message.id, text) }) else null)
+                    LazyColumn(state = list, modifier = Modifier.weight(1f).fillMaxWidth().clearSelectionOnTap(focus), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        if (chat.loading) item("loading") { LoadingState(tr(S.loading_chat)) }
+                        if (chat.nextCursor != null) item("older") {
+                            TextButton(onClick = { followTail = false; vm.loadOlder() }, enabled = !chat.loadingOlder,
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(if (chat.loadingOlder) tr(S.loading) else countLabel(R.plurals.load_older, chat.olderCount)) }
+                        }
+                        if (!chat.loading && chat.messages.isEmpty() && chat.live == null && chat.error == null) item("empty") {
+                            EmptyState(R.drawable.aw_chat, tr(S.empty_chat), tr(S.empty_chat_hint))
+                        }
+                        items(chat.messages, key = { it.id }, contentType = { it.role }) { message ->
+                            MessageView(message, modelLabel = message.model?.let { model -> state.agents.find { model.removeSuffix("[1m]") in it.models }?.label(model) ?: readableModelId(model) },
+                                canFork = chat.canFork,
+                                onRetry = if (message.role == "assistant" && message.id == chat.messages.lastOrNull { it.role == "assistant" }?.id) ({ vm.retry(message.id) }) else null,
+                                onEdit = if (message.role == "user" && message.id == chat.messages.lastOrNull { it.role == "user" }?.id) ({ text -> vm.edit(message.id, text) }) else null)
+                        }
+                        if (chat.live != null) item("live-${chat.live.runId}") {
+                            LiveMessage(vm, (chat.liveModel ?: chat.conversation.choice.model).takeIf { it.isNotBlank() }?.let { model ->
+                                state.agents.find { model in it.models }?.label(model) ?: model
+                            }, chat.connection)
+                        }
+                        if (chat.suggestions.isNotEmpty() && !chat.running && chat.live == null && chat.messages.lastOrNull()?.id == chat.suggestionsFor)
+                            item("suggestions-${chat.suggestionsFor}") { QuickReplies(chat.suggestions, enabled = chat.canSend, onPick = vm::sendSuggestion) }
+                        if (chat.error != null) item("error") { ErrorBlock(chat.error, vm::reload, tr(S.reconnect)) }
                     }
-                    if (chat.live != null) item("live-${chat.live.runId}") {
-                        LiveMessage(vm, (chat.liveModel ?: chat.conversation.choice.model).takeIf { it.isNotBlank() }?.let { model ->
-                            state.agents.find { model in it.models }?.label(model) ?: model
-                        }, chat.connection)
+                    val lastId = chat.messages.lastOrNull()?.id
+                    LaunchedEffect(chat.conversation.id, lastId, chat.running, chat.live == null) { vm.loadSuggestions() }
+                    if (!followTail) TextButton({ followTail = true }, Modifier.align(Alignment.CenterHorizontally).heightIn(min = 48.dp)) {
+                        AppIcon(R.drawable.aw_down); Text(tr(S.latest_messages))
                     }
-                    if (chat.suggestions.isNotEmpty() && !chat.running && chat.live == null && chat.messages.lastOrNull()?.id == chat.suggestionsFor)
-                        item("suggestions-${chat.suggestionsFor}") { QuickReplies(chat.suggestions, enabled = chat.canSend, onPick = vm::sendSuggestion) }
-                    if (chat.error != null) item("error") { ErrorBlock(chat.error, vm::reload, tr(S.reconnect)) }
-                }
-                val lastId = chat.messages.lastOrNull()?.id
-                LaunchedEffect(chat.conversation.id, lastId, chat.running, chat.live == null) { vm.loadSuggestions() }
-                if (!followTail) TextButton({ followTail = true }, Modifier.align(Alignment.CenterHorizontally).heightIn(min = 48.dp)) {
-                    AppIcon(R.drawable.aw_down); Text(tr(S.latest_messages))
-                }
-                // Sending (a message, a mid-turn message, a queued one) shows the newest, like any messenger.
-                LaunchedEffect(chat.sends) { if (chat.sends > 0) followTail = true }
-                // A question picked in the outline: its message at the top of the screen.
-                LaunchedEffect(jumpTo) {
-                    val target = jumpTo ?: return@LaunchedEffect
-                    val index = chat.messages.indexOfFirst { it.id == target }
-                    if (index >= 0) {
-                        followTail = false
-                        list.scrollToItem(index + (if (chat.loading) 1 else 0) + (if (chat.nextCursor != null) 1 else 0))
+                    // Sending (a message, a mid-turn message, a queued one) shows the newest, like any messenger.
+                    LaunchedEffect(chat.sends) { if (chat.sends > 0) followTail = true }
+                    // A question picked in the outline: its message at the top of the screen.
+                    LaunchedEffect(jumpTo) {
+                        val target = jumpTo ?: return@LaunchedEffect
+                        val index = chat.messages.indexOfFirst { it.id == target }
+                        if (index >= 0) {
+                            followTail = false
+                            list.scrollToItem(index + (if (chat.loading) 1 else 0) + (if (chat.nextCursor != null) 1 else 0))
+                        }
+                        jumpTo = null
                     }
-                    jumpTo = null
-                }
-                LaunchedEffect(followTail) {
-                    if (followTail && list.layoutInfo.totalItemsCount > 0) {
-                        list.scrollToItem(list.layoutInfo.totalItemsCount - 1, Int.MAX_VALUE)
+                    LaunchedEffect(followTail) {
+                        if (followTail && list.layoutInfo.totalItemsCount > 0) {
+                            list.scrollToItem(list.layoutInfo.totalItemsCount - 1, Int.MAX_VALUE)
+                        }
                     }
                 }
             }
