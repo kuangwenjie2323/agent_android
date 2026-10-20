@@ -115,7 +115,6 @@ class AgentViewModel(
     private var projectVersion = 0L
     private var sessionJob: Job? = null
     private var listJob: Job? = null
-    private var claudeListJob: Job? = null
     private var authJob: Job? = null
     private var previewsJob: Job? = null
     private var contentSearch: Job? = null
@@ -160,8 +159,6 @@ class AgentViewModel(
     private class PendingChange(val pinned: Boolean?, val archived: Boolean?)
     /** Changes reach the server in the order they were made: an undo never overtakes the archive it undoes. */
     private val changeOrder = kotlinx.coroutines.sync.Mutex()
-    // Read-only PC session history from this app run, shown at once while it refreshes.
-    private val claudeHistoryCache = java.util.concurrent.ConcurrentHashMap<String, ClaudePreviewState>()
     private var prefetchJob: Job? = null
     /** Whether the chat list has appeared on screen: only then may the background prefetch start. */
     @Volatile private var listVisible = false
@@ -172,6 +169,25 @@ class AgentViewModel(
         }
     }
     private val unresolvedQueues = mutableMapOf<String, QueueRequest>()
+
+    private val stateHost = object : StateHost {
+        override fun state() = state.value
+        override fun update(change: (ClientState) -> ClientState) { mutable.update(change) }
+    }
+    private val memoryController = MemoryController({ repository })
+    private val claudeSessions = ClaudeSessionsController(
+        repository = { repository },
+        scope = viewModelScope,
+        host = stateHost,
+        epoch = { epoch },
+        generation = { generation },
+        nextGeneration = { ++generation },
+        cancelSessionJob = { sessionJob?.cancel() },
+        launchSessionJob = { work -> sessionJob = viewModelScope.launch { work() } },
+        leaveChat = { flushOpenReport(); saveDraft(); attachmentScope = newControlId() },
+        dropLiveTurn = { livePresentation.value = null },
+        openChat = { open(it) },
+    )
 
     init { observeAuthentication(); refresh() }
 
@@ -191,7 +207,7 @@ class AgentViewModel(
         generation++; attachmentScope = newControlId(); epoch++; livePresentation.value = null
         // Close followers and pending client requests; never send Stop or replay mutations.
         viewModelScope.coroutineContext.cancelChildren()
-        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear(); chatCache.clear(); claudeHistoryCache.clear()
+        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear(); chatCache.clear(); claudeSessions.clearCache()
         previews.clear(); messageModels.clear(); messageUsage.clear(); lineages.clear(); unresolvedForks.clear(); forkRuns.clear(); lineageTitleReads.clear()
         mutable.value = ClientState(choice = state.value.choice, tab = state.value.tab, signInRequired = true, error = signInRequiredError)
     }
@@ -206,7 +222,7 @@ class AgentViewModel(
         // deletes them on IO; launched after cancelChildren so this job is not the one cancelled.
         if (signInRequired) viewModelScope.launch { previous.clearConversationCache() }
         repository = newRepository
-        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear(); chatCache.clear(); claudeHistoryCache.clear()
+        drafts.clear(); attachmentDrafts.clear(); unresolvedSends.clear(); unresolvedQueues.clear(); chatCache.clear(); claudeSessions.clearCache()
         previews.clear(); messageModels.clear(); messageUsage.clear(); lineages.clear(); unresolvedForks.clear(); forkRuns.clear(); lineageTitleReads.clear()
         // An open PC-session scope belongs to the old server; clear it on replacement.
         val tab = if (state.value.claudeVisible) AppTab.CONVERSATIONS else state.value.tab
@@ -810,101 +826,12 @@ class AgentViewModel(
         if (tab == AppTab.CONVERSATIONS) refresh()
     }
 
-    fun showClaudeSessions() {
-        if (state.value.signInRequired) return
-        flushOpenReport()
-        saveDraft(); generation++; attachmentScope = newControlId(); sessionJob?.cancel()
-        mutable.update { it.copy(tab = AppTab.CLAUDE, chat = null, claudeVisible = true, claudePreview = null) }
-        refreshClaudeSessions()
-    }
-
-    fun refreshClaudeSessions(older: Boolean = false) {
-        if (state.value.signInRequired) return
-        if (claudeListJob?.isActive == true) return
-        val cursor = if (older) state.value.claude.nextCursor ?: return else null
-        val source = repository
-        val owner = epoch
-        mutable.update { it.copy(claude = it.claude.copy(loading = true, error = null)) }
-        claudeListJob = viewModelScope.launch {
-            try {
-                if (!older && state.value.claude.sessions.isEmpty()) source.cachedClaudeSessions()?.let { saved ->
-                    if (owner == epoch) mutable.update { if (it.claude.sessions.isEmpty()) it.copy(claude = it.claude.copy(sessions = saved.sessions, nextCursor = saved.nextCursor)) else it }
-                }
-                val page = source.claudeSessions(cursor)
-                if (owner == epoch) mutable.update { it.copy(claude = ClaudeListState(
-                    (if (older) it.claude.sessions + page.sessions else page.sessions).distinctBy { s -> s.id }, page.nextCursor)) }
-            } catch (e: CancellationException) { throw e }
-            catch (e: Exception) {
-                if (owner == epoch) mutable.update { it.copy(claude = it.claude.copy(loading = false, error = problem(e))) }
-            }
-        }
-    }
-
-    fun openClaudeSession(session: ClaudeSession) {
-        if (state.value.signInRequired) return
-        if (session.linkedConversationId != null) { open(session.conversation()); return }
-        flushOpenReport()
-        saveDraft()
-        attachmentScope = newControlId()
-        livePresentation.value = null
-        val owner = ++generation
-        sessionJob?.cancel()
-        val saved = claudeHistoryCache[session.id]
-        mutable.update { it.copy(chat = null, claudeVisible = true, claudePreview = ClaudePreviewState(session,
-            saved?.messages.orEmpty(), saved?.nextCursor, saved?.olderCount ?: 0)) }
-        val source = repository
-        sessionJob = viewModelScope.launch { loadClaudePreview(source, owner, session.id) }
-    }
-
-    private fun editPreview(owner: Long, change: (ClaudePreviewState) -> ClaudePreviewState) {
-        if (owner == generation) mutable.update { it.copy(claudePreview = it.claudePreview?.let(change)) }
-    }
-
-    private suspend fun loadClaudePreview(source: AgentRepository, owner: Long, id: String, cursor: String? = null) {
-        try {
-            val result = source.claudeHistory(id, cursor)
-            editPreview(owner) { it.copy(session = result.session,
-                messages = if (cursor == null) result.messages else (result.messages + it.messages).distinctBy { m -> m.id },
-                nextCursor = result.nextCursor, olderCount = result.olderCount, loading = false, loadingOlder = false, error = null) }
-            if (cursor == null) state.value.claudePreview?.takeIf { owner == generation && it.session.id == id }?.let { claudeHistoryCache[id] = it }
-        } catch (e: CancellationException) { throw e }
-        catch (e: Exception) { editPreview(owner) { it.copy(loading = false, loadingOlder = false, error = problem(e)) } }
-    }
-
-    fun refreshClaudePreview() {
-        val preview = state.value.claudePreview ?: return
-        if (preview.adopting) return
-        openClaudeSession(preview.session.copy(linkedConversationId = null))
-    }
-
-    fun olderClaudeHistory() {
-        val preview = state.value.claudePreview ?: return
-        val cursor = preview.nextCursor ?: return
-        if (preview.loading || preview.loadingOlder || preview.adopting) return
-        val owner = generation
-        val source = repository
-        editPreview(owner) { it.copy(loadingOlder = true) }
-        sessionJob = viewModelScope.launch { loadClaudePreview(source, owner, preview.session.id, cursor) }
-    }
-
-    fun continueClaudeSession() {
-        val preview = state.value.claudePreview ?: return
-        if (preview.session.linkedConversationId != null) { open(preview.session.conversation()); return }
-        if (!preview.canAdopt) return
-        val owner = generation
-        val source = repository
-        editPreview(owner) { it.copy(adopting = true, error = null) }
-        sessionJob = viewModelScope.launch {
-            try {
-                val id = source.adoptClaudeSession(preview.session.id)
-                if (owner == generation && state.value.claudePreview?.session?.id == preview.session.id) open(preview.session.conversation(id))
-            } catch (e: CancellationException) { throw e }
-            catch (e: Exception) {
-                editPreview(owner) { it.copy(adopting = false, error = problem(e),
-                    session = if (e is ApiException && e.problem.code == "claude_session_active") it.session.copy(maybeActive = true) else it.session) }
-            }
-        }
-    }
+    fun showClaudeSessions() = claudeSessions.show()
+    fun refreshClaudeSessions(older: Boolean = false) = claudeSessions.refresh(older)
+    fun openClaudeSession(session: ClaudeSession) = claudeSessions.open(session)
+    fun refreshClaudePreview() = claudeSessions.refreshPreview()
+    fun olderClaudeHistory() = claudeSessions.olderHistory()
+    fun continueClaudeSession() = claudeSessions.continueSession()
 
     /** True once the open, idle conversation changed on the server; false when the chat was left. Checks only
      *  in the foreground, against the light list row (running, last update, message count). */
@@ -1444,9 +1371,9 @@ class AgentViewModel(
     }
 
     /** The agents' shared memory, as the memory page shows it. */
-    suspend fun memory(): MemoryOverview = repository.memory()
-    suspend fun memoryFile(file: String): String = repository.memoryFile(file)
-    suspend fun consolidateMemory() = repository.consolidateMemory()
+    suspend fun memory(): MemoryOverview = memoryController.memory()
+    suspend fun memoryFile(file: String): String = memoryController.memoryFile(file)
+    suspend fun consolidateMemory() = memoryController.consolidateMemory()
 
     /** A file the open conversation names, read from the computer for the file viewer. */
     suspend fun readFile(path: String): FileContent {
