@@ -71,7 +71,9 @@ internal fun quietButton() = ButtonDefaults.textButtonColors(contentColor = Mate
 @Composable
 fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String? = null,
     turn: TurnState? = null, connection: Connection? = null, canFork: Boolean = false,
-    onRetry: (() -> Unit)? = null, onEdit: ((String) -> Unit)? = null, onAnswer: ((String, String) -> Unit)? = null) {
+    onRetry: (() -> Unit)? = null, onEdit: ((String) -> Unit)? = null, onAnswer: ((String, String) -> Unit)? = null,
+    /** For an outline message: its full blocks are loading, failed to load, or can be fetched by [onLoadBlocks]. */
+    outlineLoading: Boolean = false, outlineFailed: Boolean = false, onLoadBlocks: (() -> Unit)? = null) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(message.id) { mutableStateOf(false) }
     var menu by remember(message.id) { mutableStateOf(false) }
@@ -121,7 +123,12 @@ fun MessageView(message: ChatMessage, live: Boolean = false, modelLabel: String?
                 }
             } else {
                 (modelLabel ?: message.model)?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                SelectionContainer { BlockContent(message.blocks, live, onAnswer) }
+                // An outline page's steps fetch this message's full blocks when one is opened.
+                val outline = if (message.outline && onLoadBlocks != null)
+                    OutlineLoad(message.id, outlineLoading, outlineFailed, onLoadBlocks) else null
+                CompositionLocalProvider(LocalOutlineLoad provides outline) {
+                    SelectionContainer { BlockContent(message.blocks, live, onAnswer) }
+                }
                 // One status line under the turn for as long as it runs, like Claude Code's spinner line.
                 // Hiding it while a step ran made it pop in and out between steps, and the page jumped.
                 if (turn != null && !turn.done) WorkingIndicator(turn, connection)

@@ -48,6 +48,14 @@ private const val OUTPUT_PREVIEW_LINES = 10
 private const val DIFF_PREVIEW_ROWS = 14
 
 /**
+ * How a step of an outline message gets the text the outline left out: [loading] while the message's full
+ * blocks are on their way, [failed] when that read failed, and [onLoad] starts it (once per message).
+ */
+internal class OutlineLoad(val messageId: String, val loading: Boolean, val failed: Boolean, val onLoad: () -> Unit)
+
+internal val LocalOutlineLoad = compositionLocalOf<OutlineLoad?> { null }
+
+/**
  * One run of thinking and tool steps between pieces of the answer, drawn the way Claude does: a summary
  * line ("Thought for 12 s · Ran 3 commands · Edited 1 file +12 −3") that opens into a timeline. While the
  * section is current it starts open, so what is happening right now is visible, but it can still be
@@ -228,6 +236,7 @@ private fun stepTitle(kind: StepKind, summary: StepSummary?, name: String, backg
 private fun StepItem(step: ChatBlock, live: Boolean, now: Long, last: Boolean, rail: Boolean, key: Int) {
     val tool = step as? ChatBlock.Tool
     val thought = step as? ChatBlock.Thought
+    val outline = LocalOutlineLoad.current
     val summary = remember(tool) { tool?.let(::stepSummary) }
     val kind = summary?.kind ?: StepKind.THINK
     val status = tool?.status ?: thought?.status ?: StepStatus.COMPLETE
@@ -236,6 +245,12 @@ private fun StepItem(step: ChatBlock, live: Boolean, now: Long, last: Boolean, r
     val diffs = remember(tool) { tool?.let(::stepDiffs).orEmpty() }
     // A file change shows its diff right away; everything else opens on tap.
     var open by rememberSaveable(key) { mutableStateOf(diffs.isNotEmpty()) }
+    // An outline page left this step's thinking text or output on the server; opening it fetches them.
+    val missingText = outline != null && ((thought != null && thought.content.isBlank() && (thought.chars ?: 0) > 0) ||
+        (tool != null && tool.task == null && tool.result.isNullOrBlank() && (tool.resultChars ?: 0) > 0))
+    LaunchedEffect(open, missingText, outline?.failed) {
+        if (open && missingText && outline?.failed != true) outline?.onLoad?.invoke()
+    }
     val duration = step.duration(now, live)
     val inline = kind in setOf(StepKind.READ, StepKind.EDIT, StepKind.WRITE, StepKind.SEARCH, StepKind.WEB_SEARCH,
         StepKind.WEB_FETCH, StepKind.IMAGE)
@@ -256,7 +271,11 @@ private fun StepItem(step: ChatBlock, live: Boolean, now: Long, last: Boolean, r
         }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f).padding(bottom = if (last) 0.dp else 12.dp)) {
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { open = !open }.heightIn(min = 28.dp),
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable {
+                    val opening = !open
+                    open = opening
+                    if (opening && missingText) outline?.onLoad?.invoke()
+                }.heightIn(min = 28.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -287,7 +306,10 @@ private fun StepItem(step: ChatBlock, live: Boolean, now: Long, last: Boolean, r
             }
             if (open) Column(Modifier.padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 when {
-                    thought != null -> ThoughtText(thought.content)
+                    thought != null -> {
+                        if (missingText) OutlineTextPlaceholder(outline?.loading == true, outline?.failed == true) { outline?.onLoad?.invoke() }
+                        else ThoughtText(thought.content)
+                    }
                     diffs.isNotEmpty() -> diffs.forEach { FileDiffView(it) }
                     tool != null && task != null -> ToolDetail(tool, kind, error, task, live)
                     tool != null -> ToolDetail(tool, kind, error)
@@ -334,7 +356,16 @@ private fun ToolDetail(tool: ChatBlock.Tool, kind: StepKind, error: Boolean, tas
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text((if (kind == StepKind.COMMAND) "$ " else "") + command, fontFamily = CodeFont,
                 fontSize = 12.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurface)
-            if (task == null) tool.result?.trim()?.takeIf { it.isNotEmpty() }?.let { result -> OutputPreview(result, error) }
+            if (task == null) {
+                val result = tool.result?.trim()?.takeIf { it.isNotEmpty() }
+                val outline = LocalOutlineLoad.current
+                when {
+                    result != null -> OutputPreview(result, error)
+                    // The outline left the output on the server: say it is coming rather than show nothing.
+                    outline != null && (tool.resultChars ?: 0) > 0 ->
+                        OutlineTextPlaceholder(outline.loading, outline.failed) { outline.onLoad() }
+                }
+            }
             // The file a step read opens in full, at the part it read.
             val openFile = LocalOpenFile.current
             val file = remember(tool) { stepFileRef(tool) }
@@ -361,6 +392,19 @@ private fun OutputPreview(result: String, error: Boolean) {
     if (lines.size > shown.size) Text(tr(S.step_more_lines, lines.size - shown.size),
         Modifier.clip(RoundedCornerShape(6.dp)).clickable { all = true }.padding(vertical = 2.dp),
         style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+}
+
+/** A step's text was left out of an outline page; its full blocks are fetched once when the step is opened. */
+@Composable
+private fun OutlineTextPlaceholder(loading: Boolean, failed: Boolean, retry: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 28.dp).clip(RoundedCornerShape(6.dp))
+        .then(if (failed) Modifier.clickable(onClick = retry) else Modifier).padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (loading) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(tr(if (failed) S.step_text_failed else S.step_text_loading), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 }
 
 @Composable

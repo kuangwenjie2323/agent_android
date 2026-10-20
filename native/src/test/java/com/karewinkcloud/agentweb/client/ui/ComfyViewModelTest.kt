@@ -50,7 +50,7 @@ class ComfyViewModelTest {
         fresh.savedJobs = listOf(saved); fresh.savedWorkflows = listOf(workflow)
         fresh.history = listOf(saved, ComfyJob("22345678-1234-1234-1234-123456789012", "image", "succeeded"))
         fresh.onHistory = { gate.await(); fresh.history }
-        val cold = create(fresh, Pending()); cold.preload(); runCurrent()
+        val cold = create(fresh, Pending()); cold.setForeground(true); runCurrent()
         assertEquals(listOf(saved), cold.state.value.jobs)
         assertEquals(listOf(workflow), cold.state.value.workflows)
         assertFalse(cold.state.value.initialized); assertFalse(cold.state.value.canSubmit)

@@ -510,6 +510,8 @@
     <string name="step_earlier">%1$d earlier steps</string>
     <string name="step_fewer">Hide %1$d earlier steps</string>
     <string name="step_more_lines">%1$d more lines, tap to show</string>
+    <string name="step_text_loading">Loading the full step…</string>
+    <string name="step_text_failed">Could not load the full step. Tap to try again.</string>
     <string name="step_file_removed">Deleted this file</string>
     <plurals name="work_commands"><item quantity="one">Ran %1$d command</item><item quantity="other">Ran %1$d commands</item></plurals>
     <plurals name="work_edits"><item quantity="one">Edited %1$d file</item><item quantity="other">Edited %1$d files</item></plurals>

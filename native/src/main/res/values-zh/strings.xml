@@ -506,6 +506,8 @@
     <string name="step_earlier">前面还有 %1$d 步</string>
     <string name="step_fewer">收起前面 %1$d 步</string>
     <string name="step_more_lines">还有 %1$d 行，点开查看</string>
+    <string name="step_text_loading">正在加载这一步的完整内容…</string>
+    <string name="step_text_failed">这一步的完整内容没能加载，点一下再试。</string>
     <string name="step_file_removed">已删除这个文件</string>
     <plurals name="work_commands"><item quantity="other">运行了 %1$d 个命令</item></plurals>
     <plurals name="work_edits"><item quantity="other">修改了 %1$d 个文件</item></plurals>

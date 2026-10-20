@@ -64,7 +64,6 @@ class MainActivity : ComponentActivity() {
                     online = { phoneOnline(applicationContext) }, saveChoice = settings.store::saveChoice).also { it.appliedConnection = connection }
             })
             SideEffect { chatModel = chat }
-            LaunchedEffect(chat) { chat.preloadClaudeSessions() }
             LaunchedEffect(connection) {
                 // The epoch survives Activity recreation along with the chat ViewModel.
                 if (chat.appliedConnection != connection) {
@@ -78,7 +77,7 @@ class MainActivity : ComponentActivity() {
                     java.io.File(cacheDir, "comfy-output"), connection.signInRequired).also { it.appliedConnection = connection }
             })
             SideEffect { studioModel = studio }
-            LaunchedEffect(studio) { studio.preload() }
+            LaunchedEffect(studio) { kotlinx.coroutines.delay(3_000); studio.preload() }
             val request by openRequest
             LaunchedEffect(request) {
                 val (kind, id) = request ?: return@LaunchedEffect

@@ -408,11 +408,34 @@ class RepositoryTest {
     @Test fun historyPagingUsesFortyAndExclusiveCursor() = runBlocking {
         server.enqueue(json("""{"conversation":{"id":"conversation","title":"Chat","agent":"agent","model":"model","pinned":1,"active":false,"project":{"name":"Project"}},"messages":[],"queued":[],"queuePaused":true,"messagePage":{"olderCount":41,"nextCursor":"123","limit":40,"compactionCount":0}}"""))
         val detail = repo.detail("conversation", "456")
-        assertEquals("/api/chat/conversations/conversation?compact=1&messageLimit=40&messageCursor=456", next().path)
+        assertEquals("/api/chat/conversations/conversation?compact=1&outline=1&messageLimit=40&messageCursor=456", next().path)
         assertTrue(detail.conversation.pinned)
         assertTrue(detail.queuePaused)
         assertEquals("Project", detail.conversation.project)
         assertEquals("123", detail.nextCursor)
+    }
+    @Test fun anOutlineHistoryPageKeepsWhatTheSummaryNeedsAndThePageSize() = runBlocking {
+        server.enqueue(json("""{"outline":true,"conversation":{"id":"conversation","title":"Chat"},"messages":[{"id":"2","role":"assistant","outline":true,"blocks":[{"type":"thinking","content":"","chars":120,"duration":3.5},{"type":"tool","id":"t","name":"Bash","input":{"command":"ls"},"result":"","resultChars":4096}]}],"queued":[],"queuePaused":false,"messagePage":{"olderCount":0}}"""))
+        val detail = repo.detail("conversation")
+        assertEquals("/api/chat/conversations/conversation?compact=1&outline=1&messageLimit=40", next().path)
+        assertTrue(detail.outline)
+        assertTrue(detail.messages.single().outline)
+        val thought = detail.messages.single().blocks.filterIsInstance<ChatBlock.Thought>().single()
+        assertEquals(120, thought.chars)
+        assertEquals("", thought.content)
+        assertEquals(3500L, thought.durationMs)  // what "Thought for 3 s" reads
+        val tool = detail.messages.single().blocks.filterIsInstance<ChatBlock.Tool>().single()
+        assertEquals(4096, tool.resultChars)
+        assertEquals("", tool.result)
+        assertTrue((detail.pageBytes ?: 0) > 0)
+    }
+    @Test fun oneMessagesFullBlocksAreReadByItsEncodedIds() = runBlocking {
+        server.enqueue(json("""{"messageId":"7","blocks":[{"type":"thinking","content":"why","duration":2.5},{"type":"tool","id":"t","name":"Bash","input":{"command":"ls"},"result":"a.txt"}]}"""))
+        val blocks = repo.messageBlocks("c/1", "7")
+        assertEquals("/api/chat/conversations/c%2F1/messages/7/blocks", next().path)
+        assertEquals("why", blocks.filterIsInstance<ChatBlock.Thought>().single().content)
+        assertEquals(2500L, blocks.filterIsInstance<ChatBlock.Thought>().single().durationMs)
+        assertEquals("a.txt", blocks.filterIsInstance<ChatBlock.Tool>().single().result)
     }
     @Test fun aChatsFirstPageIsSavedAndCachedDetailGivesTheSameDetail() = runBlocking {
         val repo = cachedRepo()

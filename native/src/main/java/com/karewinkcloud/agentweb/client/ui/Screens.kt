@@ -177,6 +177,8 @@ internal fun Toolbar(title: String, subtitle: String? = null, onBack: (() -> Uni
 
 @Composable
 private fun ColumnScope.ConversationList(state: ClientState, vm: AgentViewModel) {
+    // The recent chats are warmed in the background only once this list is actually on screen.
+    LaunchedEffect(Unit) { vm.listShown() }
     var memoryOpen by remember { mutableStateOf(false) }
     // A swipe right archives at once (with an undo bar), a swipe left asks before deleting, as in a mail app.
     var deleting by remember { mutableStateOf<Conversation?>(null) }
@@ -574,7 +576,10 @@ private fun ColumnScope.ChatScreen(state: ClientState, vm: AgentViewModel, avail
                             MessageView(message, modelLabel = message.model?.let { model -> state.agents.find { model.removeSuffix("[1m]") in it.models }?.label(model) ?: readableModelId(model) },
                                 canFork = chat.canFork,
                                 onRetry = if (message.role == "assistant" && message.id == chat.messages.lastOrNull { it.role == "assistant" }?.id) ({ vm.retry(message.id) }) else null,
-                                onEdit = if (message.role == "user" && message.id == chat.messages.lastOrNull { it.role == "user" }?.id) ({ text -> vm.edit(message.id, text) }) else null)
+                                onEdit = if (message.role == "user" && message.id == chat.messages.lastOrNull { it.role == "user" }?.id) ({ text -> vm.edit(message.id, text) }) else null,
+                                outlineLoading = message.id in chat.loadingBlocks,
+                                outlineFailed = message.id in chat.blockErrors,
+                                onLoadBlocks = if (message.outline) ({ vm.loadMessageBlocks(message.id) }) else null)
                         }
                         if (chat.live != null) item("live-${chat.live.runId}") {
                             LiveMessage(vm, (chat.liveModel ?: chat.conversation.choice.model).takeIf { it.isNotBlank() }?.let { model ->

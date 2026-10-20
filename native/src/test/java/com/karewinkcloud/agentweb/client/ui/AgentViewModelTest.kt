@@ -934,6 +934,94 @@ class AgentViewModelTest {
         assertEquals(started, vm.state.value.chat!!.live!!.startedAt)
     }
 
+    @Test fun openingAStepOfAnOutlineMessageFetchesItsBlocksOnceAndReplacesThem() = modelTest {
+        val outline = ChatMessage("2", "assistant", listOf(
+            ChatBlock.Thought("", durationMs = 3000, status = StepStatus.COMPLETE, chars = 120),
+            ChatBlock.Tool("t", "Bash", """{"command":"ls"}""", result = "", status = StepStatus.COMPLETE, resultChars = 4096)), outline = true)
+        repo.getDetail = { id, _ -> detail(id).copy(messages = listOf(message("1"), outline)) }
+        val full = listOf(ChatBlock.Thought("look", durationMs = 3000, status = StepStatus.COMPLETE),
+            ChatBlock.Tool("t", "Bash", """{"command":"ls"}""", result = "a.txt", status = StepStatus.COMPLETE))
+        repo.blocksAction = { _, _ -> full }
+        vm.open(conversation("one")); runCurrent()
+        vm.loadMessageBlocks("2"); vm.loadMessageBlocks("2"); runCurrent()
+        assertEquals(listOf("one" to "2"), repo.blockCalls)
+        val loaded = vm.state.value.chat!!.messages.single { it.id == "2" }
+        assertEquals(full, loaded.blocks)
+        assertFalse(loaded.outline)
+        assertTrue(vm.state.value.chat!!.loadingBlocks.isEmpty())
+        // The message is complete now: another step of it never asks again.
+        vm.loadMessageBlocks("2"); runCurrent()
+        assertEquals(1, repo.blockCalls.size)
+        // A fresh outline page of the same chat keeps the steps already fetched.
+        vm.reload(); runCurrent()
+        assertEquals(full, vm.state.value.chat!!.messages.single { it.id == "2" }.blocks)
+        assertEquals(1, repo.blockCalls.size)
+    }
+    @Test fun aFailedStepFetchCanBeTriedAgain() = modelTest {
+        val outline = ChatMessage("2", "assistant", listOf(
+            ChatBlock.Thought("", durationMs = 3000, status = StepStatus.COMPLETE, chars = 120)), outline = true)
+        repo.getDetail = { id, _ -> detail(id).copy(messages = listOf(outline)) }
+        repo.blocksAction = { _, _ -> throw IOException("down") }
+        vm.open(conversation("one")); runCurrent()
+        vm.loadMessageBlocks("2"); runCurrent()
+        assertEquals(setOf("2"), vm.state.value.chat!!.blockErrors)
+        assertTrue(vm.state.value.chat!!.loadingBlocks.isEmpty())
+        repo.blocksAction = { _, _ -> listOf(ChatBlock.Thought("look", durationMs = 3000, status = StepStatus.COMPLETE)) }
+        vm.loadMessageBlocks("2"); runCurrent()
+        assertTrue(vm.state.value.chat!!.blockErrors.isEmpty())
+        assertFalse(vm.state.value.chat!!.messages.single().outline)
+    }
+    @Test fun chatsArePrefetchedOnlyAfterTheListIsShown() = modelTest {
+        // A fresh view model: its first list read must see these rows (the one from setUp ran already).
+        val fresh = FakeRepository().apply {
+            list = listOf(conversation("one"), conversation("two")).map { it.copy(messageCount = 0) }
+        }
+        val vm = AgentViewModel(fresh, ModelChoice("a", "model")) { }
+        store.put("prefetch", vm)
+        runCurrent(); advanceUntilIdle()
+        assertTrue(fresh.detailCalls.isEmpty())
+        vm.listShown(); advanceUntilIdle()
+        assertEquals(listOf("one", "two"), fresh.detailCalls)
+    }
+    @Test fun openingAChatStopsTheBackgroundWarmOfAnother() = modelTest {
+        val gate = CompletableDeferred<Unit>()
+        val fresh = FakeRepository().apply {
+            list = listOf(conversation("one"), conversation("two"), conversation("three")).map { it.copy(messageCount = 0) }
+            getDetail = { id, _ -> if (id == "one") gate.await(); AgentViewModelTest.detail(id) }
+        }
+        val vm = AgentViewModel(fresh, ModelChoice("a", "model")) { }
+        store.put("prefetch-cancel", vm)
+        runCurrent()
+        vm.listShown(); runCurrent()
+        assertEquals(listOf("one"), fresh.detailCalls)  // the warm is on "one", held open by the gate
+        vm.open(conversation("two")); runCurrent()  // the user's own chat comes first
+        gate.complete(Unit); runCurrent()
+        advanceTimeBy(5_000); runCurrent()
+        assertFalse(fresh.detailCalls.contains("three"))  // the cancelled warm never reached the next chat
+        assertEquals(1, fresh.detailCalls.count { it == "two" })
+    }
+    @Test fun prefetchWaitsWhileTheOpenedChatIsLoading() = modelTest {
+        val gate = CompletableDeferred<Unit>()
+        val fresh = FakeRepository().apply {
+            list = listOf(conversation("one"), conversation("two"), conversation("three")).map { it.copy(messageCount = 0) }
+            // Qualified: an unqualified detail(id) inside the fake resolves to its own override and recurses.
+            getDetail = { id, _ -> if (id == "one") gate.await(); AgentViewModelTest.detail(id) }
+        }
+        val vm = AgentViewModel(fresh, ModelChoice("a", "model")) { }
+        store.put("prefetch-wait", vm)
+        runCurrent()
+        vm.open(conversation("one")); runCurrent()
+        assertTrue(vm.state.value.chat!!.loading)
+        vm.listShown()
+        advanceTimeBy(1_000); runCurrent()
+        // The chat the user opened is still loading: no other chat's history is read behind it.
+        assertEquals(listOf("one"), fresh.detailCalls)
+        gate.complete(Unit); runCurrent(); advanceUntilIdle()
+        assertEquals(1, fresh.detailCalls.count { it == "one" })
+        assertTrue(fresh.detailCalls.contains("two"))
+        assertTrue(fresh.detailCalls.indexOf("two") < fresh.detailCalls.indexOf("three"))
+    }
+
     private class FakeRepository : AgentRepository {
         override val authenticationRequired = MutableStateFlow(false)
         var readCalls = 0
@@ -977,7 +1065,17 @@ class AgentViewModelTest {
         override suspend fun saveConversations(rows: List<Conversation>) { saved += rows }
         override suspend fun preview(id: String): ConversationDetail { previewCalls += id; return detail(id, null) }
         override suspend fun createConversation(choice: ModelChoice): Conversation { createCalls++; return create() }
-        override suspend fun detail(id: String, cursor: String?) = getDetail(id, cursor)
+        val detailCalls = mutableListOf<String>()
+        override suspend fun detail(id: String, cursor: String?): ConversationDetail {
+            detailCalls += id
+            return getDetail(id, cursor)
+        }
+        val blockCalls = mutableListOf<Pair<String, String>>()
+        var blocksAction: suspend (String, String) -> List<ChatBlock> = { _, _ -> emptyList() }
+        override suspend fun messageBlocks(conversationId: String, messageId: String): List<ChatBlock> {
+            blockCalls += conversationId to messageId
+            return blocksAction(conversationId, messageId)
+        }
         var side: suspend (String, String, List<SideQuestion>) -> String = { _, question, _ -> "answer: $question" }
         override suspend fun sideQuestion(conversationId: String, question: String, history: List<SideQuestion>) =
             side(conversationId, question, history)

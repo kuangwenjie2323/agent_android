@@ -228,9 +228,10 @@ fun turnPieces(blocks: List<ChatBlock>): List<TurnPiece> {
     blocks.forEachIndexed { index, block ->
         val step = block is ChatBlock.Thought || (block is ChatBlock.Tool && !block.name.endsWith("ask_user"))
         when {
-            // A finished thought with no words that took under a second tells the reader nothing.
+            // A finished thought with no words that took under a second tells the reader nothing. An outline
+            // placeholder is kept even then: its words were left out, and opening it fetches them.
             block is ChatBlock.Thought && block.status != StepStatus.RUNNING && block.content.isBlank() &&
-                (block.durationMs ?: 0) < 1000 -> Unit
+                (block.durationMs ?: 0) < 1000 && (block.chars ?: 0) == 0 -> Unit
             step -> { if (work.isEmpty()) first = index; work += block }
             // The ask_user call is shown as its question card, never as a step.
             block is ChatBlock.Tool -> Unit

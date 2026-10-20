@@ -55,6 +55,9 @@ interface AgentRepository {
     suspend fun registerProject(root: String, name: String): Project = error("Project registration unavailable")
     suspend fun fork(request: ForkRequest): ForkResponse = error("Conversation variants unavailable")
     suspend fun detail(id: String, cursor: String? = null): ConversationDetail
+    /** One message's full blocks, for a step of an outline page that the user opened; compact, never outline. */
+    suspend fun messageBlocks(conversationId: String, messageId: String): List<ChatBlock> =
+        throw ApiException(404, ClientError("Full steps are not available on this server.", "not_found", false))
     suspend fun preview(id: String): ConversationDetail = detail(id)
     fun follow(conversationId: String, runId: String?, send: SendRequest? = null, previous: TurnState? = null): Flow<TurnSnapshot>
     suspend fun stop(conversationId: String, controlId: String): JsonObject
@@ -222,10 +225,17 @@ class HttpAgentRepository(
         })
     }
 
-    internal suspend fun json(path: String, body: JsonObject? = null, timeoutSeconds: Long? = null): JsonObject = withContext(Dispatchers.IO) {
+    internal suspend fun json(path: String, body: JsonObject? = null, timeoutSeconds: Long? = null): JsonObject =
+        jsonBody(path, body, timeoutSeconds)
+
+    /** [json], handing the decoded body to [onBody] (a history page measures it for diagnostics). */
+    private suspend fun jsonBody(path: String, body: JsonObject? = null, timeoutSeconds: Long? = null,
+        onBody: ((String) -> Unit)? = null): JsonObject = withContext(Dispatchers.IO) {
         execute(request(path, body), timeoutSeconds) { response ->
             validate(response)
-            runCatching { wireJson.parseToJsonElement(response.body?.string().orEmpty()) as JsonObject }
+            val text = response.body?.string().orEmpty()
+            onBody?.invoke(text)
+            runCatching { wireJson.parseToJsonElement(text) as JsonObject }
                 .getOrElse { throw ApiException(response.code, ClientError("The server returned an unreadable response.")) }
         }
     }
@@ -420,13 +430,19 @@ class HttpAgentRepository(
     }
     override suspend fun detail(id: String, cursor: String?): ConversationDetail {
         require(cursor == null || (cursor.isNotEmpty() && cursor.all { it in '0'..'9' }))
-        val page = json("/api/chat/conversations/${segment(id)}?compact=1&messageLimit=40" +
-            (cursor?.let { "&messageCursor=$it" } ?: ""))
+        // Outline: thinking text and command output stay on the server until a step is opened, which keeps a
+        // cold start's first page small enough not to hold up the chat the user actually opens.
+        var bytes = 0
+        val page = jsonBody("/api/chat/conversations/${segment(id)}?compact=1&outline=1&messageLimit=40" +
+            (cursor?.let { "&messageCursor=$it" } ?: ""), onBody = { bytes = it.toByteArray(Charsets.UTF_8).size })
         val detail = ConversationDetail.from(page)
+        detail.pageBytes = bytes
         // Only the newest page is shown at once on a later cold start; older pages are always read live.
         if (cursor == null) saveChatPage(id, page)
         return detail
     }
+    override suspend fun messageBlocks(conversationId: String, messageId: String): List<ChatBlock> =
+        historyBlocks(json("/api/chat/conversations/${segment(conversationId)}/messages/${segment(messageId)}/blocks"))
     override suspend fun fork(request: ForkRequest) = ForkResponse.from(
         json("/api/chat/conversations/${segment(request.conversationId)}/forks", request.json()))
     override suspend fun preview(id: String) = ConversationDetail.from(json("/api/chat/conversations/${segment(id)}?compact=1&messageLimit=1"))

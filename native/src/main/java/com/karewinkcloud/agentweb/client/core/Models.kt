@@ -155,11 +155,13 @@ data class TaskOutput(val text: String, val truncated: Boolean = false, val size
 
 sealed interface ChatBlock {
     data class Text(val content: String) : ChatBlock
+    /** [chars] is how long the thought's text was when an outline page left it out (null when [content] is here). */
     data class Thought(val content: String = "", val startedAt: Long = 0, val durationMs: Long? = null,
-        val status: StepStatus = StepStatus.RUNNING) : ChatBlock
+        val status: StepStatus = StepStatus.RUNNING, val chars: Int? = null) : ChatBlock
+    /** [resultChars] is how long the output was when an outline page left it out (null when [result] is here). */
     data class Tool(val id: String, val name: String, val input: String = "", val result: String? = null,
         val status: StepStatus = StepStatus.RUNNING, val startedAt: Long = 0, val durationMs: Long? = null, val diff: String? = null,
-        val task: BackgroundTask? = null) : ChatBlock
+        val task: BackgroundTask? = null, val resultChars: Int? = null) : ChatBlock
     /** A background task ended here in the turn (Claude Code announces it, then answers it). */
     data class TaskNotice(val taskId: String, val toolId: String, val status: String, val description: String = "",
         val exitCode: Int? = null) : ChatBlock
@@ -184,7 +186,8 @@ fun historyBlocks(j: JsonObject): List<ChatBlock> {
         when (b.string("type")) {
             "text" -> ChatBlock.Text(b.string("content").orEmpty())
             "thinking" -> ChatBlock.Thought(b.string("content").orEmpty(), durationMs =
-                (b["duration"] as? JsonPrimitive)?.doubleOrNull?.times(1000)?.toLong(), status = StepStatus.COMPLETE)
+                (b["duration"] as? JsonPrimitive)?.doubleOrNull?.times(1000)?.toLong(), status = StepStatus.COMPLETE,
+                chars = b.long("chars")?.toInt())
             "tool" -> ChatBlock.Tool(
                 b.string("id") ?: "history-$index", b.string("name").orEmpty().ifBlank { "Tool" },
                 b["input"]?.toString().orEmpty(), b.string("result"),
@@ -194,6 +197,7 @@ fun historyBlocks(j: JsonObject): List<ChatBlock> {
                 durationMs = b.long("duration_ms")?.coerceAtLeast(0), diff = b.string("diff"),
                 // A task still "running" in a saved turn ended with it (the CLI stops its tasks when it exits).
                 task = BackgroundTask.from(b.obj("task"))?.let { if (it.running) it.copy(status = "stopped") else it },
+                resultChars = b.long("resultChars")?.toInt(),
             )
             "task_notice" -> ChatBlock.TaskNotice(b.string("task_id").orEmpty(), b.string("tool_id").orEmpty(),
                 b.string("status") ?: "completed", b.string("description").orEmpty(), b.long("exit_code")?.toInt())
@@ -223,11 +227,14 @@ fun answerText(blocks: List<ChatBlock>): String =
     blocks.filterIsInstance<ChatBlock.Text>().map { it.content.trim('\n') }.filter(String::isNotBlank).joinToString("\n\n")
 
 data class ChatMessage(val id: String, val role: String, val blocks: List<ChatBlock>, val model: String? = null,
-    val usage: TurnUsage? = null) {
+    val usage: TurnUsage? = null,
+    /** Its blocks came from an outline page: thinking text and tool output were left out of them. */
+    val outline: Boolean = false) {
     val text get() = answerText(blocks)
     companion object {
         fun from(j: JsonObject) = ChatMessage(j.string("id").orEmpty(), j.string("role") ?: "assistant", historyBlocks(j),
-            j.string("model") ?: j.obj("usage")?.string("model"), TurnUsage.from(j.obj("usage")))
+            j.string("model") ?: j.obj("usage")?.string("model"), TurnUsage.from(j.obj("usage")),
+            outline = j.boolean("outline") == true)
     }
 }
 data class QueueItem(val id: String, val text: String) {
@@ -237,6 +244,10 @@ data class ConversationDetail(
     val conversation: Conversation, val messages: List<ChatMessage>, val queued: List<QueueItem>,
     val queuePaused: Boolean, val olderCount: Int, val nextCursor: String?,
 ) {
+    /** The page's size in bytes as the server sent it; known only for a live read, never for a saved one. */
+    var pageBytes: Int? = null
+    /** Whether this page came as an outline (thinking text and tool output left out). */
+    val outline get() = messages.any { it.outline }
     companion object {
         fun from(j: JsonObject) = ConversationDetail(
             Conversation.from(requireNotNull(j.obj("conversation"))), j.objects("messages").map(ChatMessage::from),

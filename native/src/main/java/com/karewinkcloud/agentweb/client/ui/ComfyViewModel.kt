@@ -113,7 +113,11 @@ class ComfyViewModel(private var repository: ComfyRepository, private var pendin
         observeAuth()
         if (foreground) refresh()
     }
-    /** Load the catalog and history before the tab is first opened. */
+    /**
+     * Loads the catalog and the creations before the tab is first opened, so a creation still running from before
+     * a restart is followed when the app goes to the background. Called a few seconds after start, not at once:
+     * on a slow link it would hold up the chat the user opened.
+     */
     fun preload() { if (!state.value.initialized) refresh() }
     fun setForeground(value: Boolean) {
         foreground = value

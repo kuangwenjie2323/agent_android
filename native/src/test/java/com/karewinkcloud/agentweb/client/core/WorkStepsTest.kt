@@ -1,5 +1,6 @@
 package com.karewinkcloud.agentweb.client.core
 
+import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -72,6 +73,102 @@ class WorkStepsTest {
         assertEquals(listOf(TurnPiece.Work(listOf(thinking), 0)), turnPieces(listOf(thinking)))
         val long = ChatBlock.Thought("", status = StepStatus.COMPLETE, durationMs = 2500)
         assertEquals(listOf(TurnPiece.Work(listOf(long), 0)), turnPieces(listOf(long)))
+    }
+
+    @Test fun anOutlineThoughtThatLeftWordsBehindStaysInTheTimeline() {
+        val kept = ChatBlock.Thought("", status = StepStatus.COMPLETE, durationMs = 600, chars = 140)
+        assertEquals(listOf(TurnPiece.Work(listOf(kept), 0)), turnPieces(listOf(kept)))
+        // No words to fetch: the same instant thought, empty on the server too, stays out.
+        assertTrue(turnPieces(listOf(kept.copy(chars = 0))).isEmpty())
+    }
+
+    /** What the folded row reads from a turn: counts by kind, diff sizes, files and thinking time. */
+    private data class TurnShape(val kinds: List<StepKind>, val added: Int, val removed: Int, val files: List<String>,
+        val failed: Int, val thoughtMs: Long)
+    private fun shape(blocks: List<ChatBlock>): TurnShape {
+        val tools = blocks.filterIsInstance<ChatBlock.Tool>()
+        val diffs = tools.flatMap(::stepDiffs)
+        return TurnShape(tools.map { stepSummary(it).kind }, diffs.sumOf { it.added }, diffs.sumOf { it.removed },
+            diffs.map { it.path }.filter(String::isNotBlank).distinct().sorted(),
+            tools.count { it.status == StepStatus.ERROR },
+            blocks.filterIsInstance<ChatBlock.Thought>().sumOf { it.durationMs ?: 0L })
+    }
+
+    private fun turnMessage() = buildJsonObject {
+        put("id", "2"); put("role", "assistant")
+        putJsonArray("blocks") {
+            addJsonObject { put("type", "thinking"); put("content", "Look at the workspace first"); put("duration", 2.2) }
+            addJsonObject {
+                put("type", "tool"); put("id", "b1"); put("name", "Bash")
+                putJsonObject("input") {
+                    put("command", "find . -maxdepth 3 | sort | head -200 " + "x".repeat(300)); put("description", "List the workspace")
+                }
+                put("result", "a.txt\nb.txt\nc.txt\n".repeat(50))
+            }
+            addJsonObject {
+                put("type", "tool"); put("id", "e1"); put("name", "Edit")
+                putJsonObject("input") { put("file_path", "/a/main.py"); put("old_string", "x = 1\ny = 2"); put("new_string", "x = 1\ny = 3") }
+                put("result", "Edited main.py")
+            }
+            addJsonObject {
+                put("type", "tool"); put("id", "w1"); put("name", "Write")
+                putJsonObject("input") { put("file_path", "/a/new.md"); put("content", "# Title\nbody\n") }
+                put("result", "Wrote new.md")
+            }
+            addJsonObject {
+                put("type", "tool"); put("id", "f1"); put("name", "Bash")
+                putJsonObject("input") { put("command", "false") }
+                put("result", "Exit code 1"); put("is_error", true)
+            }
+            addJsonObject {
+                put("type", "task_notice"); put("task_id", "bz1"); put("tool_id", "b2"); put("status", "completed")
+                put("description", "Sample sockets for 15 minutes " + "y".repeat(300))
+            }
+            addJsonObject { put("type", "text"); put("content", "Done.") }
+        }
+    }
+
+    /** The server's outline rules for a history page: the summary's inputs stay, the long text moves to sizes. */
+    private fun outline(message: JsonObject): JsonObject {
+        val bashLike = setOf("bash", "shell", "exec", "exec_command", "local_shell", "run_command", "command_execution")
+        val blocks = message.array("blocks").map { element ->
+            val block = element as JsonObject
+            when (block.string("type")) {
+                "thinking" -> JsonObject(block + ("content" to JsonPrimitive("")) +
+                    ("chars" to JsonPrimitive(block.string("content").orEmpty().length)))
+                "tool" -> {
+                    val input = block.obj("input")?.let { raw ->
+                        val command = raw.string("command")
+                        if (block.string("name").orEmpty().lowercase() in bashLike && command != null)
+                            JsonObject(raw + ("command" to JsonPrimitive(command.take(160)))) else raw
+                    }
+                    val keepResult = block.boolean("is_error") == true || !block.string("diff").isNullOrBlank()
+                    val sizes: Map<String, JsonElement> = if (keepResult) emptyMap() else mapOf(
+                        "result" to JsonPrimitive(""), "resultChars" to JsonPrimitive(block.string("result").orEmpty().length))
+                    JsonObject(block + mapOf("input" to (input ?: JsonNull)) + sizes)
+                }
+                "task_notice" -> JsonObject(block.mapValues { (key, value) ->
+                    if (key in setOf("description", "content") && value is JsonPrimitive) JsonPrimitive(value.content.take(160)) else value
+                })
+                else -> block
+            }
+        }
+        return JsonObject(message + mapOf("outline" to JsonPrimitive(true), "blocks" to JsonArray(blocks)))
+    }
+
+    @Test fun anOutlineTurnSumsUpLikeTheFullOne() {
+        val full = ChatMessage.from(turnMessage())
+        val reduced = ChatMessage.from(outline(turnMessage()))
+        assertFalse(full.outline); assertTrue(reduced.outline)
+        // Counts, edits +/-, files and thinking seconds read the same on either page.
+        assertEquals(shape(full.blocks), shape(reduced.blocks))
+        assertEquals(turnPieces(full.blocks).size, turnPieces(reduced.blocks).size)
+        // The long text really was left out, with its size kept for the summary and the fetch.
+        val thought = reduced.blocks.filterIsInstance<ChatBlock.Thought>().first()
+        assertEquals("", thought.content); assertEquals(27, thought.chars)
+        val bash = reduced.blocks.filterIsInstance<ChatBlock.Tool>().first()
+        assertEquals("", bash.result); assertTrue(bash.resultChars!! > 0)
+        assertEquals("List the workspace", stepSummary(bash).target)
     }
 
     @Test fun backgroundTasksAreRecognisedAndNamed() {

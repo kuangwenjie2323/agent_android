@@ -18,6 +18,10 @@ data class ChatState(
     val queued: List<QueueItem> = emptyList(), val queuePaused: Boolean = false,
     val olderCount: Int = 0, val nextCursor: String? = null,
     val loading: Boolean = true, val loadingOlder: Boolean = false,
+    /** Outline messages whose full steps are being fetched because the user opened one of their steps. */
+    val loadingBlocks: Set<String> = emptySet(),
+    /** Outline messages whose full steps could not be read; opening one of their steps tries once more. */
+    val blockErrors: Set<String> = emptySet(),
     val draft: String = "", val live: TurnState? = null,
     /** Quick replies for the latest answer (message id -> chips); cleared once the user sends. */
     val suggestionsFor: String? = null, val suggestions: List<String> = emptyList(),
@@ -142,6 +146,9 @@ class AgentViewModel(
         var changed: Boolean? = null
         var firstVisible: Int? = null
         var total: Int? = null
+        /** Whether the fresh page came as an outline, and its size in bytes. */
+        var outline: Boolean? = null
+        var pageBytes: Int? = null
         var written = false
     }
     /** The chat open being measured; one line per open (see [writeOpenReport]). */
@@ -156,6 +163,8 @@ class AgentViewModel(
     // Read-only PC session history from this app run, shown at once while it refreshes.
     private val claudeHistoryCache = java.util.concurrent.ConcurrentHashMap<String, ClaudePreviewState>()
     private var prefetchJob: Job? = null
+    /** Whether the chat list has appeared on screen: only then may the background prefetch start. */
+    @Volatile private var listVisible = false
     private fun cacheChat() {
         state.value.chat?.takeIf { !it.loading && it.error == null }?.let { chat ->
             chatCache[chat.conversation.id] = CachedChat(chat.messages.filterNot { it.id.startsWith("pending-") }, chat.olderCount, chat.nextCursor,
@@ -329,15 +338,32 @@ class AgentViewModel(
         prefetchRecent(owner)
     }
 
+    /** The chat list appeared on screen; the recent chats may now be warmed in the background. */
+    fun listShown() {
+        listVisible = true
+        prefetchRecent(epoch)
+    }
+
+    /** The chat the user opened has a read on its way that a background warm must not hold up. */
+    private fun openPageLoading(): Boolean {
+        val chat = state.value.chat ?: return false
+        return chat.loading || (chat.error == null && openReport?.let { it.id == chat.conversation.id && it.freshAt == null } == true)
+    }
+
     /** Warm the history cache for the few most recent chats, so their first open is instant. */
     private fun prefetchRecent(owner: Long) {
-        if (prefetchJob?.isActive == true) return
+        if (!listVisible || prefetchJob?.isActive == true) return
         val source = repository
         // The rows actually shown (empty placeholder chats are hidden), most recent first.
         val ids = state.value.sections.flatMap { it.conversations }.map { it.id }.filterNot { chatCache.containsKey(it) }.take(3)
+        if (ids.isEmpty()) return
         prefetchJob = viewModelScope.launch {
             for (id in ids) {
-                if (owner != epoch || state.value.chat?.conversation?.id == id) continue
+                // The chat the user opened comes first: no prefetch request while its first page is loading
+                // (the saved page may already be up while the fresh one is still on its way).
+                while (owner == epoch && openPageLoading()) delay(1_000)
+                if (owner != epoch) return@launch
+                if (state.value.chat?.conversation?.id == id) continue
                 try {
                     // The saved page makes the first open instant even before this network read lands.
                     if (!chatCache.containsKey(id)) source.cachedDetail(id)?.let { saved ->
@@ -424,6 +450,8 @@ class AgentViewModel(
     fun open(conversation: Conversation, fresh: Boolean = false) {
         if (state.value.signInRequired) return
         flushOpenReport()
+        // The chat the user just opened comes first: stop warming another chat's saved history.
+        prefetchJob?.cancel()
         val openedAt = monotonicMillis()
         markSeen(conversation.id, maxOf(conversation.updatedAt, System.currentTimeMillis() / 1000))
         saveDraft()
@@ -503,6 +531,7 @@ class AgentViewModel(
             "firstContentMs" to report.firstContentAt?.let { it - report.startedAt },
             "freshMs" to report.freshAt?.let { it - report.startedAt },
             "changed" to report.changed,
+            "outline" to report.outline, "pageBytes" to report.pageBytes,
             "firstVisible" to report.firstVisible, "total" to report.total)
         if (openReport === report) openReport = null
     }
@@ -789,9 +818,6 @@ class AgentViewModel(
         refreshClaudeSessions()
     }
 
-    /** Load the PC session list before the Claude Code tab is first opened. */
-    fun preloadClaudeSessions() { if (state.value.claude.sessions.isEmpty()) refreshClaudeSessions() }
-
     fun refreshClaudeSessions(older: Boolean = false) {
         if (state.value.signInRequired) return
         if (claudeListJob?.isActive == true) return
@@ -949,8 +975,13 @@ class AgentViewModel(
                 }
                 val firstId = detail.messages.firstOrNull()?.id?.toLongOrNull()
                 val prefix = if (firstId == null) emptyList() else priorChat.messages.filter { (it.id.toLongOrNull() ?: Long.MAX_VALUE) < firstId }
+                val shownById = priorChat.messages.associateBy { it.id }
                 val messages = prefix + detail.messages.map { message ->
-                    message.copy(model = message.model ?: messageModels["$id:${message.id}"],
+                    // A message whose full steps were fetched (a step was opened) keeps them when a fresh outline page
+                    // brings the same message back as an outline; otherwise the open step would lose its text again.
+                    val full = shownById[message.id]?.takeIf { !it.outline && message.outline && it.blocks.size == message.blocks.size }
+                    (if (full != null) message.copy(blocks = full.blocks, outline = false) else message).copy(
+                        model = message.model ?: messageModels["$id:${message.id}"],
                         usage = messageUsage["$id:${message.id}"]?.merge(message.usage) ?: message.usage)
                 }
                 // A cold open served from the disk copy can get back exactly what it already shows.
@@ -972,8 +1003,17 @@ class AgentViewModel(
                 if (next != priorChat) editChat(owner) { next }
                 if (open != null) {
                     val now = monotonicMillis()
+                    // Everything the line reports is known before it can be written below: the fresh page's
+                    // arrival may complete the line at once (changed used to be set only after that write).
+                    if (open.source == null) {
+                        open.source = "none"; open.firstCount = messages.size
+                        if (messages.isNotEmpty()) open.firstContentAt = now
+                    }
+                    if (open.changed == null) open.changed = !sameContent
                     if (open.freshAt == null) {
                         open.freshAt = now
+                        open.outline = detail.outline
+                        open.pageBytes = detail.pageBytes
                         // The first layout is usually known by now; otherwise let the screen report it,
                         // with a fallback so leaving the chat at once still leaves the line in the log.
                         if (open.firstVisible != null || messages.isEmpty()) writeOpenReport(open) else {
@@ -981,11 +1021,6 @@ class AgentViewModel(
                             viewModelScope.launch { delay(750); writeOpenReport(report) }
                         }
                     }
-                    if (open.source == null) {
-                        open.source = "none"; open.firstCount = messages.size
-                        if (messages.isNotEmpty()) open.firstContentAt = now
-                    }
-                    if (open.changed == null) open.changed = !sameContent
                 }
                 cacheChat()
                 resolveParentTitle(owner)
@@ -1302,6 +1337,35 @@ class AgentViewModel(
                 editChat(owner) { current -> current.copy(messages = (detail.messages + current.messages).distinctBy { it.id },
                     olderCount = detail.olderCount, nextCursor = detail.nextCursor, loadingOlder = false) }
             } catch (e: Exception) { editChat(owner) { it.copy(loadingOlder = false, error = problem(e)) } }
+        }
+    }
+
+    /**
+     * A step of an outline message was opened: fetch that message's full blocks once (thinking text and
+     * command output are left out of an outline page), then put them in the chat and its memory cache.
+     */
+    fun loadMessageBlocks(messageId: String) {
+        val chat = state.value.chat ?: return
+        val message = chat.messages.firstOrNull { it.id == messageId } ?: return
+        if (!message.outline || messageId in chat.loadingBlocks) return
+        val owner = generation
+        val source = repository
+        val conversationId = chat.conversation.id
+        editChat(owner) { it.copy(loadingBlocks = it.loadingBlocks + messageId, blockErrors = it.blockErrors - messageId) }
+        viewModelScope.launch {
+            try {
+                val blocks = source.messageBlocks(conversationId, messageId)
+                editChat(owner) { current -> current.copy(
+                    messages = current.messages.map { if (it.id == messageId) it.copy(blocks = blocks, outline = false) else it },
+                    loadingBlocks = current.loadingBlocks - messageId) }
+                chatCache.computeIfPresent(conversationId) { _, cached -> cached.copy(messages =
+                    cached.messages.map { if (it.id == messageId) it.copy(blocks = blocks, outline = false) else it }) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                editChat(owner) { it.copy(loadingBlocks = it.loadingBlocks - messageId, blockErrors = it.blockErrors + messageId) }
+                Diagnostics.warn("chat", "step text not loaded", "conversation" to conversationId,
+                    "message" to messageId, "error" to Diagnostics.describe(e))
+            }
         }
     }
 
