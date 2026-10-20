@@ -57,3 +57,34 @@ the process was killed).
 Still open: T5 split of AgentViewModel (design first); heavy chats as turn summaries (the heaviest outline page is
 still 123 KB gzip: 482 steps); settings and the sign-in key loading asynchronously; a direct LAN connection at
 home (the user's decision: it opens a listener on the home network).
+
+## Design: splitting AgentViewModel (T6)
+
+`AgentViewModel.kt` is 1,597 lines with 64 public functions and 43 private fields after the night's work. Every
+feature lands in it, so unrelated changes collide (the undo/archive race, the stale-pager and hand-over fixes all
+touched the same follow code). The split keeps one public face so no screen changes.
+
+**Shape.** `AgentViewModel` stays the class the UI holds and keeps `state: StateFlow<ClientState>`; it becomes a
+facade that forwards each call to one owner. Owners are plain classes (not ViewModels) built by it with what they
+need: the repository, the `viewModelScope`, the generation/epoch guards, and a small `StateHost` that reads
+`ClientState` and applies an update to the slice the owner is responsible for.
+
+| Owner | Takes over |
+|---|---|
+| `MemoryController` | memory, memoryFile, consolidateMemory |
+| `ClaudeSessionsController` | showClaudeSessions, refreshClaudeSessions, openClaudeSession, refreshClaudePreview, olderClaudeHistory, continueClaudeSession, its history cache |
+| `ArchiveController` | openArchive, closeArchive, setPinned, setArchived, setArchiveDays, deleteConversation, the pending-change ledger and recentlyArchived |
+| `ConversationListController` | refresh, refreshList, search (with the content search), showEmpty, loadPreviews, listShown and prefetch, adoptSeen, projects |
+| `ChatComposer` | draft, attachments (read/add/remove/owner/loading/failure), the saved drafts per chat |
+| `ChatStream` | open, openById, back, reload, loadAndFollow, follow, yieldStream, onBackground/onForeground, the memory and disk caches, open diagnostics, loadOlder, loadMessageBlocks |
+| `ChatControls` | send, steer, queue, resumeQueue, stop, retry, edit, forks/openParent, answer, side questions, suggestions, taskOutput/stopTask, readFile |
+
+**Steps** (each one DeepSeek task, behaviour unchanged, the existing 440+ tests green and moved next to their owner
+where they test only it; no screen file changes; one task at a time, reviewed and phone-checked before the next):
+1. MemoryController and ClaudeSessionsController (least coupled).
+2. ArchiveController.
+3. ConversationListController.
+4. ChatComposer.
+5. ChatStream and ChatControls together (they share the open chat's lifecycle; the riskiest step, last).
+
+Not to do in the split: changing behaviour, renaming state fields the UI reads, or touching the repository.
