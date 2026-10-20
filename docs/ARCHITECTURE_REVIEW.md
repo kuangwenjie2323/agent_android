@@ -41,3 +41,19 @@ restarted mid-reply".
 
 Release checks gain a case for each fixed bug (the 420452 return path, a reopened running turn, a chat opened after
 the process was killed).
+
+## Status, 2026-10-21 02:00
+
+| Task | Commits | Measured |
+|---|---|---|
+| Crash of 420452 | 742dc72 (from the AgentWeb DeepSeek chat), a7f588c | The return path (Home 20 s, back) no longer crashes |
+| T1 chat pages on disk | fe1893a | Cold open of a long chat: content after 65-70 ms from disk instead of 6.2 s; the fresh page no longer moves the screen |
+| T2 one stream per turn | 16a8aaa | Hand-over after 5 s: the follower resumed at event 57, not 0; one stream at a time; the answer was complete on return |
+| T3 main-thread safety | a7f588c, 6600891 | StrictMode logs only 8 known start-up disk reads (sign-in key, settings) |
+| T4 merged history replay | bb9f425 (server, live), 756d658 | Synthetic 30,000-delta turn: 34x fewer events, 14x fewer bytes; a resumed answer is no longer typed out again |
+| T5 outline pages | c4521e1 (server, live), a7118a8 | Real chats 2.0-2.9x fewer bytes; cold open fresh page 0.65 s (outline, night-time network) |
+| Send never resent after a broken handshake | 6600891 | A message whose TLS handshake broke is sent again instead of waiting 32 s and going back to the box |
+
+Still open: T5 split of AgentViewModel (design first); heavy chats as turn summaries (the heaviest outline page is
+still 123 KB gzip: 482 steps); settings and the sign-in key loading asynchronously; a direct LAN connection at
+home (the user's decision: it opens a listener on the home network).
