@@ -567,11 +567,14 @@ class HttpAgentRepository(
         var first = true
         var failures = 0
         var unsentPosts = 0
+        var merged = 0
         while (currentCoroutineContext().isActive) {
             val post = if (first) send else null
             first = false // Even a failure before headers must never replay the POST (unless it never left; below).
-            val request = if (post != null) request("/api/chat/message", post.json()) else
-                request("/api/chat/stream/${segment(conversationId)}", lastId = state?.lastEventId)
+            val request = (if (post != null) request("/api/chat/message", post.json()) else
+                request("/api/chat/stream/${segment(conversationId)}", lastId = state?.lastEventId))
+                // Replayed history may arrive as merged text/thinking runs; the live tail never is.
+                .newBuilder().header("AgentWeb-Coalesce", "1").build()
             try {
                 packets(request).collect { packet ->
                     when (packet) {
@@ -592,13 +595,17 @@ class HttpAgentRepository(
                             val before = state ?: throw StreamProtocolException("An event arrived before its run identity.")
                             val reduced = TurnReducer.reduce(before, packet.event, System.nanoTime() / 1_000_000)
                             state = reduced
-                            if (reduced.lastSequence > before.lastSequence) failures = 0
+                            if (reduced.lastSequence > before.lastSequence) {
+                                failures = 0
+                                if (packet.event.through != null) merged++
+                            }
                             emit(TurnSnapshot(reduced, if (reduced.done) Connection.COMPLETE else Connection.LIVE))
                         }
                     }
                 }
                 if (state?.done == true) {
-                    Diagnostics.event("stream", "done", "conversation" to conversationId, "lastSequence" to state?.lastSequence)
+                    Diagnostics.event("stream", "done", "conversation" to conversationId, "lastSequence" to state?.lastSequence,
+                        "merged" to merged)
                     return@flow
                 }
                 throw IOException("Stream ended before done.")
@@ -615,14 +622,14 @@ class HttpAgentRepository(
                 }
                 failures = (failures + 1).coerceAtMost(64)
                 Diagnostics.warn("stream", "reconnecting", "conversation" to conversationId, "failures" to failures,
-                    "lastSequence" to state?.lastSequence, "error" to Diagnostics.describe(e))
+                    "lastSequence" to state?.lastSequence, "merged" to merged, "error" to Diagnostics.describe(e))
                 state?.let { emit(TurnSnapshot(it, Connection.RECONNECTING)) }
                 delay(ReconnectPolicy.delayMillis(failures, reconnectDelayMs))
             } catch (e: ApiException) {
                 if (post == null && e.problem.retryable != false && ReconnectPolicy.retryStatus(e.status)) {
                     failures = (failures + 1).coerceAtMost(64)
                     Diagnostics.warn("stream", "reconnecting", "conversation" to conversationId, "failures" to failures,
-                        "lastSequence" to state?.lastSequence, "status" to e.status)
+                        "lastSequence" to state?.lastSequence, "merged" to merged, "status" to e.status)
                     state?.let { emit(TurnSnapshot(it, Connection.RECONNECTING)) }
                     delay(ReconnectPolicy.delayMillis(failures, reconnectDelayMs))
                     continue

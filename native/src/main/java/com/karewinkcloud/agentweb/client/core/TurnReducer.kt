@@ -127,7 +127,8 @@ object TurnReducer {
         }
         // Any sign of the model at work ends the wait (a follow-up turn for a finished task, or a reply).
         if (event.type in setOf("text", "thinking_start", "thinking", "tool_call")) backgroundWait = false
-        return state.copy(lastSequence = event.id.sequence, blocks = blocks, done = event.type == "done",
+        // A merged replay event stands for a whole run: it renders once but consumes up to through.
+        return state.copy(lastSequence = event.through ?: event.id.sequence, blocks = blocks, done = event.type == "done",
             usage = usage, startedAt = state.startedAt ?: now, finishedAt = if (event.type == "done") now else null,
             backgroundWait = backgroundWait)
     }

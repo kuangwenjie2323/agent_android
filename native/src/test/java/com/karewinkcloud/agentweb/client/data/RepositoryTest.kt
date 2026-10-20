@@ -251,12 +251,26 @@ class RepositoryTest {
         assertEquals("你好", snapshots.last().turn.text)
         assertTrue(snapshots.last().turn.done)
         assertTrue(snapshots.any { it.connection == Connection.RECONNECTING })
-        assertEquals("POST", next().method)
+        val post = next()
+        assertEquals("POST", post.method)
+        assertEquals("1", post.getHeader("AgentWeb-Coalesce"))
         val resumed = next()
         assertEquals("GET", resumed.method)
         assertEquals("/api/chat/stream/conversation", resumed.path)
         assertEquals("$control:1", resumed.getHeader("Last-Event-ID"))
+        assertEquals("1", resumed.getHeader("AgentWeb-Coalesce"))
         assertEquals(2, server.requestCount)
+    }
+    @Test fun aMergedReplayEventResumesAfterItsThroughSequence() = runBlocking {
+        server.enqueue(sse("id: $control:1\ndata: {\"type\":\"text\",\"seq\":1,\"content\":\"Hello world\",\"through\":3}\n\n"))
+        server.enqueue(sse(done(4)))
+        val last = repo.follow("conversation", control).toList().last()
+        assertEquals("Hello world", last.turn.text)
+        assertEquals(4L, last.turn.lastSequence)
+        assertEquals("GET", next().method)
+        val resumed = next()
+        assertEquals("GET", resumed.method)
+        assertEquals("$control:3", resumed.getHeader("Last-Event-ID"))
     }
     @Test fun aMessageWhoseHandshakeBrokeIsSentAgainButOnlyThen() = runBlocking {
         var posts = 0

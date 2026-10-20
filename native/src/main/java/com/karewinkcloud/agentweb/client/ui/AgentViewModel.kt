@@ -1078,7 +1078,9 @@ class AgentViewModel(
         if (owned(owner)) livePresentation.value = visibleInitial
         editChat(owner) { it.copy(live = visibleInitial, connection = Connection.CONNECTING, loading = false) }
         var latest: TurnSnapshot? = null
-        val pacer = StreamPacer()
+        // A resumed turn's text is already on screen: re-revealing it from nothing blanked the answer and typed it
+        // out again on every return to the app.
+        val pacer = StreamPacer().apply { prime(visibleInitial.blocks.sumOf { (it as? ChatBlock.Text)?.content?.length ?: 0 }) }
         val updates = Channel<Unit>(Channel.CONFLATED)
         var frameTime = 0L
         var arrivalTime = 0L

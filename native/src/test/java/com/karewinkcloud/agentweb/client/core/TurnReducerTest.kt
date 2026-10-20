@@ -115,6 +115,29 @@ class TurnReducerTest {
     @Test fun sequenceGapFailsClosed() {
         assertThrows(StreamProtocolException::class.java) { TurnReducer.reduce(initial, event(2, "text", "content" to "missing"), 0) }
     }
+    @Test fun aMergedReplayEventBuildsTheSameTurnAsItsSingleEvents() {
+        var oneByOne = initial
+        listOf("Hel", "lo ", "world").forEachIndexed { i, part ->
+            oneByOne = TurnReducer.reduce(oneByOne, event(i + 1, "text", "content" to part), i.toLong())
+        }
+        val merged = TurnReducer.reduce(initial, event(1, "text", "content" to "Hello world", "through" to 3), 0)
+        assertEquals(oneByOne.blocks, merged.blocks)
+        assertEquals(oneByOne.lastSequence, merged.lastSequence)
+        assertEquals("run:3", merged.lastEventId)
+    }
+    @Test fun anEventRightAfterAMergedRunContinuesFromThrough() {
+        var state = TurnReducer.reduce(initial, event(1, "text", "content" to "abc", "through" to 3), 0)
+        assertEquals(3L, state.lastSequence)
+        state = TurnReducer.reduce(state, event(4, "text", "content" to "d"), 1)
+        assertEquals("abcd", state.text)
+        assertEquals(4L, state.lastSequence)
+    }
+    @Test fun aGapAfterAMergedRunStillFailsClosed() {
+        val state = TurnReducer.reduce(initial, event(1, "text", "content" to "abc", "through" to 3), 0)
+        assertThrows(StreamProtocolException::class.java) {
+            TurnReducer.reduce(state, event(5, "text", "content" to "d"), 1)
+        }
+    }
     @Test fun foreignRunCannotMutateTurn() {
         assertThrows(StreamProtocolException::class.java) { TurnReducer.reduce(initial, event(1, "text", "content" to "x", run = "other"), 0) }
     }
