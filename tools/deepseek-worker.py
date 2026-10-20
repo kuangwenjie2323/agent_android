@@ -22,6 +22,18 @@ AGENTWEB_DIR = os.environ.get("AGENTWEB_DIR", "/home/karewink/claude/workagent/a
 SDK = os.environ.get("ANDROID_HOME", os.path.expanduser("~/.local/opt/android-sdk"))
 MODEL = "deepseek-flash[1m]"
 
+SERVER_RULES = """Rules for this task (binding):
+- You are a worker. The lead (Claude) wrote this brief, will review your diff and commits it. Do not commit, push,
+  stash, reset or check out branches, and do not revert changes you did not make.
+- Work only inside {cwd} (the AgentWeb server worktree). Never touch /home/karewink/claude/workagent (the live
+  checkout), the live server process, its database or its config, and never restart anything. No phone (no adb).
+- Test with: cd tests && python3 -m unittest discover -s . -p 'test_*.py' (run with NO_PROXY unset). Tests must not
+  touch real databases or real external APIs. Leave the suite green.
+- Match the surrounding code: its naming, comment density (short why-comments) and English text.
+- Finish with a short report: what you changed (files), why, the test results (counts), and anything you could not
+  verify or chose not to do.
+"""
+
 RULES = """Rules for this task (binding):
 - You are a worker. The lead (Claude) wrote this brief, will review your diff and commits it. Do not commit, push,
   stash, reset or check out branches, and do not revert changes you did not make.
@@ -65,7 +77,8 @@ def main():
     runs = os.path.join(ROOT, "worker-runs")
     os.makedirs(runs, exist_ok=True)
     log = os.path.join(runs, f"{name}.log")
-    prompt = RULES.format(cwd=args.cwd) + "\n\n" + brief
+    rules = SERVER_RULES if "workagent-refactor" in os.path.abspath(args.cwd) else RULES
+    prompt = rules.format(cwd=args.cwd) + "\n\n" + brief
     started = time.time()
     answer, status = "", None
     with open(log, "w") as out:
