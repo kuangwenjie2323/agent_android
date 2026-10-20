@@ -192,6 +192,12 @@ def net(since):
         failures=failures[:10], failureCount=len(failures), retried=retried, streamReconnects=reconnects, errorsShown=errors)
 
 
+# Disk reads and writes the app makes once on the main thread at start-up, known and accepted until settings and the
+# sign-in key load asynchronously (docs/ARCHITECTURE_REVIEW.md). Matched by the start of the reported call site;
+# "unknown" is a framework frame with no app frame above it. Network work on the main thread is never accepted.
+KNOWN_STARTUP_DISK = ("data.AndroidCredentialCipher.", "MainActivity.listCacheDir", "MainActivity.onCreate", "unknown")
+
+
 def strict(since):
     """StrictMode found work on the main thread: not a crash, but disk or sockets where the UI runs."""
     rows = [r for r in app_log(since) if r.get("tag") == "strict"]
@@ -199,8 +205,9 @@ def strict(since):
     for r in rows:
         kind = r.get("m", "")
         kinds[kind] = kinds.get(kind, 0) + 1
-    out(ok=not rows, total=len(rows), types=kinds,
-        violations=[{"type": r.get("m"), "at": r.get("at")} for r in rows[:10]])
+    new = [r for r in rows if not (r.get("m", "").startswith("disk") and str(r.get("at", "")).startswith(KNOWN_STARTUP_DISK))]
+    out(ok=not new, total=len(rows), known=len(rows) - len(new), types=kinds,
+        violations=[{"type": r.get("m"), "at": r.get("at")} for r in new[:10]])
 
 
 # Material 3's baseline (default) scheme, light and dark, without white and black: a flat area in one of these is a

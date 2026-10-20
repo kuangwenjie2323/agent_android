@@ -258,6 +258,20 @@ class RepositoryTest {
         assertEquals("$control:1", resumed.getHeader("Last-Event-ID"))
         assertEquals(2, server.requestCount)
     }
+    @Test fun aMessageWhoseHandshakeBrokeIsSentAgainButOnlyThen() = runBlocking {
+        var posts = 0
+        val flaky = HttpAgentRepository.defaultClient().newBuilder().addInterceptor { chain ->
+            if (chain.request().method == "POST" && ++posts == 1) throw javax.net.ssl.SSLHandshakeException("connection closed")
+            chain.proceed(chain.request())
+        }.build()
+        val repo = HttpAgentRepository(server.url("/").toString().trimEnd('/'), TokenProvider { "test-token" }, flaky, reconnectDelayMs = 0)
+        server.enqueue(sse(text(1, "hi") + done(2)))
+        val last = repo.follow("conversation", control, SendRequest("conversation", "hello", ModelChoice("agent", "model"), control)).toList().last()
+        assertEquals("hi", last.turn.text)
+        assertEquals(2, posts)  // the first never left the phone
+        assertEquals("POST", next().method)
+        assertEquals(1, server.requestCount)
+    }
     @Test fun textIsDeliveredBeforeTransportCompletion() = runBlocking {
         server.enqueue(sse(text(1, "early") + done(2)).throttleBody(text(1, "early").toByteArray().size.toLong(), 1, TimeUnit.SECONDS))
         val early = withTimeout(750) { repo.follow("conversation", control).first { it.turn.text == "early" } }

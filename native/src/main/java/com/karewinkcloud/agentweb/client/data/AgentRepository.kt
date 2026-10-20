@@ -566,9 +566,10 @@ class HttpAgentRepository(
         var state = previous?.copy(startedAt = startedAt) ?: runId?.let { TurnState(conversationId, it, startedAt = startedAt) }
         var first = true
         var failures = 0
+        var unsentPosts = 0
         while (currentCoroutineContext().isActive) {
             val post = if (first) send else null
-            first = false // Even a failure before headers must never replay the POST.
+            first = false // Even a failure before headers must never replay the POST (unless it never left; below).
             val request = if (post != null) request("/api/chat/message", post.json()) else
                 request("/api/chat/stream/${segment(conversationId)}", lastId = state?.lastEventId)
             try {
@@ -603,6 +604,15 @@ class HttpAgentRepository(
                 throw IOException("Stream ended before done.")
             } catch (e: IOException) {
                 currentCoroutineContext().ensureActive()
+                // A message whose connection failed while it was being set up never left the phone: send it again
+                // rather than make the user wait and resend by hand (phone, 10-20: a TLS handshake hung 32 s and
+                // broke). One that may have reached the server is never sent twice; it is only followed.
+                if (post != null && neverSent(e) && unsentPosts < MAX_UNSENT_RETRIES) {
+                    unsentPosts++; first = true
+                    Diagnostics.warn("http", "POST /api/chat/message retried", "error" to Diagnostics.describe(e))
+                    delay(reconnectDelayMs * unsentPosts * unsentPosts)
+                    continue
+                }
                 failures = (failures + 1).coerceAtMost(64)
                 Diagnostics.warn("stream", "reconnecting", "conversation" to conversationId, "failures" to failures,
                     "lastSequence" to state?.lastSequence, "error" to Diagnostics.describe(e))
