@@ -19,3 +19,5 @@ release-reports/**/*.png
 release-reports/*.png
 release-reports/apk/
 TASKS.md
+worker-runs/
+worker-briefs/*.log
